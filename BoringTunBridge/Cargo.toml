@@ -1,0 +1,11 @@
+[package]
+name = "boringtun_bridge"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["staticlib"]
+path = "src/lib.rs"
+
+[dependencies]
+boringtun = { version = "0.7.1", features = ["ffi-bindings"] }

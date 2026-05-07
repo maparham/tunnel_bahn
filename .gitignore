@@ -1,0 +1,10 @@
+.build/
+build/
+.derived/
+
+# Local / generated (do not commit)
+DerivedData/
+BoringTunBridge/target/
+BoringTunBridge/out/
+Frameworks/*.a
+tools/captured/
