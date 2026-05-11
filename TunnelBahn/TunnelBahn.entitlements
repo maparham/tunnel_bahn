@@ -6,8 +6,13 @@
 	<array>
 		<string>92G3VZAPVG.com.tunnelbahn.mac</string>
 	</array>
+	<key>com.apple.developer.networking.networkextension</key>
+	<array>
+		<string>packet-tunnel-provider</string>
+		<string>app-proxy-provider</string>
+	</array>
 	<key>com.apple.security.app-sandbox</key>
-	<true/>
+	<false/>
 	<key>com.apple.security.application-groups</key>
 	<array>
 		<string>92G3VZAPVG.group.com.tunnelbahn.mac</string>
@@ -16,9 +21,5 @@
 	<true/>
 	<key>com.apple.security.network.server</key>
 	<true/>
-	<key>com.apple.developer.networking.networkextension</key>
-	<array>
-		<string>packet-tunnel-provider</string>
-	</array>
 </dict>
 </plist>

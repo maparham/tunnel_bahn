@@ -4,7 +4,11 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
-echo "Building BoringTun Bridge for macOS..."
+# Must match `MACOSX_DEPLOYMENT_TARGET` in Xcode / `project.yml` (e.g. 14.0), or the linker
+# warns that object files in this archive were built for a newer macOS than the extension links.
+export MACOSX_DEPLOYMENT_TARGET="${MACOSX_DEPLOYMENT_TARGET:-14.0}"
+
+echo "Building BoringTun Bridge for macOS (MACOSX_DEPLOYMENT_TARGET=${MACOSX_DEPLOYMENT_TARGET})..."
 
 # Build for both architectures
 cargo build --release --target aarch64-apple-darwin

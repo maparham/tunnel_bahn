@@ -1,17 +1,17 @@
 import Foundation
 
 enum AppConstants {
-    static let appGroupID = "92G3VZAPVG.group.com.appsplit.wg"
-    static let keychainService = "com.appsplit.wg"
-    static let keychainAccessGroup = "92G3VZAPVG.com.appsplit.wg"
-    static let packetTunnelProviderBundleIdentifier = "com.appsplit.wg.networkextension"
-    static let vpnManagerDescription = "AppSplit WG Tunnel"
+    static let appGroupID = "92G3VZAPVG.group.com.tunnelbahn.mac"
+    static let keychainService = "com.tunnelbahn.mac"
+    static let keychainAccessGroup = "92G3VZAPVG.com.tunnelbahn.mac"
+    static let packetTunnelProviderBundleIdentifier = "com.tunnelbahn.mac.networkextension"
+    static let vpnManagerDescription = "TunnelBahn Tunnel"
 
     /// When `false`, every connect uses full tunnel (`NETunnelProviderManager` + destination-IP, no `NEAppRule`).
     static let isPerAppSplitTunnelEnabled = true
 
-    /// Extra per-app VPN include paths. Keep empty in production:
-    /// per-app routing must be driven only by user-selected apps.
+    /// Extra app-tunnel VPN include paths. Keep empty in production:
+    /// app-tunnel routing must be driven only by user-selected apps.
     static let perAppAlwaysIncludeAppPaths: [String] = []
 }
 

@@ -13,7 +13,7 @@ import os.log
 /// - On any IO error, `cleanup()` is called once and forwards an `onClose` notification.
 final class TCPFlowRelay {
     private static let log = Logger(
-        subsystem: "com.appsplit.wg.transparentproxy",
+        subsystem: "com.tunnelbahn.mac.transparentproxy",
         category: "TCPRelay"
     )
 

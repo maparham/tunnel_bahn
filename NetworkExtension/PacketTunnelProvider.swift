@@ -4,7 +4,7 @@ import os.log
 
 final class PacketTunnelProvider: NEPacketTunnelProvider {
     private var adapter: BoringTunAdapter?
-    private let logger = Logger(subsystem: "com.appsplit.wg.networkextension", category: "PacketTunnelProvider")
+    private let logger = Logger(subsystem: "com.tunnelbahn.mac.networkextension", category: "PacketTunnelProvider")
 
     override func startTunnel(options _: [String: NSObject]? = nil) async throws {
         logger.log("startTunnel invoked")
@@ -41,7 +41,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         if command == "diagnostics" {
             return await diagnosticsPayload().data(using: .utf8)
         }
-        return "AppSplit WG Network Extension active".data(using: .utf8)
+        return "TunnelBahn Network Extension active".data(using: .utf8)
     }
 
     private func diagnosticsPayload() async -> String {
@@ -94,7 +94,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
     private func loadRuntimeStateWithSource() throws -> LoadedRuntimeState {
         guard let stateURL = SharedPaths.stateFileURL() else {
             throw NSError(
-                domain: "AppSplitWG.NetworkExtension",
+                domain: "TunnelBahn.NetworkExtension",
                 code: 1,
                 userInfo: [NSLocalizedDescriptionKey: "Missing shared runtime state URL."]
             )

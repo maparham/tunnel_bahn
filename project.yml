@@ -1,4 +1,4 @@
-name: AppSplitWG
+name: TunnelBahn
 options:
   createIntermediateGroups: true
   deploymentTarget:
@@ -8,7 +8,7 @@ configs:
   Release: release
 settings:
   base:
-    PRODUCT_BUNDLE_IDENTIFIER: com.appsplit.wg
+    PRODUCT_BUNDLE_IDENTIFIER: com.tunnelbahn.mac
     SWIFT_VERSION: 5.10
     CODE_SIGN_STYLE: Automatic
     DEVELOPMENT_TEAM: 92G3VZAPVG
@@ -16,18 +16,18 @@ packages:
   wireguard-apple:
     path: Vendor/wireguard-apple
 targets:
-  AppSplitWG:
+  TunnelBahn:
     type: application
     platform: macOS
     sources:
-      - path: AppSplitWG
+      - path: TunnelBahn
       - path: Shared
     resources:
-      - path: AppSplitWG/Resources
+      - path: TunnelBahn/Resources
     settings:
       base:
-        INFOPLIST_FILE: AppSplitWG/Info.plist
-        CODE_SIGN_ENTITLEMENTS: AppSplitWG/AppSplitWG.entitlements
+        INFOPLIST_FILE: TunnelBahn/Info.plist
+        CODE_SIGN_ENTITLEMENTS: TunnelBahn/TunnelBahn.entitlements
     dependencies:
       - target: PacketTunnelExtension
         embed: true
@@ -42,10 +42,10 @@ targets:
     sources:
       - path: NetworkExtension
       - path: Shared
-      - path: AppSplitWG/Models
+      - path: TunnelBahn/Models
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.appsplit.wg.networkextension
+        PRODUCT_BUNDLE_IDENTIFIER: com.tunnelbahn.mac.networkextension
         INFOPLIST_FILE: NetworkExtension/Info.plist
         CODE_SIGN_ENTITLEMENTS: NetworkExtension/NetworkExtension.entitlements
         SWIFT_OBJC_BRIDGING_HEADER: NetworkExtension/PacketTunnelExtension-Bridging-Header.h
@@ -59,6 +59,7 @@ targets:
       - name: Build BoringTunBridge (universal)
         script: |
           set -euo pipefail
+          export MACOSX_DEPLOYMENT_TARGET="${MACOSX_DEPLOYMENT_TARGET:-14.0}"
           if [ ! -f "${SRCROOT}/Frameworks/libboringtun_bridge.a" ]; then
             bash "${SRCROOT}/BoringTunBridge/build.sh"
           fi
@@ -70,17 +71,17 @@ targets:
     sources:
       - path: TransparentProxyExtension
       - path: Shared
-      - path: AppSplitWG/Models
+      - path: TunnelBahn/Models
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.appsplit.wg.transparentproxy
+        PRODUCT_BUNDLE_IDENTIFIER: com.tunnelbahn.mac.transparentproxy
         INFOPLIST_FILE: TransparentProxyExtension/Info.plist
         CODE_SIGN_ENTITLEMENTS: TransparentProxyExtension/TransparentProxyExtension.entitlements
 schemes:
-  AppSplitWG:
+  TunnelBahn:
     build:
       targets:
-        AppSplitWG: all
+        TunnelBahn: all
         PacketTunnelExtension: all
         TransparentProxyExtension: all
     run:

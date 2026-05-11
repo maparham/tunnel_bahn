@@ -1,6 +1,6 @@
-# AppSplit WG
+# TunnelBahn
 
-AppSplit WG is a native macOS app prototype for WireGuard per-application split tunneling.
+TunnelBahn is a native macOS app for WireGuard per-application split tunneling.
 
 ## Local-machine development
 
@@ -14,12 +14,12 @@ brew install xcodegen wireguard-tools swiftformat
 
 ```bash
 xcodegen generate
-open AppSplitWG.xcodeproj
+open TunnelBahn.xcodeproj
 ```
 
 ## Components
 
-- `AppSplitWG`: SwiftUI UI, profile import, app selection, menu bar controls
+- `TunnelBahn`: SwiftUI UI, profile import, app selection, menu bar controls
 - `NetworkExtension`: `NEPacketTunnelProvider` WireGuard tunnel transport
 - `Shared`: shared models and app-group constants
 

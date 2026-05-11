@@ -11,17 +11,17 @@ Per-app routing (`sourceApplication`) sends app packets to `NEPacketTunnelFlow`.
 
 `BoringTunAdapter` does:
 1. `packetFlow.readPackets` (plaintext IP packets from macOS)
-2. `appsplit_wg_write` (encapsulate with BoringTun)
+2. `tunnelbahn_wg_write` (encapsulate with BoringTun)
 3. `NWUDPSession.writeDatagram` (send encrypted UDP to peer)
 4. `NWUDPSession.setReadHandler` (receive encrypted UDP)
-5. `appsplit_wg_read` (decapsulate)
+5. `tunnelbahn_wg_read` (decapsulate)
 6. `packetFlow.writePackets` (inject plaintext IP back to stack)
 
 ## Components
 
 - Swift adapter: `NetworkExtension/BoringTunAdapter.swift`
 - Provider entry: `NetworkExtension/PacketTunnelProvider.swift`
-- C header for bridge ABI: `NetworkExtension/appsplit_wg_ffi.h`
+- C header for bridge ABI: `NetworkExtension/tunnelbahn_wg_ffi.h`
 - Rust bridge crate: `BoringTunBridge/src/lib.rs`
 - Rust dependency: `boringtun` with FFI bindings
 

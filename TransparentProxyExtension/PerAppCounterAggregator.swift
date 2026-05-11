@@ -8,7 +8,7 @@ import os.log
 /// app names via `PerAppIdentityMap` and writes the result through `PerAppTransferStore`.
 ///
 /// Design notes:
-/// - In-memory totals are kept per signing identifier (cheaper than per-app rollup on every
+/// - In-memory totals are kept per signing identifier (cheaper than app-tunnel rollup on every
 ///   packet). Rollup only happens at flush time.
 /// - Totals are MONOTONIC for the lifetime of the proxy session. The host app diffs them
 ///   to compute rates if it wants to. On disconnect the host app calls
@@ -16,7 +16,7 @@ import os.log
 ///   reset on `stopProxy` because the provider instance is torn down.
 final class PerAppCounterAggregator {
     private static let log = Logger(
-        subsystem: "com.appsplit.wg.transparentproxy",
+        subsystem: "com.tunnelbahn.mac.transparentproxy",
         category: "Aggregator"
     )
 

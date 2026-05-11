@@ -26,12 +26,12 @@ private enum BoringTunAdapterError: LocalizedError {
 }
 
 /// WireGuard data plane using Cloudflare BoringTun over `NEPacketTunnelFlow` and `NWUDPSession`
-/// (suitable for per-app VPN where raw utun file-descriptor access is not reliable).
+/// (suitable for app-tunnel VPN where raw utun file-descriptor access is not reliable).
 final class BoringTunAdapter: @unchecked Sendable {
-    private static let log = Logger(subsystem: "com.appsplit.wg.networkextension", category: "BoringTunAdapter")
+    private static let log = Logger(subsystem: "com.tunnelbahn.mac.networkextension", category: "BoringTunAdapter")
 
     private weak var provider: NEPacketTunnelProvider?
-    private let packetQueue = DispatchQueue(label: "com.appsplit.wg.boringtun")
+    private let packetQueue = DispatchQueue(label: "com.tunnelbahn.mac.boringtun")
 
     private var tunnel: UnsafeMutableRawPointer?
     private var udpSession: NWUDPSession?
@@ -55,7 +55,7 @@ final class BoringTunAdapter: @unchecked Sendable {
 
     deinit {
         if let tunnel {
-            appsplit_wg_tunnel_free(tunnel)
+            tunnelbahn_wg_tunnel_free(tunnel)
         }
     }
 
@@ -83,10 +83,10 @@ final class BoringTunAdapter: @unchecked Sendable {
             peer.publicKey.withCString { pub in
                 if let psk = presharedKeyString {
                     return psk.withCString { pskC in
-                        appsplit_wg_tunnel_new(priv, pub, pskC, keepalive, 0)
+                        tunnelbahn_wg_tunnel_new(priv, pub, pskC, keepalive, 0)
                     }
                 }
-                return appsplit_wg_tunnel_new(priv, pub, nil, keepalive, 0)
+                return tunnelbahn_wg_tunnel_new(priv, pub, nil, keepalive, 0)
             }
         }
 
@@ -142,7 +142,7 @@ final class BoringTunAdapter: @unchecked Sendable {
         udpSession = nil
 
         if let tunnel {
-            appsplit_wg_tunnel_free(tunnel)
+            tunnelbahn_wg_tunnel_free(tunnel)
             self.tunnel = nil
         }
 
@@ -169,7 +169,7 @@ final class BoringTunAdapter: @unchecked Sendable {
         }
 
         return """
-        backend=BoringTun (appsplit_wg FFI)
+        backend=BoringTun (tunnelbahn_wg FFI)
         running=\(snapshot.running)
         tunnel=\(snapshot.tunnel)
         udp=\(snapshot.state)
@@ -182,7 +182,7 @@ final class BoringTunAdapter: @unchecked Sendable {
 
     private func startHandshakeIfNeeded() {
         guard let tunnel else { return }
-        let res = appsplit_wg_force_handshake(tunnel, &scratch, UInt32(scratch.count))
+        let res = tunnelbahn_wg_force_handshake(tunnel, &scratch, UInt32(scratch.count))
         sendNetworkIfNeeded(res)
     }
 
@@ -191,28 +191,28 @@ final class BoringTunAdapter: @unchecked Sendable {
         timer.schedule(deadline: .now() + .milliseconds(100), repeating: .milliseconds(100))
         timer.setEventHandler { [weak self] in
             guard let self, let tunnel = self.tunnel, self.isRunning else { return }
-            let res = appsplit_wg_tick(tunnel, &self.scratch, UInt32(self.scratch.count))
+            let res = tunnelbahn_wg_tick(tunnel, &self.scratch, UInt32(self.scratch.count))
             self.sendNetworkIfNeeded(res)
         }
         timer.resume()
         tickTimer = timer
     }
 
-    private func sendNetworkIfNeeded(_ res: AppsplitWgResult) {
-        guard res.op == UInt32(APPSPLIT_WG_WRITE_TO_NETWORK) else { return }
+    private func sendNetworkIfNeeded(_ res: TunnelbahnWgResult) {
+        guard res.op == UInt32(TUNNELBAHN_WG_WRITE_TO_NETWORK) else { return }
         let len = Int(res.size)
         guard len > 0, len <= scratch.count else { return }
         writeUDP(Data(scratch.prefix(len)))
     }
 
-    /// BoringTun: after `appsplit_wg_read` returns `WRITE_TO_NETWORK`, send UDP and call `appsplit_wg_read` with an empty datagram until not `WRITE_TO_NETWORK`.
-    private func drainDecapsulateNetworkReplies(tunnel: UnsafeMutableRawPointer, first: inout AppsplitWgResult) {
+    /// BoringTun: after `tunnelbahn_wg_read` returns `WRITE_TO_NETWORK`, send UDP and call `tunnelbahn_wg_read` with an empty datagram until not `WRITE_TO_NETWORK`.
+    private func drainDecapsulateNetworkReplies(tunnel: UnsafeMutableRawPointer, first: inout TunnelbahnWgResult) {
         var res = first
-        while res.op == UInt32(APPSPLIT_WG_WRITE_TO_NETWORK) {
+        while res.op == UInt32(TUNNELBAHN_WG_WRITE_TO_NETWORK) {
             sendNetworkIfNeeded(res)
-            res = Data().withUnsafeBytes { (empty: UnsafeRawBufferPointer) -> AppsplitWgResult in
+            res = Data().withUnsafeBytes { (empty: UnsafeRawBufferPointer) -> TunnelbahnWgResult in
                 let base = empty.baseAddress?.assumingMemoryBound(to: UInt8.self)
-                return appsplit_wg_read(tunnel, base, 0, &scratch, UInt32(scratch.count))
+                return tunnelbahn_wg_read(tunnel, base, 0, &scratch, UInt32(scratch.count))
             }
         }
         first = res
@@ -221,11 +221,11 @@ final class BoringTunAdapter: @unchecked Sendable {
     private func handleTunPacket(_ packet: Data) {
         guard let tunnel, isRunning else { return }
         guard !packet.isEmpty else { return }
-        let res = packet.withUnsafeBytes { buf -> AppsplitWgResult in
+        let res = packet.withUnsafeBytes { buf -> TunnelbahnWgResult in
             guard let base = buf.bindMemory(to: UInt8.self).baseAddress else {
-                return AppsplitWgResult(op: UInt32(APPSPLIT_WG_DONE), size: 0)
+                return TunnelbahnWgResult(op: UInt32(TUNNELBAHN_WG_DONE), size: 0)
             }
-            return appsplit_wg_write(tunnel, base, UInt32(packet.count), &scratch, UInt32(scratch.count))
+            return tunnelbahn_wg_write(tunnel, base, UInt32(packet.count), &scratch, UInt32(scratch.count))
         }
         sendNetworkIfNeeded(res)
     }
@@ -233,23 +233,23 @@ final class BoringTunAdapter: @unchecked Sendable {
     private func handleIncomingDatagram(_ datagram: Data) {
         guard let tunnel, isRunning else { return }
         guard !datagram.isEmpty else { return }
-        var res = datagram.withUnsafeBytes { buf -> AppsplitWgResult in
+        var res = datagram.withUnsafeBytes { buf -> TunnelbahnWgResult in
             guard let base = buf.bindMemory(to: UInt8.self).baseAddress else {
-                return AppsplitWgResult(op: UInt32(APPSPLIT_WG_DONE), size: 0)
+                return TunnelbahnWgResult(op: UInt32(TUNNELBAHN_WG_DONE), size: 0)
             }
-            return appsplit_wg_read(tunnel, base, UInt32(datagram.count), &scratch, UInt32(scratch.count))
+            return tunnelbahn_wg_read(tunnel, base, UInt32(datagram.count), &scratch, UInt32(scratch.count))
         }
         drainDecapsulateNetworkReplies(tunnel: tunnel, first: &res)
 
         switch res.op {
-        case UInt32(APPSPLIT_WG_WRITE_TO_TUNNEL_IPV4):
+        case UInt32(TUNNELBAHN_WG_WRITE_TO_TUNNEL_IPV4):
             deliverToPacketFlow(ipPacket: Data(scratch.prefix(Int(res.size))), protocolFamily: AF_INET)
-        case UInt32(APPSPLIT_WG_WRITE_TO_TUNNEL_IPV6):
+        case UInt32(TUNNELBAHN_WG_WRITE_TO_TUNNEL_IPV6):
             deliverToPacketFlow(ipPacket: Data(scratch.prefix(Int(res.size))), protocolFamily: AF_INET6)
-        case UInt32(APPSPLIT_WG_DONE):
+        case UInt32(TUNNELBAHN_WG_DONE):
             break
-        case UInt32(APPSPLIT_WG_ERROR):
-            Self.log.error("appsplit_wg_read error code=\(res.size, privacy: .public)")
+        case UInt32(TUNNELBAHN_WG_ERROR):
+            Self.log.error("tunnelbahn_wg_read error code=\(res.size, privacy: .public)")
         default:
             break
         }

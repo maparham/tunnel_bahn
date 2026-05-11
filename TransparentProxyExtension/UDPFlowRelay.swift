@@ -11,7 +11,7 @@ import os.log
 /// is what `NEAppProxyUDPFlow.writeDatagrams(_:sentBy:)` expects.
 final class UDPFlowRelay {
     private static let log = Logger(
-        subsystem: "com.appsplit.wg.transparentproxy",
+        subsystem: "com.tunnelbahn.mac.transparentproxy",
         category: "UDPRelay"
     )
 

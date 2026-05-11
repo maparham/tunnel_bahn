@@ -1,7 +1,7 @@
 import Foundation
 
 /// Single place for curated browser/process signing identifiers used in NEAppRule expansion and
-/// per-app stats rollup. Add new IDs here instead of duplicating lists across `AppConstants` / UI maps.
+/// app-tunnel stats rollup. Add new IDs here instead of duplicating lists across `AppConstants` / UI maps.
 enum PerAppSigningCatalog {
     /// Extra signing IDs for Chrome — scan often still misses helpers; traffic may use these without a nested `.app` path.
     static let googleChromePerAppExtraSigningIdentifiers: [String] = [

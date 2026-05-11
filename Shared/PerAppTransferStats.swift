@@ -1,6 +1,6 @@
 import Foundation
 
-/// Per-app transfer counters published by the TransparentProxy extension and read by the host app.
+/// App-tunnel transfer counters published by the TransparentProxy extension and read by the host app.
 ///
 /// File semantics:
 /// - Single writer (the extension) using atomic temp+rename pattern in `PerAppTransferStore`.

@@ -4,12 +4,12 @@ use boringtun::ffi;
 use std::ffi::{c_char, c_void};
 
 #[repr(C)]
-pub struct AppsplitWgResult {
+pub struct TunnelbahnWgResult {
     pub op: u32,
     pub size: usize,
 }
 
-impl From<ffi::wireguard_result> for AppsplitWgResult {
+impl From<ffi::wireguard_result> for TunnelbahnWgResult {
     fn from(value: ffi::wireguard_result) -> Self {
         Self {
             op: value.op as u32,
@@ -19,7 +19,7 @@ impl From<ffi::wireguard_result> for AppsplitWgResult {
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn appsplit_wg_tunnel_new(
+pub unsafe extern "C" fn tunnelbahn_wg_tunnel_new(
     static_private: *const c_char,
     server_static_public: *const c_char,
     preshared_key: *const c_char,
@@ -30,46 +30,46 @@ pub unsafe extern "C" fn appsplit_wg_tunnel_new(
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn appsplit_wg_tunnel_free(tunnel: *mut c_void) {
+pub unsafe extern "C" fn tunnelbahn_wg_tunnel_free(tunnel: *mut c_void) {
     ffi::tunnel_free(tunnel as _);
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn appsplit_wg_write(
+pub unsafe extern "C" fn tunnelbahn_wg_write(
     tunnel: *const c_void,
     src: *const u8,
     src_len: u32,
     dst: *mut u8,
     dst_len: u32,
-) -> AppsplitWgResult {
+) -> TunnelbahnWgResult {
     ffi::wireguard_write(tunnel as _, src, src_len, dst, dst_len).into()
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn appsplit_wg_read(
+pub unsafe extern "C" fn tunnelbahn_wg_read(
     tunnel: *const c_void,
     src: *const u8,
     src_len: u32,
     dst: *mut u8,
     dst_len: u32,
-) -> AppsplitWgResult {
+) -> TunnelbahnWgResult {
     ffi::wireguard_read(tunnel as _, src, src_len, dst, dst_len).into()
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn appsplit_wg_tick(
+pub unsafe extern "C" fn tunnelbahn_wg_tick(
     tunnel: *const c_void,
     dst: *mut u8,
     dst_len: u32,
-) -> AppsplitWgResult {
+) -> TunnelbahnWgResult {
     ffi::wireguard_tick(tunnel as _, dst, dst_len).into()
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn appsplit_wg_force_handshake(
+pub unsafe extern "C" fn tunnelbahn_wg_force_handshake(
     tunnel: *const c_void,
     dst: *mut u8,
     dst_len: u32,
-) -> AppsplitWgResult {
+) -> TunnelbahnWgResult {
     ffi::wireguard_force_handshake(tunnel as _, dst, dst_len).into()
 }

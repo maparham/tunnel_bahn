@@ -19,9 +19,9 @@ enum PerAppTransferStore {
     static func write(_ stats: PerAppTransferStats) throws {
         guard let destination = fileURL() else {
             throw NSError(
-                domain: "AppSplitWG.PerAppTransferStore",
+                domain: "TunnelBahn.PerAppTransferStore",
                 code: 1,
-                userInfo: [NSLocalizedDescriptionKey: "App Group container unavailable for per-app stats."]
+                userInfo: [NSLocalizedDescriptionKey: "App Group container unavailable for app-tunnel stats."]
             )
         }
         let directory = destination.deletingLastPathComponent()
@@ -55,7 +55,7 @@ enum PerAppTransferStore {
         return decoded
     }
 
-    /// Clears any persisted per-app stats. Called by `VPNManager` on disconnect so the UI
+    /// Clears any persisted app-tunnel stats. Called by `VPNManager` on disconnect so the UI
     /// resets in step with aggregate counters.
     static func reset() {
         guard let url = fileURL() else { return }

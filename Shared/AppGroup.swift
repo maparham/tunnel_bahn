@@ -6,7 +6,7 @@ enum AppGroupStore {
     static func ensureSharedDirectories() throws {
         guard let profilesDirectory = SharedPaths.profilesDirectory() else {
             throw NSError(
-                domain: "AppSplitWG.AppGroup",
+                domain: "TunnelBahn.AppGroup",
                 code: 1,
                 userInfo: [NSLocalizedDescriptionKey: "Unable to access App Group container."]
             )

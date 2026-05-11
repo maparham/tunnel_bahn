@@ -2,7 +2,7 @@
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 DD="$ROOT/.build/DerivedData"
-APP="$DD/Build/Products/Debug/AppSplitWG.app/Contents/MacOS/AppSplitWG"
+APP="$DD/Build/Products/Debug/TunnelBahn.app/Contents/MacOS/TunnelBahn"
 
 echo "[run-with-logs] cleaning build outputs under repo…"
 rm -rf "$DD" "$ROOT/build" "$ROOT/.derived"
@@ -11,7 +11,8 @@ echo "[run-with-logs] building (Debug) → $DD …"
 (
   cd "$ROOT"
   xcodebuild \
-    -scheme AppSplitWG \
+    -project TunnelBahn.xcodeproj \
+    -scheme TunnelBahn \
     -configuration Debug \
     -derivedDataPath "$DD" \
     -allowProvisioningUpdates \

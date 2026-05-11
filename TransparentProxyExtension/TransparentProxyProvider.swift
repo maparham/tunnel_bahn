@@ -4,24 +4,24 @@ import NetworkExtension
 import os.log
 
 /// Transparent proxy provider that observes (and relays) flows for the apps the user has
-/// chosen to route through the VPN. Its only purpose is per-app TX/RX accounting; the
+/// chosen to route through the VPN. Its only purpose is app-tunnel TX/RX accounting; the
 /// actual VPN data plane is still handled by the existing `PacketTunnelProvider`.
 ///
 /// Why a relay and not just observation:
 /// - `NETransparentProxyProvider.handleNewFlow` returning `false` lets the OS handle the flow
 ///   normally (no bytes seen). Returning `true` requires us to take ownership of the flow,
 ///   which is the only way to count payload bytes.
-/// - For flows from apps NOT in the per-app routing list we return `false` immediately, so
+/// - For flows from apps NOT in the app-tunnel routing list we return `false` immediately, so
 ///   the OS handles them and we incur no overhead.
 final class TransparentProxyProvider: NETransparentProxyProvider {
     private static let log = Logger(
-        subsystem: "com.appsplit.wg.transparentproxy",
+        subsystem: "com.tunnelbahn.mac.transparentproxy",
         category: "Provider"
     )
 
     private let aggregator = PerAppCounterAggregator()
-    private let flowQueue = DispatchQueue(label: "com.appsplit.wg.transparentproxy.flows", qos: .userInitiated)
-    private let flushQueue = DispatchQueue(label: "com.appsplit.wg.transparentproxy.flush", qos: .utility)
+    private let flowQueue = DispatchQueue(label: "com.tunnelbahn.mac.transparentproxy.flows", qos: .userInitiated)
+    private let flushQueue = DispatchQueue(label: "com.tunnelbahn.mac.transparentproxy.flush", qos: .utility)
     private var flushTimer: DispatchSourceTimer?
 
     // Keep relay objects alive for the lifetime of a flow. Without this, relays are
@@ -278,7 +278,7 @@ final class TransparentProxyProvider: NETransparentProxyProvider {
         do {
             try PerAppTransferStore.write(stats)
         } catch {
-            Self.log.error("failed to flush per-app stats: \(error.localizedDescription, privacy: .public)")
+            Self.log.error("failed to flush app-tunnel stats: \(error.localizedDescription, privacy: .public)")
         }
     }
 }

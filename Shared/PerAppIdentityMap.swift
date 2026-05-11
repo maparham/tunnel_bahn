@@ -4,7 +4,7 @@ import Foundation
 ///
 /// macOS apps frequently do their networking from helper/XPC processes signed under different
 /// bundle identifiers (Chrome's 6 helpers, Safari's `com.apple.WebKit.Networking`, etc.).
-/// Without rollup, the per-app stats UI would show six "Chrome helper renderer / GPU / plugin..."
+/// Without rollup, the app-tunnel stats UI would show six "Chrome helper renderer / GPU / plugin..."
 /// rows instead of a single "Google Chrome" row.
 ///
 /// Resolution order:
