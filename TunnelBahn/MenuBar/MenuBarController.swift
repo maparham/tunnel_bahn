@@ -261,7 +261,7 @@ final class MenuBarController: NSObject, ObservableObject, NSMenuDelegate {
             noProfiles.isEnabled = false
             menu.addItem(noProfiles)
         } else {
-            for profile in sortedProfiles() {
+            for profile in profiles {
                 let item = NSMenuItem(title: "", action: #selector(connectProfileTapped(_:)), keyEquivalent: "")
                 item.target = self
                 item.representedObject = profile.id.uuidString
@@ -276,20 +276,6 @@ final class MenuBarController: NSObject, ObservableObject, NSMenuDelegate {
         quit.target = self
         menu.addItem(quit)
         return menu
-    }
-
-    private func sortedProfiles() -> [WireGuardProfile] {
-        profiles.sorted { lhs, rhs in
-            profileSortRank(lhs.id) < profileSortRank(rhs.id) ||
-                (profileSortRank(lhs.id) == profileSortRank(rhs.id) && lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending)
-        }
-    }
-
-    private func profileSortRank(_ id: UUID) -> Int {
-        // Keep the last-used (selected) profile at the top.
-        if id == selectedProfileID { return 0 }
-        if id == activeProfileID { return 1 }
-        return 2
     }
 
     private func titleForProfileItem(_ profile: WireGuardProfile) -> String {

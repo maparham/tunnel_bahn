@@ -6,19 +6,15 @@ struct ContentView: View {
 
     enum Tab: String, CaseIterable {
         case profiles = "Profiles"
-        case apps = "Apps"
         case status = "Monitoring"
         case diagnostics = "Diagnostics"
-        case routing = "Advanced"
         case settings = "Settings"
 
         var icon: String {
             switch self {
             case .profiles: "doc.badge.plus"
-            case .apps: "square.grid.2x2"
             case .status: "network"
             case .diagnostics: "ladybug"
-            case .routing: "point.3.connected.trianglepath.dotted"
             case .settings: "gearshape"
             }
         }
@@ -41,10 +37,8 @@ struct ContentView: View {
                     appRuleStore: appState.appRuleStore,
                     destinationRuleStore: appState.destinationRuleStore
                 )
-            case .apps: AppsView()
             case .status: StatusView()
             case .diagnostics: DiagnosticsView()
-            case .routing: RoutingView()
             case .settings: SettingsView()
             }
         }

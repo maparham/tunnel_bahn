@@ -15,9 +15,8 @@ final class AppSettings: ObservableObject {
         didSet { save() }
     }
 
-    @Published var routingMode: RoutingMode {
-        didSet { save() }
-    }
+    /// Set by AppState when a profile is selected; not persisted independently.
+    @Published var routingMode: RoutingMode = .fullTunnel
 
     /// One-time initialization guard for app-tunnel mode defaults (select all apps).
     @Published var perAppDefaultsInitialized: Bool {
@@ -38,52 +37,34 @@ final class AppSettings: ObservableObject {
         didSet { save() }
     }
 
-    /// When accounting via transparent proxy is active, require relayed flows to hit an enabled CIDR (IP literals only in v1).
-    @Published var enforceDestinationFiltering: Bool {
-        didSet { save() }
-    }
+    /// Set by AppState when a profile is selected; not persisted independently.
+    @Published var enforceDestinationFiltering: Bool = false
 
     private enum Keys {
         static let autoReconnect = "autoReconnect"
         static let launchAtLogin = "launchAtLogin"
-        static let routingMode = "routingMode"
         static let perAppDefaultsInitialized = "perAppDefaultsInitialized"
         static let diagnosticsLevel = "diagnosticsLevel"
         static let runTunnelConnectivityProbe = "runTunnelConnectivityProbe"
         static let includeHostAppInPerAppRulesForProbe = "includeHostAppInPerAppRulesForProbe"
-        static let enforceDestinationFiltering = "enforceDestinationFiltering"
     }
 
     init() {
         autoReconnect = AppGroupStore.defaults.object(forKey: Keys.autoReconnect) as? Bool ?? true
         launchAtLogin = AppGroupStore.defaults.object(forKey: Keys.launchAtLogin) as? Bool ?? false
-        if let raw = AppGroupStore.defaults.string(forKey: Keys.routingMode) {
-            if let decoded = RoutingMode(rawValue: raw) {
-                routingMode = decoded
-            } else if raw == "per_app" {
-                routingMode = .appTunnel
-            } else {
-                routingMode = .fullTunnel
-            }
-        } else {
-            routingMode = .fullTunnel
-        }
         perAppDefaultsInitialized = AppGroupStore.defaults.object(forKey: Keys.perAppDefaultsInitialized) as? Bool ?? false
         diagnosticsLevel = AppGroupStore.defaults.string(forKey: Keys.diagnosticsLevel) ?? "info"
         runTunnelConnectivityProbe = AppGroupStore.defaults.object(forKey: Keys.runTunnelConnectivityProbe) as? Bool ?? true
         includeHostAppInPerAppRulesForProbe =
             AppGroupStore.defaults.object(forKey: Keys.includeHostAppInPerAppRulesForProbe) as? Bool ?? true
-        enforceDestinationFiltering = AppGroupStore.defaults.object(forKey: Keys.enforceDestinationFiltering) as? Bool ?? false
     }
 
     private func save() {
         AppGroupStore.defaults.set(autoReconnect, forKey: Keys.autoReconnect)
         AppGroupStore.defaults.set(launchAtLogin, forKey: Keys.launchAtLogin)
-        AppGroupStore.defaults.set(routingMode.rawValue, forKey: Keys.routingMode)
         AppGroupStore.defaults.set(perAppDefaultsInitialized, forKey: Keys.perAppDefaultsInitialized)
         AppGroupStore.defaults.set(diagnosticsLevel, forKey: Keys.diagnosticsLevel)
         AppGroupStore.defaults.set(runTunnelConnectivityProbe, forKey: Keys.runTunnelConnectivityProbe)
         AppGroupStore.defaults.set(includeHostAppInPerAppRulesForProbe, forKey: Keys.includeHostAppInPerAppRulesForProbe)
-        AppGroupStore.defaults.set(enforceDestinationFiltering, forKey: Keys.enforceDestinationFiltering)
     }
 }

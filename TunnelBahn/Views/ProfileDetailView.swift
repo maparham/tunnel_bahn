@@ -14,6 +14,11 @@ struct ProfileDetailView: View {
     let onActivate: () -> Void
     let onDeactivate: () -> Void
     let onEdit: () -> Void
+    let onRename: (String) -> Void
+
+    @FocusState private var nameFieldFocused: Bool
+    @State private var editingName = false
+    @State private var nameDraft = ""
 
     private static let byteFormatter: ByteCountFormatter = {
         let formatter = ByteCountFormatter()
@@ -112,13 +117,53 @@ struct ProfileDetailView: View {
     private var headerSection: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .center) {
-                Text(profile.name)
-                    .font(.title2.bold())
+                if editingName {
+                    TextField("", text: $nameDraft)
+                        .font(.title2.bold())
+                        .textFieldStyle(.plain)
+                        .lineLimit(1)
+                        .focused($nameFieldFocused)
+                        .accessibilityLabel("Profile name")
+                        .onSubmit { commitNameEdit() }
+                        .onExitCommand { cancelNameEdit() }
+                        .onChange(of: nameFieldFocused) { _, focused in
+                            if editingName, !focused { commitNameEdit() }
+                        }
+                        .padding(.horizontal, 4)
+                        .padding(.vertical, 2)
+                        .background {
+                            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                                .fill(Color(nsColor: .textBackgroundColor))
+                                .overlay {
+                                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                                        .strokeBorder(Color(nsColor: .separatorColor).opacity(0.55), lineWidth: 1)
+                                }
+                        }
+                } else {
+                    Text(profile.name)
+                        .font(.title2.bold())
+                        .help("Double-click to rename")
+                        .onTapGesture(count: 2) { beginNameEdit() }
+
+                    if !isBusy {
+                        Button(action: beginNameEdit) {
+                            Image(systemName: "square.and.pencil")
+                                .imageScale(.small)
+                                .foregroundStyle(.secondary)
+                        }
+                        .buttonStyle(.plain)
+                        .help("Rename profile")
+                    }
+                }
+
                 Spacer()
                 StatusBadge(
                     title: statusTitle,
                     color: statusColor
                 )
+            }
+            .onChange(of: profile.id) {
+                cancelNameEdit()
             }
 
             HStack(spacing: 12) {
@@ -157,6 +202,29 @@ struct ProfileDetailView: View {
                 }
             }
         }
+    }
+
+    private func beginNameEdit() {
+        guard !isBusy else { return }
+        nameDraft = profile.name
+        editingName = true
+        nameFieldFocused = true
+    }
+
+    private func cancelNameEdit() {
+        editingName = false
+        nameFieldFocused = false
+    }
+
+    private func commitNameEdit() {
+        let trimmed = nameDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty || trimmed == profile.name {
+            cancelNameEdit()
+            return
+        }
+        onRename(trimmed)
+        editingName = false
+        nameFieldFocused = false
     }
 
     private var statusTitle: String {

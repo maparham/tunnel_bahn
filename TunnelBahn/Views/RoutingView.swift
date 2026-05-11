@@ -25,12 +25,19 @@ struct RoutingView: View {
         }
     }
 
+    /// Controls in the bulk lists and custom ranges sections are disabled when filtering is off or the VPN is connected.
+    private var controlsDisabled: Bool {
+        destinationRoutingEditingLocked || !appState.settings.enforceDestinationFiltering
+    }
+
     var body: some View {
         ScrollView(.vertical) {
             VStack(alignment: .leading, spacing: 0) {
                 restrictProxySection()
                 bulkListsStandaloneSection()
+                    .opacity(appState.settings.enforceDestinationFiltering ? 1 : 0.4)
                 customRangesStandaloneSection()
+                    .opacity(appState.settings.enforceDestinationFiltering ? 1 : 0.4)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         }
@@ -52,14 +59,15 @@ struct RoutingView: View {
     private func restrictProxySection() -> some View {
         GroupBox {
             VStack(alignment: .leading, spacing: 10) {
-                Toggle(
-                    "Restrict proxy to destination CIDRs",
-                    isOn: $appState.settings.enforceDestinationFiltering
-                )
+                Toggle(isOn: $appState.settings.enforceDestinationFiltering) {
+                    Text("Destination Routing")
+                        .font(.headline)
+                }
+                .toggleStyle(.switch)
                 .help(
                     destinationRoutingEditingLocked
                         ? "Disconnect the VPN to change destination routing."
-                        : "Only TCP flows to an IP in an enabled range are relayed—not domain-based destinations or UDP."
+                        : "Toggle destination CIDR filtering for proxied TCP flows."
                 )
                 .disabled(destinationRoutingEditingLocked)
 
@@ -100,11 +108,11 @@ struct RoutingView: View {
                     Button("Import…") {
                         importCidrFromFile()
                     }
-                    .disabled(destinationRoutingEditingLocked)
+                    .disabled(controlsDisabled)
                     Button("Paste List") {
                         importCidrFromPasteboard()
                     }
-                    .disabled(destinationRoutingEditingLocked)
+                    .disabled(controlsDisabled)
                 }
 
                 VStack(alignment: .leading, spacing: 8) {
@@ -115,7 +123,7 @@ struct RoutingView: View {
                         ForEach(appState.destinationRuleStore.bulkGroups) { group in
                             DestinationCidrBulkGroupRow(
                                 groupID: group.id,
-                                controlsDisabled: destinationRoutingEditingLocked,
+                                controlsDisabled: controlsDisabled,
                                 onBrowse: {
                                     bulkPrefixBrowse = BulkPrefixBrowsePayload(
                                         id: group.id,
@@ -165,7 +173,7 @@ struct RoutingView: View {
                         ForEach(appState.destinationRuleStore.customRules) { rule in
                             DestinationCidrRuleRow(
                                 ruleID: rule.id,
-                                controlsDisabled: destinationRoutingEditingLocked
+                                controlsDisabled: controlsDisabled
                             )
                             .environmentObject(appState)
                         }
@@ -220,13 +228,13 @@ struct RoutingView: View {
                     .onChange(of: newCidrDraft) { _, _ in
                         lastAddRejected = false
                     }
-                    .disabled(destinationRoutingEditingLocked)
+                    .disabled(controlsDisabled)
 
                 Button("Add") {
                     commitDraft()
                 }
                 .disabled(
-                    destinationRoutingEditingLocked
+                    controlsDisabled
                         || newCidrDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                 )
             }

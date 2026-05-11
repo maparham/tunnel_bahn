@@ -107,6 +107,12 @@ final class DestinationRuleStore: ObservableObject {
         save()
     }
 
+    func replaceAll(customRules newCustomRules: [DestinationCidrRule], bulkGroups newBulkGroups: [DestinationCidrBulkGroup]) {
+        customRules = newCustomRules
+        bulkGroups = newBulkGroups
+        save()
+    }
+
     func renameBulkGroup(id: UUID, title: String) {
         guard let index = bulkGroups.firstIndex(where: { $0.id == id }) else { return }
         let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)

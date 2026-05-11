@@ -37,6 +37,11 @@ final class AppRuleStore: ObservableObject {
         rules.first(where: { $0.appPath == appPath })?.action
     }
 
+    func replaceAll(_ newRules: [AppRule]) {
+        rules = newRules
+        save()
+    }
+
     private func save() {
         let encoder = JSONEncoder()
         if let data = try? encoder.encode(rules) {

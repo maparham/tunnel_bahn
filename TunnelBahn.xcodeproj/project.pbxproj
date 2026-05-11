@@ -9,6 +9,8 @@
 /* Begin PBXBuildFile section */
 		07BF00AABBCCDD1122334499 /* DestinationRouting.swift in Sources */ = {isa = PBXBuildFile; fileRef = 07BF00AABBCCDD11223344AA /* DestinationRouting.swift */; };
 		07BF00DDEEFF009988776655 /* DestinationRouting.swift in Sources */ = {isa = PBXBuildFile; fileRef = 07BF00AABBCCDD11223344AA /* DestinationRouting.swift */; };
+		AA0001AABBCCDD1122334401 /* ProfileRoutingSnapshot.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0001AABBCCDD1122334402 /* ProfileRoutingSnapshot.swift */; };
+		AA0002AABBCCDD1122334403 /* ProfileRoutingStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0002AABBCCDD1122334404 /* ProfileRoutingStore.swift */; };
 		07BF11AABBCCDD11223344AA /* DestinationCidrRule.swift in Sources */ = {isa = PBXBuildFile; fileRef = 07BF11AABBCCDD11223344BB /* DestinationCidrRule.swift */; };
 		E8D7C6B5A4938271605F0CEE /* DestinationCidrBulkGroup.swift in Sources */ = {isa = PBXBuildFile; fileRef = E8D7C6B5A4938271605F0CED /* DestinationCidrBulkGroup.swift */; };
 		07BF22AABBCCDD11223344CC /* DestinationRuleStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 07BF22AABBCCDD11223344DD /* DestinationRuleStore.swift */; };
@@ -82,6 +84,7 @@
 		D603C7099D4505F8802FA4C4 /* WireGuardConfigParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = 132EDEF0EA68675638E19645 /* WireGuardConfigParser.swift */; };
 		D6097D76FE808A9A7C33AFCD /* PerAppTransferStats.swift in Sources */ = {isa = PBXBuildFile; fileRef = F463C60E2BBFEA611BE9243A /* PerAppTransferStats.swift */; };
 		D67A40C80D4A84EE8D02A634 /* ProfilesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C101AA2BA46E11A0A4EC93C3 /* ProfilesView.swift */; };
+		E1A2B3C4D5E6F7A8B9C0D1E2 /* ProfileListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1A2B3C4D5E6F7A8B9C0D1E3 /* ProfileListView.swift */; };
 		D8251767F996F7EAA35C4BEE /* AppRuleStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9295D880B3CBBD2AF7DF3388 /* AppRuleStore.swift */; };
 		D89C9EED55BFD8BCF4ACAB53 /* WireGuardProfile.swift in Sources */ = {isa = PBXBuildFile; fileRef = 597D1A15AF482ECB340F8519 /* WireGuardProfile.swift */; };
 		DB47FCCFDD0A705F0FBA98C9 /* PerAppCounterAggregator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4B4307871B6831A9807D56A2 /* PerAppCounterAggregator.swift */; };
@@ -150,6 +153,8 @@
 		6EA59D18EF9A8788514029B0 /* DiagnosticsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiagnosticsView.swift; sourceTree = "<group>"; };
 		7758E4B01EF07FE4AFE8EA1C /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		07BF00AABBCCDD11223344AA /* DestinationRouting.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DestinationRouting.swift; sourceTree = "<group>"; };
+		AA0001AABBCCDD1122334402 /* ProfileRoutingSnapshot.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProfileRoutingSnapshot.swift; sourceTree = "<group>"; };
+		AA0002AABBCCDD1122334404 /* ProfileRoutingStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProfileRoutingStore.swift; sourceTree = "<group>"; };
 		07BF11AABBCCDD11223344BB /* DestinationCidrRule.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DestinationCidrRule.swift; sourceTree = "<group>"; };
 		E8D7C6B5A4938271605F0CED /* DestinationCidrBulkGroup.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DestinationCidrBulkGroup.swift; sourceTree = "<group>"; };
 		07BF22AABBCCDD11223344DD /* DestinationRuleStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DestinationRuleStore.swift; sourceTree = "<group>"; };
@@ -180,6 +185,7 @@
 		B8E4AA7BE0C447E51BE149BC /* KeychainService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeychainService.swift; sourceTree = "<group>"; };
 		B9893ED8A6939F0FB34E45C9 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		C101AA2BA46E11A0A4EC93C3 /* ProfilesView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProfilesView.swift; sourceTree = "<group>"; };
+		F1A2B3C4D5E6F7A8B9C0D1E3 /* ProfileListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProfileListView.swift; sourceTree = "<group>"; };
 		C4AC765CF34646BCD29959AE /* TunnelBahn.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = TunnelBahn.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		C6AEA83BAE6A6F9B4EFA66D3 /* AppRule.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppRule.swift; sourceTree = "<group>"; };
 		CF5CCD4C2857BFC6B0CC64D5 /* VPNManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VPNManager.swift; sourceTree = "<group>"; };
@@ -225,6 +231,7 @@
 				B3B3A483CAA076196A178605 /* ProfileDetailView.swift */,
 				6DF2B41F806A433B201BFFDA /* ProfileEditorSheet.swift */,
 				C101AA2BA46E11A0A4EC93C3 /* ProfilesView.swift */,
+				F1A2B3C4D5E6F7A8B9C0D1E3 /* ProfileListView.swift */,
 				07BF33AABBCCDD11223344FF /* RoutingView.swift */,
 				5AF7FE9FDDCD675A8CF2918D /* SettingsView.swift */,
 				F86BBF39930242EB8FF86F54 /* StatusView.swift */,
@@ -287,6 +294,7 @@
 				6D9A4FB22EE531616E707012 /* LaunchAtLoginService.swift */,
 				5C79F57236D533D1E1A9AD5D /* NEAppRuleBuilder.swift */,
 				F7E43092154982D7DF581773 /* PerAppStatsProxyManager.swift */,
+				AA0002AABBCCDD1122334404 /* ProfileRoutingStore.swift */,
 				2388B271D3A5A5DC872F416A /* ProfileStore.swift */,
 				8662E8905AA143B0792E3460 /* ResourceMonitor.swift */,
 				A19F882B4C3D5E6F708192A0 /* ReverseDNSResolver.swift */,
@@ -321,6 +329,7 @@
 				147A18331F2C2E8D4BE615DC /* ConnectionStats.swift */,
 				07BF11AABBCCDD11223344BB /* DestinationCidrRule.swift */,
 				E8D7C6B5A4938271605F0CED /* DestinationCidrBulkGroup.swift */,
+				AA0001AABBCCDD1122334402 /* ProfileRoutingSnapshot.swift */,
 				597D1A15AF482ECB340F8519 /* WireGuardProfile.swift */,
 			);
 			path = Models;
@@ -569,8 +578,11 @@
 				8E5AECD0D7BACDE0885CFA6B /* PerAppTransferStore.swift in Sources */,
 				014C2FCBF12405FEFD835E63 /* ProfileDetailView.swift in Sources */,
 				6A875DEF40282A9C962FB171 /* ProfileEditorSheet.swift in Sources */,
+				AA0001AABBCCDD1122334401 /* ProfileRoutingSnapshot.swift in Sources */,
+				AA0002AABBCCDD1122334403 /* ProfileRoutingStore.swift in Sources */,
 				79BB5657B3423CA730A8B4E0 /* ProfileStore.swift in Sources */,
 				D67A40C80D4A84EE8D02A634 /* ProfilesView.swift in Sources */,
+				E1A2B3C4D5E6F7A8B9C0D1E2 /* ProfileListView.swift in Sources */,
 				A86E88A2EAE8BE3B64B79F5D /* ResourceMonitor.swift in Sources */,
 				A19F882B4C3D5E6F708192A1 /* ReverseDNSResolver.swift in Sources */,
 				CC563120D4B12D5595010390 /* RoutingAction.swift in Sources */,

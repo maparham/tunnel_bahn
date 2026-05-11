@@ -11,6 +11,7 @@ final class ProfileStore: ObservableObject {
     }
     
     private let keychainService = KeychainService.shared
+    var onProfileDeleted: ((UUID) -> Void)?
 
     init() {
         load()
@@ -52,6 +53,7 @@ final class ProfileStore: ObservableObject {
             selectedProfileID = profiles.first?.id
         }
         save()
+        onProfileDeleted?(id)
     }
 
     func update(_ profile: WireGuardProfile) {

@@ -2,6 +2,10 @@ import SwiftUI
 import UniformTypeIdentifiers
 import AppKit
 
+private enum ProfileDetailTab {
+    case overview, apps, routing
+}
+
 struct ProfilesView: View {
     @ObservedObject var profileStore: ProfileStore
     @ObservedObject var vpnManager: VPNManager
@@ -17,6 +21,7 @@ struct ProfilesView: View {
     @State private var isDeleteConfirmationPresented = false
     @State private var overwriteConfirmation: (existing: WireGuardProfile, new: WireGuardProfile)?
     @State private var isOverwriteConfirmationPresented = false
+    @State private var profileDetailTab: ProfileDetailTab = .overview
     private let parser = WireGuardConfigParser()
     private let keychainService = KeychainService.shared
 
@@ -134,35 +139,15 @@ struct ProfilesView: View {
                 .padding(.horizontal, 16)
                 .frame(maxHeight: .infinity)
             } else {
-                List {
-                    ForEach(profileStore.profiles) { profile in
-                        profileRow(profile) {
-                            deleteConfirmationProfile = profile
-                            isDeleteConfirmationPresented = true
-                        }
-                            .contentShape(Rectangle())
-                            .onTapGesture {
-                                profileStore.select(id: profile.id)
-                            }
-                            .listRowInsets(EdgeInsets(top: 8, leading: 12, bottom: 8, trailing: 12))
-                            .listRowBackground(
-                                profileStore.selectedProfileID == profile.id
-                                    ? Color.accentColor.opacity(0.15)
-                                    : Color.clear
-                            )
-                            .contextMenu {
-                                Button(role: .destructive) {
-                                    deleteConfirmationProfile = profile
-                                    isDeleteConfirmationPresented = true
-                                } label: {
-                                    Label("Delete Profile", systemImage: "trash")
-                                }
-                            }
+                ProfileListView(
+                    profiles: profileStore.profiles,
+                    selectedProfileID: profileStore.selectedProfileID,
+                    onSelect: { profileStore.select(id: $0) },
+                    onMove: profileStore.move,
+                    rowContent: { profile in
+                        profileRowNSView(profile)
                     }
-                    .onDelete(perform: deleteProfiles)
-                    .onMove(perform: profileStore.move)
-                }
-                .listStyle(.sidebar)
+                )
             }
         }
         .frame(width: 280)
@@ -177,7 +162,6 @@ struct ProfilesView: View {
                 case .fullTunnel:
                     return "Full Tunnel (all traffic)"
                 case .appTunnel:
-                    // Option A: App-tunnel mode with zero selected apps behaves like Full Tunnel.
                     return selectedRoutedApps > 0 ? "App-Tunnel (selected apps only)" : "Full Tunnel (all traffic)"
                 }
             }()
@@ -190,27 +174,61 @@ struct ProfilesView: View {
                     return plannedModeLabel
                 }
             }()
-            ProfileDetailView(
-                profile: selectedProfile,
-                isActive: isSelectedProfileActive,
-                isBusy: vpnManager.isBusy,
-                connectionState: vpnManager.stats.state,
-                tunnelModeLabel: modeLabel,
-                bytesIn: vpnManager.stats.bytesIn,
-                bytesOut: vpnManager.stats.bytesOut,
-                rxBytesPerSecond: vpnManager.stats.rxBytesPerSecond,
-                txBytesPerSecond: vpnManager.stats.txBytesPerSecond,
-                lastError: vpnManager.stats.lastError,
-                onActivate: {
-                    Task { await connectSelectedProfile() }
-                },
-                onDeactivate: {
-                    vpnManager.disconnect()
-                },
-                onEdit: {
-                    editingProfile = profileStore.selectedProfile
+
+            VStack(spacing: 0) {
+                // Sub-tab picker anchored below the profile header area
+                HStack {
+                    Picker("", selection: $profileDetailTab) {
+                        Text("Overview").tag(ProfileDetailTab.overview)
+                        Text("Apps").tag(ProfileDetailTab.apps)
+                        Text("Routing").tag(ProfileDetailTab.routing)
+                    }
+                    .pickerStyle(.segmented)
+                    .fixedSize()
+                    Spacer()
                 }
-            )
+                .padding(.horizontal, 20)
+                .padding(.vertical, 10)
+
+                Divider()
+
+                switch profileDetailTab {
+                case .overview:
+                    ProfileDetailView(
+                        profile: selectedProfile,
+                        isActive: isSelectedProfileActive,
+                        isBusy: vpnManager.isBusy,
+                        connectionState: vpnManager.stats.state,
+                        tunnelModeLabel: modeLabel,
+                        bytesIn: vpnManager.stats.bytesIn,
+                        bytesOut: vpnManager.stats.bytesOut,
+                        rxBytesPerSecond: vpnManager.stats.rxBytesPerSecond,
+                        txBytesPerSecond: vpnManager.stats.txBytesPerSecond,
+                        lastError: vpnManager.stats.lastError,
+                        onActivate: {
+                            Task { await connectSelectedProfile() }
+                        },
+                        onDeactivate: {
+                            vpnManager.disconnect()
+                        },
+                        onEdit: {
+                            editingProfile = profileStore.selectedProfile
+                        },
+                        onRename: { newName in
+                            var updated = selectedProfile
+                            updated.name = newName
+                            profileStore.update(updated)
+                        }
+                    )
+                case .apps:
+                    AppsView()
+                case .routing:
+                    RoutingView()
+                }
+            }
+            .onChange(of: profileStore.selectedProfileID) {
+                profileDetailTab = .overview
+            }
         } else {
             ContentUnavailableView(
                 "No Profile Selected",
@@ -218,6 +236,19 @@ struct ProfilesView: View {
                 description: Text("Select a profile from the sidebar to view details.")
             )
         }
+    }
+
+    private func profileRowNSView(_ profile: WireGuardProfile) -> NSView {
+        let view = NSHostingView(rootView:
+            profileRow(profile, onDeleteTapped: {
+                deleteConfirmationProfile = profile
+                isDeleteConfirmationPresented = true
+            })
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+        )
+        view.translatesAutoresizingMaskIntoConstraints = false
+        return view
     }
 
     private func profileRow(_ profile: WireGuardProfile, onDeleteTapped: @escaping () -> Void) -> some View {
@@ -393,3 +424,4 @@ struct ProfilesView: View {
         }
     }
 }
+
