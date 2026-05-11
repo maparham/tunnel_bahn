@@ -7,8 +7,9 @@ struct ContentView: View {
     enum Tab: String, CaseIterable {
         case profiles = "Profiles"
         case apps = "Apps"
-        case status = "Status"
+        case status = "Monitoring"
         case diagnostics = "Diagnostics"
+        case routing = "Advanced"
         case settings = "Settings"
 
         var icon: String {
@@ -17,6 +18,7 @@ struct ContentView: View {
             case .apps: "square.grid.2x2"
             case .status: "network"
             case .diagnostics: "ladybug"
+            case .routing: "point.3.connected.trianglepath.dotted"
             case .settings: "gearshape"
             }
         }
@@ -36,11 +38,13 @@ struct ContentView: View {
                     profileStore: appState.profileStore,
                     vpnManager: appState.vpnManager,
                     settings: appState.settings,
-                    appRuleStore: appState.appRuleStore
+                    appRuleStore: appState.appRuleStore,
+                    destinationRuleStore: appState.destinationRuleStore
                 )
             case .apps: AppsView()
             case .status: StatusView()
             case .diagnostics: DiagnosticsView()
+            case .routing: RoutingView()
             case .settings: SettingsView()
             }
         }

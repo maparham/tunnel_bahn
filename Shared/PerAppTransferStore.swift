@@ -46,13 +46,34 @@ enum PerAppTransferStore {
         }
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
-        guard let decoded = try? decoder.decode(PerAppTransferStats.self, from: data) else {
+        guard
+            let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+            let version = obj["schemaVersion"] as? Int
+        else {
             return .empty
         }
-        guard decoded.schemaVersion == PerAppTransferStats.currentSchemaVersion else {
+
+        switch version {
+        case 1:
+            struct LegacyV1: Decodable {
+                var schemaVersion: Int
+                var apps: [String: AppTransferEntry]
+                var lastUpdate: Date
+            }
+            guard let legacy = try? decoder.decode(LegacyV1.self, from: data) else {
+                return .empty
+            }
+            return PerAppTransferStats(
+                schemaVersion: PerAppTransferStats.currentSchemaVersion,
+                apps: legacy.apps,
+                lastUpdate: legacy.lastUpdate,
+                perDestination: []
+            )
+        case PerAppTransferStats.currentSchemaVersion:
+            return (try? decoder.decode(PerAppTransferStats.self, from: data)) ?? .empty
+        default:
             return .empty
         }
-        return decoded
     }
 
     /// Clears any persisted app-tunnel stats. Called by `VPNManager` on disconnect so the UI

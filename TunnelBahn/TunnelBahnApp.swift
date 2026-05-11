@@ -16,6 +16,7 @@ private struct MenuBarRefreshInputs: Equatable {
     let selectedProfileID: UUID?
     let appRules: [AppRule]
     let routingMode: AppSettings.RoutingMode
+    let destinationFilterMenuSummary: String?
 
     init(appState: AppState) {
         vpnState = appState.vpnManager.stats.state
@@ -30,6 +31,19 @@ private struct MenuBarRefreshInputs: Equatable {
         selectedProfileID = appState.profileStore.selectedProfileID
         appRules = appState.appRuleStore.rules
         routingMode = appState.settings.routingMode
+        destinationFilterMenuSummary = Self.makeDestinationFilterSummary(appState: appState)
+    }
+
+    private static func makeDestinationFilterSummary(appState: AppState) -> String? {
+        let state = appState.vpnManager.stats.state
+        guard state == .connected || state == .reconnecting else { return nil }
+        guard appState.settings.enforceDestinationFiltering else { return nil }
+        let cidrs = appState.destinationRuleStore.enabledFlattenedCidrs()
+            .filter { !IPCIDRMatcher.prepare([$0]).isEmpty }
+        if cidrs.isEmpty {
+            return "Dest filter (no valid ranges)"
+        }
+        return "Dest filter: \(cidrs.count) range\(cidrs.count == 1 ? "" : "s")"
     }
 }
 
@@ -50,6 +64,7 @@ struct TunnelBahnApp: App {
                     traceLog("app startup task started")
                     appDelegate.vpnManager = appState.vpnManager
                     await appState.vpnManager.load()
+                    appState.syncDestinationRoutingFileWithPreferences()
                     menuBarController.configure(
                         onConnectProfile: { profileID in
                             Task { await connect(profileID: profileID) }
@@ -132,7 +147,8 @@ struct TunnelBahnApp: App {
         traceLog("connect using profile=\(profile.name)")
         await appState.vpnManager.connect(
             profile: profile,
-            rules: appState.appRuleStore.rules
+            rules: appState.appRuleStore.rules,
+            destinationCidrStrings: appState.destinationRuleStore.enabledFlattenedCidrs()
         )
     }
 
@@ -156,6 +172,7 @@ struct TunnelBahnApp: App {
             }
         }()
         let canEnableAppTunnelRouting = AppConstants.isPerAppSplitTunnelEnabled && selectedRoutedApps > 0
+        let menuInputs = MenuBarRefreshInputs(appState: appState)
         menuBarController.update(
             connectionState: appState.vpnManager.stats.state,
             endpoint: appState.vpnManager.stats.endpoint,
@@ -165,7 +182,8 @@ struct TunnelBahnApp: App {
             txBytesPerSecond: appState.vpnManager.stats.txBytesPerSecond,
             tunnelModeLabel: modeLabel,
             routingMode: appState.settings.routingMode,
-            canEnableAppTunnelRouting: canEnableAppTunnelRouting
+            canEnableAppTunnelRouting: canEnableAppTunnelRouting,
+            destinationFilterSummary: menuInputs.destinationFilterMenuSummary
         )
         menuBarController.updateProfiles(
             appState.profileStore.profiles,

@@ -7,6 +7,13 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		07BF00AABBCCDD1122334499 /* DestinationRouting.swift in Sources */ = {isa = PBXBuildFile; fileRef = 07BF00AABBCCDD11223344AA /* DestinationRouting.swift */; };
+		07BF00DDEEFF009988776655 /* DestinationRouting.swift in Sources */ = {isa = PBXBuildFile; fileRef = 07BF00AABBCCDD11223344AA /* DestinationRouting.swift */; };
+		07BF11AABBCCDD11223344AA /* DestinationCidrRule.swift in Sources */ = {isa = PBXBuildFile; fileRef = 07BF11AABBCCDD11223344BB /* DestinationCidrRule.swift */; };
+		E8D7C6B5A4938271605F0CEE /* DestinationCidrBulkGroup.swift in Sources */ = {isa = PBXBuildFile; fileRef = E8D7C6B5A4938271605F0CED /* DestinationCidrBulkGroup.swift */; };
+		07BF22AABBCCDD11223344CC /* DestinationRuleStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 07BF22AABBCCDD11223344DD /* DestinationRuleStore.swift */; };
+		C9E8D7C6B5A4938271605F0B /* DestinationCidrTextParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = C9E8D7C6B5A4938271605F0A /* DestinationCidrTextParser.swift */; };
+		07BF33AABBCCDD11223344EE /* RoutingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 07BF33AABBCCDD11223344FF /* RoutingView.swift */; };
 		014C2FCBF12405FEFD835E63 /* ProfileDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B3B3A483CAA076196A178605 /* ProfileDetailView.swift */; };
 		035FABFA0601E358F352C11B /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 832330F2308BBB09BCD44A43 /* Assets.xcassets */; };
 		0393E05DDE08CCC0854817CD /* PerAppStatsProxyManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = F7E43092154982D7DF581773 /* PerAppStatsProxyManager.swift */; };
@@ -46,6 +53,7 @@
 		8A75EC38FC5D685DDAA66E27 /* WireGuardProfile.swift in Sources */ = {isa = PBXBuildFile; fileRef = 597D1A15AF482ECB340F8519 /* WireGuardProfile.swift */; };
 		8E5AECD0D7BACDE0885CFA6B /* PerAppTransferStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 804194AB9838F944A7CD9DD5 /* PerAppTransferStore.swift */; };
 		9218BD1308ABA5BBCDE2D1E6 /* AppGroup.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A326E604708829F35A2C2FE /* AppGroup.swift */; };
+		A19F882B4C3D5E6F708192A1 /* ReverseDNSResolver.swift in Sources */ = {isa = PBXBuildFile; fileRef = A19F882B4C3D5E6F708192A0 /* ReverseDNSResolver.swift */; };
 		950889D4805B0B825BCFC1DC /* AppDiscoveryService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9C3EBCDA1A0C341A0630B092 /* AppDiscoveryService.swift */; };
 		9C6F18B022DA3CE8022BB563 /* VPNManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = CF5CCD4C2857BFC6B0CC64D5 /* VPNManager.swift */; };
 		9F1EB3AA4E164B4139E3D474 /* AppsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5D12CC90B02F8E0E071FEEB3 /* AppsView.swift */; };
@@ -77,6 +85,7 @@
 		D8251767F996F7EAA35C4BEE /* AppRuleStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9295D880B3CBBD2AF7DF3388 /* AppRuleStore.swift */; };
 		D89C9EED55BFD8BCF4ACAB53 /* WireGuardProfile.swift in Sources */ = {isa = PBXBuildFile; fileRef = 597D1A15AF482ECB340F8519 /* WireGuardProfile.swift */; };
 		DB47FCCFDD0A705F0FBA98C9 /* PerAppCounterAggregator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4B4307871B6831A9807D56A2 /* PerAppCounterAggregator.swift */; };
+		F1E2D3C4B5A6978877665544 /* PerDestinationCounterAggregator.swift in Sources */ = {isa = PBXBuildFile; fileRef = E2D3C4B5A697887766554433 /* PerDestinationCounterAggregator.swift */; };
 		DE8098D54768316DFCDA0BC3 /* KeychainService.swift in Sources */ = {isa = PBXBuildFile; fileRef = B8E4AA7BE0C447E51BE149BC /* KeychainService.swift */; };
 		ECC1E93C73B84278566F3E5A /* WireGuardConfigRenderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 876F0DFB0843A40A070235AC /* WireGuardConfigRenderer.swift */; };
 		EF89E1D30D19FE17E9EBEA67 /* AppGroup.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A326E604708829F35A2C2FE /* AppGroup.swift */; };
@@ -124,6 +133,7 @@
 		37A6CFF94E88489A119FFBAD /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		47B164468D00F3C7CB03ED60 /* TunnelBahn.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = TunnelBahn.entitlements; sourceTree = "<group>"; };
 		4B4307871B6831A9807D56A2 /* PerAppCounterAggregator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PerAppCounterAggregator.swift; sourceTree = "<group>"; };
+		E2D3C4B5A697887766554433 /* PerDestinationCounterAggregator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PerDestinationCounterAggregator.swift; sourceTree = "<group>"; };
 		4B611342E4B03A2DAC1C2734 /* PacketTunnelExtension-Bridging-Header.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "PacketTunnelExtension-Bridging-Header.h"; sourceTree = "<group>"; };
 		5054EF52E7B8C42D0BFEF7EF /* Preview Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = "Preview Assets.xcassets"; sourceTree = "<group>"; };
 		50CB7F447B0157775A81E1F0 /* RoutingAction.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RoutingAction.swift; sourceTree = "<group>"; };
@@ -139,6 +149,12 @@
 		6DF2B41F806A433B201BFFDA /* ProfileEditorSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProfileEditorSheet.swift; sourceTree = "<group>"; };
 		6EA59D18EF9A8788514029B0 /* DiagnosticsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiagnosticsView.swift; sourceTree = "<group>"; };
 		7758E4B01EF07FE4AFE8EA1C /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
+		07BF00AABBCCDD11223344AA /* DestinationRouting.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DestinationRouting.swift; sourceTree = "<group>"; };
+		07BF11AABBCCDD11223344BB /* DestinationCidrRule.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DestinationCidrRule.swift; sourceTree = "<group>"; };
+		E8D7C6B5A4938271605F0CED /* DestinationCidrBulkGroup.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DestinationCidrBulkGroup.swift; sourceTree = "<group>"; };
+		07BF22AABBCCDD11223344DD /* DestinationRuleStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DestinationRuleStore.swift; sourceTree = "<group>"; };
+		C9E8D7C6B5A4938271605F0A /* DestinationCidrTextParser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DestinationCidrTextParser.swift; sourceTree = "<group>"; };
+		07BF33AABBCCDD11223344FF /* RoutingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RoutingView.swift; sourceTree = "<group>"; };
 		7A326E604708829F35A2C2FE /* AppGroup.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppGroup.swift; sourceTree = "<group>"; };
 		804194AB9838F944A7CD9DD5 /* PerAppTransferStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PerAppTransferStore.swift; sourceTree = "<group>"; };
 		E7D8A91B2C3D4E5F60718293 /* ExtensionResourceStats.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExtensionResourceStats.swift; sourceTree = "<group>"; };
@@ -157,6 +173,7 @@
 		9295D880B3CBBD2AF7DF3388 /* AppRuleStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppRuleStore.swift; sourceTree = "<group>"; };
 		955861FC235940330D863A3D /* BoringTunAdapter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoringTunAdapter.swift; sourceTree = "<group>"; };
 		9C3EBCDA1A0C341A0630B092 /* AppDiscoveryService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDiscoveryService.swift; sourceTree = "<group>"; };
+		A19F882B4C3D5E6F708192A0 /* ReverseDNSResolver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReverseDNSResolver.swift; sourceTree = "<group>"; };
 		A56B1DE7C326C9F499E31D20 /* AppState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppState.swift; sourceTree = "<group>"; };
 		B01EC846F951388033018FDA /* TunnelConnectivityProbe.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TunnelConnectivityProbe.swift; sourceTree = "<group>"; };
 		B3B3A483CAA076196A178605 /* ProfileDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProfileDetailView.swift; sourceTree = "<group>"; };
@@ -208,6 +225,7 @@
 				B3B3A483CAA076196A178605 /* ProfileDetailView.swift */,
 				6DF2B41F806A433B201BFFDA /* ProfileEditorSheet.swift */,
 				C101AA2BA46E11A0A4EC93C3 /* ProfilesView.swift */,
+				07BF33AABBCCDD11223344FF /* RoutingView.swift */,
 				5AF7FE9FDDCD675A8CF2918D /* SettingsView.swift */,
 				F86BBF39930242EB8FF86F54 /* StatusView.swift */,
 			);
@@ -236,6 +254,7 @@
 				8108BE3F731F12F6601FB84C /* EndpointBridge.swift */,
 				37A6CFF94E88489A119FFBAD /* Info.plist */,
 				4B4307871B6831A9807D56A2 /* PerAppCounterAggregator.swift */,
+				E2D3C4B5A697887766554433 /* PerDestinationCounterAggregator.swift */,
 				F353E3CB30DD269B8D220A2E /* TCPFlowRelay.swift */,
 				6DCB83B1688B1EF965FFC092 /* TransparentProxyExtension.entitlements */,
 				8DE7D4A99ABC9F1B9A4C3781 /* TransparentProxyProvider.swift */,
@@ -263,11 +282,14 @@
 				9C3EBCDA1A0C341A0630B092 /* AppDiscoveryService.swift */,
 				9295D880B3CBBD2AF7DF3388 /* AppRuleStore.swift */,
 				8C416906295219B27FC07EF8 /* AppSettings.swift */,
+				C9E8D7C6B5A4938271605F0A /* DestinationCidrTextParser.swift */,
+				07BF22AABBCCDD11223344DD /* DestinationRuleStore.swift */,
 				6D9A4FB22EE531616E707012 /* LaunchAtLoginService.swift */,
 				5C79F57236D533D1E1A9AD5D /* NEAppRuleBuilder.swift */,
 				F7E43092154982D7DF581773 /* PerAppStatsProxyManager.swift */,
 				2388B271D3A5A5DC872F416A /* ProfileStore.swift */,
 				8662E8905AA143B0792E3460 /* ResourceMonitor.swift */,
+				A19F882B4C3D5E6F708192A0 /* ReverseDNSResolver.swift */,
 				B01EC846F951388033018FDA /* TunnelConnectivityProbe.swift */,
 				CF5CCD4C2857BFC6B0CC64D5 /* VPNManager.swift */,
 				132EDEF0EA68675638E19645 /* WireGuardConfigParser.swift */,
@@ -297,6 +319,8 @@
 			children = (
 				C6AEA83BAE6A6F9B4EFA66D3 /* AppRule.swift */,
 				147A18331F2C2E8D4BE615DC /* ConnectionStats.swift */,
+				07BF11AABBCCDD11223344BB /* DestinationCidrRule.swift */,
+				E8D7C6B5A4938271605F0CED /* DestinationCidrBulkGroup.swift */,
 				597D1A15AF482ECB340F8519 /* WireGuardProfile.swift */,
 			);
 			path = Models;
@@ -317,6 +341,7 @@
 			children = (
 				7A326E604708829F35A2C2FE /* AppGroup.swift */,
 				5FD44AFE7F187FA0508C1EC3 /* Constants.swift */,
+				07BF00AABBCCDD11223344AA /* DestinationRouting.swift */,
 				B8E4AA7BE0C447E51BE149BC /* KeychainService.swift */,
 				925B86B12D5DC6FCBB010E74 /* PerAppIdentityMap.swift */,
 				58E05756E27A7F82EAE7E623 /* PerAppSigningCatalog.swift */,
@@ -520,10 +545,15 @@
 				C7AF0796BF521A0C617E7532 /* AppRule.swift in Sources */,
 				D8251767F996F7EAA35C4BEE /* AppRuleStore.swift in Sources */,
 				B6D78E25A29EC4E097CDF76C /* AppSettings.swift in Sources */,
+				07BF11AABBCCDD11223344AA /* DestinationCidrRule.swift in Sources */,
+				E8D7C6B5A4938271605F0CEE /* DestinationCidrBulkGroup.swift in Sources */,
+				07BF22AABBCCDD11223344CC /* DestinationRuleStore.swift in Sources */,
+				C9E8D7C6B5A4938271605F0B /* DestinationCidrTextParser.swift in Sources */,
 				7A61CBAADF0E7A340007085E /* AppState.swift in Sources */,
 				9F1EB3AA4E164B4139E3D474 /* AppsView.swift in Sources */,
 				BF6A0F8E4E3ADF9E7AB709C8 /* ConnectionStats.swift in Sources */,
 				2A3981ACBD6448C3B6161E9D /* Constants.swift in Sources */,
+				07BF00AABBCCDD1122334499 /* DestinationRouting.swift in Sources */,
 				7F6E967524842A75F4E177EA /* ContentView.swift in Sources */,
 				3EA593950168D4BEF7A874A7 /* DiagnosticsView.swift in Sources */,
 				428F287EAFBF9878D30436DC /* KeychainService.swift in Sources */,
@@ -542,7 +572,9 @@
 				79BB5657B3423CA730A8B4E0 /* ProfileStore.swift in Sources */,
 				D67A40C80D4A84EE8D02A634 /* ProfilesView.swift in Sources */,
 				A86E88A2EAE8BE3B64B79F5D /* ResourceMonitor.swift in Sources */,
+				A19F882B4C3D5E6F708192A1 /* ReverseDNSResolver.swift in Sources */,
 				CC563120D4B12D5595010390 /* RoutingAction.swift in Sources */,
+				07BF33AABBCCDD11223344EE /* RoutingView.swift in Sources */,
 				34BA9126A5908F090CAC52A6 /* SettingsView.swift in Sources */,
 				09BD4C6EA2737467C4AFA12E /* StatusView.swift in Sources */,
 				3912BB21FF77CDAAAFC2F866 /* TunnelBahnApp.swift in Sources */,
@@ -562,9 +594,11 @@
 				BFABB3077F5AB679E5233108 /* AppRule.swift in Sources */,
 				C6680FD04B19B8BE8B6CA3A0 /* ConnectionStats.swift in Sources */,
 				C90BBF25A61D7293A634B533 /* Constants.swift in Sources */,
+				07BF00DDEEFF009988776655 /* DestinationRouting.swift in Sources */,
 				0E304F12798C57930DC3DB52 /* EndpointBridge.swift in Sources */,
 				DE8098D54768316DFCDA0BC3 /* KeychainService.swift in Sources */,
 				DB47FCCFDD0A705F0FBA98C9 /* PerAppCounterAggregator.swift in Sources */,
+				F1E2D3C4B5A6978877665544 /* PerDestinationCounterAggregator.swift in Sources */,
 				10972EE8489BBB0959E38D42 /* PerAppIdentityMap.swift in Sources */,
 				AE002EF8D50B5715C57F9BDD /* PerAppSigningCatalog.swift in Sources */,
 				D6097D76FE808A9A7C33AFCD /* PerAppTransferStats.swift in Sources */,

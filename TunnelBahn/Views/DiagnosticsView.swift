@@ -8,10 +8,11 @@ struct DiagnosticsView: View {
     @State private var verificationResults = ""
     
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
+        ScrollView(.vertical) {
+            VStack(alignment: .leading, spacing: 16) {
             Text("VPN Diagnostics")
                 .font(.title2.bold())
-            
+
             GroupBox("Manager Configuration") {
                 ScrollView {
                     Text(managerDiagnostics.isEmpty ? "Click 'Refresh' to load diagnostics" : managerDiagnostics)
@@ -103,9 +104,9 @@ struct DiagnosticsView: View {
                 }
             }
             
-            Spacer()
+            }
+            .padding()
         }
-        .padding()
         .onAppear {
             refreshManagerDiagnostics()
         }

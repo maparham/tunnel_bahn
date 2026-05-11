@@ -75,7 +75,7 @@ final class VPNManager: ObservableObject {
         }
     }
 
-    func connect(profile: WireGuardProfile, rules: [AppRule]) async {
+    func connect(profile: WireGuardProfile, rules: [AppRule], destinationCidrStrings: [String]) async {
         if isBusy {
             emitConnectSummaryLine(
                 outcome: "ignored",
@@ -259,6 +259,10 @@ final class VPNManager: ObservableObject {
                     persistPerAppStatsRoutingConfig(appRules: [], routeAllIdentifiedFlows: true)
                     traceLog("full-traffic accounting: persisted routeAllIdentifiedFlows for transparent proxy")
                 }
+                persistDestinationRoutingFromHost(
+                    enforceFiltering: settings.enforceDestinationFiltering,
+                    ranges: destinationCidrStrings
+                )
                 traceLog(
                     "VPN accounting stack: tunnel DNS servers=[\(extensionProfile.interface.dnsServers.joined(separator: ", "))]"
                 )
@@ -390,6 +394,14 @@ final class VPNManager: ObservableObject {
                 detail: message
             )
         }
+    }
+
+    /// Re-writes the shared destination-routing snapshot from host preferences (`TransparentProxyProvider`
+    /// reads it when running; keeping it aligned while disconnected avoids stale `enforce` if the tunnel
+    /// stops outside TunnelBahn and is started again).
+    @MainActor
+    func syncDestinationRoutingFromHostActivity(enforceFiltering: Bool, flattenedRangeStrings: [String]) {
+        persistDestinationRoutingFromHost(enforceFiltering: enforceFiltering, ranges: flattenedRangeStrings)
     }
 
     private func profileHasDefaultRoute(profile: WireGuardProfile) -> Bool {
@@ -570,6 +582,17 @@ final class VPNManager: ObservableObject {
                 )
                 return
             }
+            if connectCancelled {
+                traceLog("connect post-tunnel: user disconnected during proxy enable")
+                await coordinatedDisconnect(waitForTunnelStop: false)
+                return
+            }
+            guard stats.state == .connected, stats.connectedProfileID == profile.id else {
+                traceLog(
+                    "connect post-tunnel: superseded during proxy enable (state=\(stats.state.rawValue)); skipping finish"
+                )
+                return
+            }
         }
 
         // Defer ipify / probes so bring-up is not blocked (~10–45s) while the tunnel is already usable.
@@ -639,8 +662,10 @@ final class VPNManager: ObservableObject {
         manager.connection.stopVPNTunnel()
 
         if connectRunning {
-            traceLog("disconnect: in-flight connect will observe cancellation and tear down")
-            return
+            // Connect can still be inside `applySuccessfulConnectPostTunnel` (e.g. awaiting proxy enable)
+            // while `stats.state` is already `.connected`. A bare return would skip `coordinatedDisconnect`,
+            // so tray Disconnect appears to do nothing until connect finishes.
+            traceLog("disconnect: in-flight connect; scheduling coordinated teardown")
         }
         if stats.state == .disconnected, isTunnelFullyStopped() {
             traceLog("disconnect ignored because already disconnected")
@@ -1011,6 +1036,7 @@ final class VPNManager: ObservableObject {
         stats.perAppAggregateRxBytesPerSecond = 0
         stats.perAppAggregateTxBytesPerSecond = 0
         stats.perAppStats = [:]
+        stats.perDestinationStats = []
         stats.perAppStatsUpdatedAt = nil
         stopStatsRefresh()
         syncExtensionResourceStats()
@@ -1080,6 +1106,26 @@ final class VPNManager: ObservableObject {
         if let fileURL = SharedPaths.perAppRoutedSigningIdentifiersFileURL() {
             try? FileManager.default.removeItem(at: fileURL)
         }
+        removeDestinationRoutingFile()
+    }
+
+    private func persistDestinationRoutingFromHost(enforceFiltering: Bool, ranges: [String]) {
+        guard let fileURL = SharedPaths.destinationRangesFileURL() else {
+            traceLog("WARNING: unable to locate destination routing App Group URL")
+            return
+        }
+        let payload = DestinationRoutingFilePayload(enforceDestinationFiltering: enforceFiltering, ranges: ranges)
+        do {
+            try DestinationRoutingFileStore.write(payload, to: fileURL)
+            traceLog("destination routing file written enforce=\(enforceFiltering) rawRangeCount=\(ranges.count)")
+        } catch {
+            traceLog("WARNING: destination routing write failed: \(error.localizedDescription)")
+        }
+    }
+
+    private func removeDestinationRoutingFile() {
+        guard let fileURL = SharedPaths.destinationRangesFileURL() else { return }
+        try? FileManager.default.removeItem(at: fileURL)
     }
 
     private func persistRuntimeState(data: Data) throws {
@@ -1312,6 +1358,7 @@ final class VPNManager: ObservableObject {
         if stats.perAppStatsCollectionActive {
             let snapshot = PerAppTransferStore.read()
             stats.perAppStats = snapshot.apps
+            stats.perDestinationStats = snapshot.perDestination
             stats.perAppStatsUpdatedAt = snapshot.lastUpdate
 
             let aggregateRx = snapshot.apps.values.reduce(UInt64(0)) { partial, entry in partial &+ entry.rxBytes }
@@ -1331,6 +1378,9 @@ final class VPNManager: ObservableObject {
             lastPerAppAggregateSnapshot = nil
             if !stats.perAppStats.isEmpty {
                 stats.perAppStats = [:]
+            }
+            if !stats.perDestinationStats.isEmpty {
+                stats.perDestinationStats = []
             }
         }
         syncResourceStatsFromMonitor()

@@ -8,7 +8,7 @@ import Foundation
 /// - `schemaVersion` is mandatory and lets future format changes coexist with older app/extension
 ///   pairs without crashing.
 struct PerAppTransferStats: Codable {
-    static let currentSchemaVersion: Int = 1
+    static let currentSchemaVersion: Int = 2
 
     /// Bumped when the on-disk format changes incompatibly. Readers MUST ignore unknown versions.
     var schemaVersion: Int
@@ -18,12 +18,24 @@ struct PerAppTransferStats: Codable {
     var apps: [String: AppTransferEntry]
     /// Wall-clock timestamp of the last extension flush. Useful for staleness detection in the UI.
     var lastUpdate: Date
+    /// TCP-only per-(app, remote literal) session totals; empty for legacy v1 files on read.
+    var perDestination: [PerDestinationTransferRow]
 
     static let empty = PerAppTransferStats(
         schemaVersion: PerAppTransferStats.currentSchemaVersion,
         apps: [:],
-        lastUpdate: .distantPast
+        lastUpdate: .distantPast,
+        perDestination: []
     )
+}
+
+struct PerDestinationTransferRow: Codable, Equatable, Hashable, Identifiable {
+    var appDisplayName: String
+    var remoteLiteral: String
+    var txBytes: UInt64
+    var rxBytes: UInt64
+
+    var id: String { "\(appDisplayName)\u{1e}\(remoteLiteral)" }
 }
 
 struct AppTransferEntry: Codable, Equatable {

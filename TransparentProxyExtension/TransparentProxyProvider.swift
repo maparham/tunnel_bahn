@@ -21,6 +21,7 @@ final class TransparentProxyProvider: NETransparentProxyProvider {
     )
 
     private let aggregator = PerAppCounterAggregator()
+    private let destinationAggregator = PerDestinationCounterAggregator()
     private let flowQueue = DispatchQueue(label: "com.tunnelbahn.mac.transparentproxy.flows", qos: .userInitiated)
     private let flushQueue = DispatchQueue(label: "com.tunnelbahn.mac.transparentproxy.flush", qos: .utility)
     private var flushTimer: DispatchSourceTimer?
@@ -37,6 +38,12 @@ final class TransparentProxyProvider: NETransparentProxyProvider {
     /// When true (full-tunnel / all-traffic accounting), relay and count every flow that has a signing ID.
     private var routeAllIdentifiedFlows = false
 
+    private let destinationLock = NSLock()
+    /// When false, flows that pass signing-ID eligibility are relayed for any remote.
+    /// When true, relay only IPv4/v6 literals whose address matches at least one CIDR snapshot.
+    private var enforceDestinationFiltering = false
+    private var destinationPreparedRanges: [IPCIDRMatcher.PreparedRange] = []
+
     private static let flushInterval: DispatchTimeInterval = .milliseconds(1500)
     private static let perAppRoutedSigningIDsDefaultsKey = "perAppRoutedSigningIdentifiers"
     private static let perAppRouteAllFlowsDefaultsKey = "perAppRouteAllIdentifiedFlows"
@@ -44,6 +51,7 @@ final class TransparentProxyProvider: NETransparentProxyProvider {
     override func startProxy(options: [String: Any]?, completionHandler: @escaping (Error?) -> Void) {
         Self.log.notice("startProxy invoked")
         refreshRoutedSigningIdentifiers()
+        refreshDestinationConfig()
 
         let settings = NETransparentProxyNetworkSettings(tunnelRemoteAddress: "127.0.0.1")
         let tcpAny = NENetworkRule(
@@ -83,6 +91,7 @@ final class TransparentProxyProvider: NETransparentProxyProvider {
         flushTimer = nil
         flushOnce()
         aggregator.clear()
+        destinationAggregator.clear()
         completionHandler()
     }
 
@@ -99,15 +108,30 @@ final class TransparentProxyProvider: NETransparentProxyProvider {
             return false
         }
 
+        if !destinationAllowsRelay(flow) {
+            return false
+        }
+
         let flowKey = ObjectIdentifier(flow)
 
         if let tcp = flow as? NEAppProxyTCPFlow {
+            let remoteLiteral = literalRemoteHostname(from: tcp)
             let relay = TCPFlowRelay(
                 flow: tcp,
                 signingID: signingID,
                 queue: flowQueue,
-                onTx: { [weak self] in self?.aggregator.addTx($0, signingID: signingID) },
-                onRx: { [weak self] in self?.aggregator.addRx($0, signingID: signingID) },
+                onTx: { [weak self] bytes in
+                    self?.aggregator.addTx(bytes, signingID: signingID)
+                    if let remoteLiteral {
+                        self?.destinationAggregator.addTx(bytes, signingID: signingID, remoteLiteral: remoteLiteral)
+                    }
+                },
+                onRx: { [weak self] bytes in
+                    self?.aggregator.addRx(bytes, signingID: signingID)
+                    if let remoteLiteral {
+                        self?.destinationAggregator.addRx(bytes, signingID: signingID, remoteLiteral: remoteLiteral)
+                    }
+                },
                 onClose: { [weak self] in
                     guard let self else { return }
                     self.activeRelaysLock.lock()
@@ -256,6 +280,98 @@ final class TransparentProxyProvider: NETransparentProxyProvider {
         Self.log.notice("loadFromUserDefaultsOrFallback: final count=\(ids.count, privacy: .public), ids=\(ids.sorted().joined(separator: ","), privacy: .public)")
     }
 
+    /// Returns `false` only when filtering is enforced and remote is not an IP literal contained in ranges.
+    private func destinationAllowsRelay(_ flow: NEAppProxyFlow) -> Bool {
+        destinationLock.lock()
+        let enforce = enforceDestinationFiltering
+        let matchers = destinationPreparedRanges
+        destinationLock.unlock()
+
+        guard enforce else { return true }
+        if flow is NEAppProxyUDPFlow {
+            // v1 limitation: UDP accept has no canonical `remoteEndpoint`; per-datagram evaluation would belong in UDPFlowRelay.
+            Self.log.notice("destination filter skipped for UDP flow (requires per-datagram v2)")
+            return true
+        }
+        guard !matchers.isEmpty else {
+            Self.log.notice(
+                "handleNewFlow: destination filtering enabled but ranges empty → bypass \(String(describing: type(of: flow)), privacy: .public)"
+            )
+            return false
+        }
+        guard let host = literalRemoteHostname(from: flow),
+              IPCIDRMatcher.literalMatches(host, ranges: matchers)
+        else {
+            Self.log.notice(
+                "handleNewFlow: destination filter miss or non-literal hostname flowType=\(String(describing: type(of: flow)), privacy: .public)"
+            )
+            return false
+        }
+        return true
+    }
+
+    private func literalRemoteHostname(from flow: NEAppProxyFlow) -> String? {
+        guard let tcp = flow as? NEAppProxyTCPFlow else { return nil }
+        return normalizedLiteralIPv4Or6(hostnameFrom(remote: tcp.remoteEndpoint))
+    }
+
+    private func hostnameFrom(remote endpoint: NSObject?) -> String? {
+        guard let hostEndpoint = endpoint as? NWHostEndpoint else { return nil }
+        let name = hostEndpoint.hostname.trimmingCharacters(in: .whitespacesAndNewlines)
+        return name.isEmpty ? nil : name
+    }
+
+    /// NWHost hostname string must already be IPv4/IPv6 literal (no resolver); strips `%scope` suffix.
+    private func normalizedLiteralIPv4Or6(_ hostname: String?) -> String? {
+        guard var raw = hostname, !raw.isEmpty else { return nil }
+        if let pct = raw.firstIndex(of: "%") {
+            raw = String(raw[..<pct])
+        }
+        var v4 = in_addr()
+        if inet_pton(AF_INET, raw, &v4) == 1 {
+            return raw
+        }
+        var v6 = in6_addr()
+        if inet_pton(AF_INET6, raw, &v6) == 1 {
+            return raw
+        }
+        return nil
+    }
+
+    private func refreshDestinationConfig() {
+        Self.log.notice("refreshDestinationConfig called")
+        guard let fileURL = SharedPaths.destinationRangesFileURL() else {
+            Self.log.notice("refreshDestinationConfig fileURL nil")
+            applyDestinationPayload(enforce: false, matchers: [])
+            return
+        }
+        guard let data = try? Data(contentsOf: fileURL) else {
+            Self.log.notice("refreshDestinationConfig: file missing/unreadable \(fileURL.lastPathComponent, privacy: .public)")
+            applyDestinationPayload(enforce: false, matchers: [])
+            return
+        }
+        do {
+            let payload = try JSONDecoder().decode(DestinationRoutingFilePayload.self, from: data)
+            let matchers = IPCIDRMatcher.prepare(payload.ranges)
+            Self.log.notice(
+                "refreshDestinationConfig: enforce=\(payload.enforceDestinationFiltering, privacy: .public) parseableRanges=\(matchers.count, privacy: .public)"
+            )
+            applyDestinationPayload(enforce: payload.enforceDestinationFiltering, matchers: matchers)
+        } catch {
+            Self.log.notice(
+                "refreshDestinationConfig decode failed \(error.localizedDescription, privacy: .public)"
+            )
+            applyDestinationPayload(enforce: false, matchers: [])
+        }
+    }
+
+    private func applyDestinationPayload(enforce: Bool, matchers: [IPCIDRMatcher.PreparedRange]) {
+        destinationLock.lock()
+        enforceDestinationFiltering = enforce
+        destinationPreparedRanges = matchers
+        destinationLock.unlock()
+    }
+
     private func startFlushTimer() {
         let timer = DispatchSource.makeTimerSource(queue: flushQueue)
         timer.schedule(deadline: .now() + Self.flushInterval, repeating: Self.flushInterval)
@@ -268,13 +384,18 @@ final class TransparentProxyProvider: NETransparentProxyProvider {
 
     private func flushOnce() {
         refreshRoutedSigningIdentifiers()
+        refreshDestinationConfig()
         let rules = PerAppIdentityMap.loadActiveRules()
         let rolledUp = aggregator.rollup(rules: rules)
-        Self.log.notice("flushOnce: rules=\(rules.count, privacy: .public) rolledUp=\(rolledUp.count, privacy: .public)")
+        let perDestination = destinationAggregator.rollupToRows(rules: rules)
+        Self.log.notice(
+            "flushOnce: rules=\(rules.count, privacy: .public) rolledUp=\(rolledUp.count, privacy: .public) destinations=\(perDestination.count, privacy: .public)"
+        )
         let stats = PerAppTransferStats(
             schemaVersion: PerAppTransferStats.currentSchemaVersion,
             apps: rolledUp,
-            lastUpdate: .now
+            lastUpdate: .now,
+            perDestination: perDestination
         )
         do {
             try PerAppTransferStore.write(stats)

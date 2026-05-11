@@ -7,6 +7,7 @@ struct ProfilesView: View {
     @ObservedObject var vpnManager: VPNManager
     @ObservedObject var settings: AppSettings
     let appRuleStore: AppRuleStore
+    let destinationRuleStore: DestinationRuleStore
     @State private var importError: String?
     @State private var isPasteSheetPresented = false
     @State private var pastedProfileName = ""
@@ -331,7 +332,8 @@ struct ProfilesView: View {
         guard let profile = profileStore.selectedProfile else { return }
         await vpnManager.connect(
             profile: profile,
-            rules: appRuleStore.rules
+            rules: appRuleStore.rules,
+            destinationCidrStrings: destinationRuleStore.enabledFlattenedCidrs()
         )
     }
 

@@ -38,6 +38,11 @@ final class AppSettings: ObservableObject {
         didSet { save() }
     }
 
+    /// When accounting via transparent proxy is active, require relayed flows to hit an enabled CIDR (IP literals only in v1).
+    @Published var enforceDestinationFiltering: Bool {
+        didSet { save() }
+    }
+
     private enum Keys {
         static let autoReconnect = "autoReconnect"
         static let launchAtLogin = "launchAtLogin"
@@ -46,6 +51,7 @@ final class AppSettings: ObservableObject {
         static let diagnosticsLevel = "diagnosticsLevel"
         static let runTunnelConnectivityProbe = "runTunnelConnectivityProbe"
         static let includeHostAppInPerAppRulesForProbe = "includeHostAppInPerAppRulesForProbe"
+        static let enforceDestinationFiltering = "enforceDestinationFiltering"
     }
 
     init() {
@@ -67,6 +73,7 @@ final class AppSettings: ObservableObject {
         runTunnelConnectivityProbe = AppGroupStore.defaults.object(forKey: Keys.runTunnelConnectivityProbe) as? Bool ?? true
         includeHostAppInPerAppRulesForProbe =
             AppGroupStore.defaults.object(forKey: Keys.includeHostAppInPerAppRulesForProbe) as? Bool ?? true
+        enforceDestinationFiltering = AppGroupStore.defaults.object(forKey: Keys.enforceDestinationFiltering) as? Bool ?? false
     }
 
     private func save() {
@@ -77,5 +84,6 @@ final class AppSettings: ObservableObject {
         AppGroupStore.defaults.set(diagnosticsLevel, forKey: Keys.diagnosticsLevel)
         AppGroupStore.defaults.set(runTunnelConnectivityProbe, forKey: Keys.runTunnelConnectivityProbe)
         AppGroupStore.defaults.set(includeHostAppInPerAppRulesForProbe, forKey: Keys.includeHostAppInPerAppRulesForProbe)
+        AppGroupStore.defaults.set(enforceDestinationFiltering, forKey: Keys.enforceDestinationFiltering)
     }
 }

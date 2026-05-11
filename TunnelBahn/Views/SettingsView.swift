@@ -23,10 +23,16 @@ struct SettingsView: View {
             }
 
             Section("Diagnostics") {
-                Picker("Log Level", selection: $appState.settings.diagnosticsLevel) {
-                    Text("Error").tag("error")
-                    Text("Info").tag("info")
-                    Text("Debug").tag("debug")
+                HStack {
+                    Text("Log Level")
+                    Picker("", selection: $appState.settings.diagnosticsLevel) {
+                        Text("Error").tag("error")
+                        Text("Info").tag("info")
+                        Text("Debug").tag("debug")
+                    }
+                    .labelsHidden()
+                    .pickerStyle(.menu)
+                    .fixedSize()
                 }
                 Toggle(
                     "Tunnel connectivity probe after connect",
@@ -49,6 +55,7 @@ struct SettingsView: View {
                 Label("Profiles and app rules are stored in app group container.", systemImage: "folder.badge.gearshape")
             }
         }
+        .frame(maxHeight: .infinity, alignment: .top)
         .padding()
         .alert("Launch At Login Error", isPresented: .constant(launchError != nil), actions: {
             Button("OK") { launchError = nil }

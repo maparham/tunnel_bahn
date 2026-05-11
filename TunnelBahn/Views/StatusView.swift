@@ -1,4 +1,54 @@
 import SwiftUI
+#if os(macOS)
+import AppKit
+#endif
+
+#if os(macOS)
+/// Uses AppKit tool tips (`NSView.toolTip`). SwiftUI `.help` frequently does nothing on decorative `Image` views in grouped headers.
+private struct TooltipHelpGlyph: NSViewRepresentable {
+    let toolTipText: String
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
+    func makeNSView(context: Context) -> NSButton {
+        let button = NSButton(frame: CGRect(x: 0, y: 0, width: 22, height: 22))
+        button.isBordered = false
+        button.title = ""
+        button.imagePosition = .imageOnly
+        button.imageScaling = .scaleProportionallyDown
+        button.setButtonType(.momentaryChange)
+        button.toolTip = toolTipText
+        button.target = context.coordinator
+        button.action = #selector(Coordinator.noop(_:))
+        Coordinator.applySymbol(to: button)
+        TooltipHelpGlyph.applyAccessibility(to: button, toolTipText: toolTipText)
+        return button
+    }
+
+    func updateNSView(_ button: NSButton, context: Context) {
+        button.toolTip = toolTipText
+        TooltipHelpGlyph.applyAccessibility(to: button, toolTipText: toolTipText)
+    }
+
+    private static func applyAccessibility(to button: NSButton, toolTipText: String) {
+        button.setAccessibilityElement(true)
+        button.setAccessibilityRole(.button)
+        button.setAccessibilityLabel("How listed traffic addresses are interpreted")
+        button.setAccessibilityHelp(toolTipText)
+    }
+
+    final class Coordinator: NSObject {
+        @objc func noop(_ sender: Any?) {}
+
+        static func applySymbol(to button: NSButton) {
+            guard let base = NSImage(systemSymbolName: "questionmark.circle", accessibilityDescription: "Help") else { return }
+            let config = NSImage.SymbolConfiguration(pointSize: 14, weight: .medium)
+            button.image = base.withSymbolConfiguration(config)
+            button.contentTintColor = .secondaryLabelColor
+        }
+    }
+}
+#endif
 
 private struct SystemResourceTableRow: Identifiable {
     let id: String
@@ -7,22 +57,68 @@ private struct SystemResourceTableRow: Identifiable {
     let memoryBytes: UInt64
 }
 
+/// Shared GroupBox chrome: bold title row, optional control next to title, optional trailing accessory, divider, body.
+private struct MonitoringGroupBox<TitleAccessory: View, TrailingAccessory: View, Content: View>: View {
+    let title: String
+    @ViewBuilder var titleAccessory: () -> TitleAccessory
+    @ViewBuilder var trailingAccessory: () -> TrailingAccessory
+    @ViewBuilder var content: () -> Content
+
+    var body: some View {
+        GroupBox {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(alignment: .center, spacing: 8) {
+                    Text(title)
+                        .font(.title3.weight(.semibold))
+                    titleAccessory()
+                    Spacer(minLength: 8)
+                    trailingAccessory()
+                }
+                Divider()
+                content()
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+}
+
+extension MonitoringGroupBox where TitleAccessory == EmptyView, TrailingAccessory == EmptyView {
+    init(title: String, @ViewBuilder content: @escaping () -> Content) {
+        self.init(title: title, titleAccessory: { EmptyView() }, trailingAccessory: { EmptyView() }, content: content)
+    }
+}
+
+extension MonitoringGroupBox where TitleAccessory == EmptyView {
+    init(
+        title: String,
+        @ViewBuilder trailingAccessory: @escaping () -> TrailingAccessory,
+        @ViewBuilder content: @escaping () -> Content
+    ) {
+        self.init(title: title, titleAccessory: { EmptyView() }, trailingAccessory: trailingAccessory, content: content)
+    }
+}
+
 struct StatusView: View {
     @EnvironmentObject private var appState: AppState
+    @StateObject private var reverseDNS = ReverseDNSResolver()
     @State private var showAllPerAppStats = false
+    /// App display names with expanded TCP destination subtree (custom disclosure — clearer than default `DisclosureGroup` chrome).
+    @State private var expandedAppTrafficApps: Set<String> = []
+    @State private var hoveredAppTrafficRow: String?
 
     private let perAppStatsTopN = 10
+    /// Caps vertical growth of the app rows; list scrolls when expanded nodes exceed this.
+    private let perAppTrafficListMaxHeight: CGFloat = 380
+    /// Keeps empty / startup state readable so the Tunnel Monitor body is not vertically collapsed.
+    private let perAppTrafficListMinHeight: CGFloat = 120
+
+    /// Tooltip + VoiceOver helper for Tunnel Monitor naming (deliberately short).
+    private static let tunnelTrafficMonitorHelpText =
+        "Counted TCP IPs. Prefix Reverse-DNs; brackets = matched routing lists. “Other traffic” is everything else summed for this app."
 
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
-            HStack {
-                Text("Connection Status")
-                    .font(.title2.bold())
-                Spacer()
-                statusBadge
-            }
-
-            GroupBox("Session") {
+            MonitoringGroupBox(title: "Connection Status", trailingAccessory: { statusBadge }) {
                 VStack(alignment: .leading, spacing: 8) {
                     infoRow("Backend", backendLabel)
                     infoRow("State", appState.vpnManager.stats.state.rawValue.capitalized)
@@ -38,35 +134,12 @@ struct StatusView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
 
-            GroupBox("System Resources") {
-                Table(systemResourceTableRows) {
-                    TableColumn("Component") { row in
-                        Text(row.title)
-                    }
-                    .width(min: 100, ideal: 140)
-                    TableColumn("CPU") { row in
-                        Text(String(format: "%.1f%%", row.cpuPercent))
-                            .monospacedDigit()
-                            .frame(maxWidth: .infinity, alignment: .trailing)
-                    }
-                    .width(ideal: 72)
-                    TableColumn("Memory") { row in
-                        Text(formatBytes(row.memoryBytes))
-                            .monospacedDigit()
-                            .frame(maxWidth: .infinity, alignment: .trailing)
-                    }
-                    .width(ideal: 100)
-                }
-                .frame(maxWidth: .infinity, minHeight: CGFloat(systemResourceTableRows.count) * 22 + 28)
-                .tableStyle(.inset(alternatesRowBackgrounds: true))
-            }
-
             if appState.vpnManager.stats.perAppStatsCollectionActive {
                 perAppTrafficSection
             }
 
             if let error = appState.vpnManager.stats.lastError {
-                GroupBox("Last Error") {
+                MonitoringGroupBox(title: "Last Error") {
                     Text(error)
                         .foregroundStyle(.red)
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -80,61 +153,255 @@ struct StatusView: View {
                 .buttonStyle(.bordered)
                 .disabled(appState.vpnManager.isBusy)
             }
+
+            MonitoringGroupBox(title: "Resource Monitor") {
+                systemResourcesInsetList
+            }
+
             Spacer()
         }
         .padding()
         .onChange(of: appState.vpnManager.stats.perAppStatsCollectionActive) { _, active in
-            if !active { showAllPerAppStats = false }
+            if !active {
+                showAllPerAppStats = false
+                expandedAppTrafficApps = []
+                hoveredAppTrafficRow = nil
+            }
         }
     }
 
     private var perAppTrafficSection: some View {
-        GroupBox {
-            VStack(alignment: .leading, spacing: 8) {
+        MonitoringGroupBox(
+            title: "Tunnel Monitor",
+            titleAccessory: {
+#if os(macOS)
+                TooltipHelpGlyph(toolTipText: Self.tunnelTrafficMonitorHelpText)
+                .fixedSize()
+#else
+                Image(systemName: "questionmark.circle")
+                    .font(.callout.weight(.medium))
+                    .foregroundStyle(.secondary)
+                    .help(Self.tunnelTrafficMonitorHelpText)
+                    .accessibilityLabel("How listed traffic addresses are interpreted")
+#endif
+            },
+            trailingAccessory: {
                 let stats = appState.vpnManager.stats
-                HStack(alignment: .center, spacing: 8) {
-                    Text("App-Tunnel Traffic")
-                        .font(.headline)
-                    Spacer(minLength: 8)
-                    directionalThroughputCaption(
-                        down: formatRate(stats.perAppAggregateRxBytesPerSecond),
-                        up: formatRate(stats.perAppAggregateTxBytesPerSecond)
-                    )
-                    .accessibilityElement(children: .combine)
-                    .accessibilityLabel(
-                        "Total rate: receive \(formatRate(stats.perAppAggregateRxBytesPerSecond)), send \(formatRate(stats.perAppAggregateTxBytesPerSecond))"
-                    )
-                }
-                if sortedPerAppStats.count > perAppStatsTopN {
-                    Button(showAllPerAppStats ? "Show top \(perAppStatsTopN) only" : "Show all (\(sortedPerAppStats.count))") {
+                directionalThroughputCaption(
+                    down: formatRate(stats.perAppAggregateRxBytesPerSecond),
+                    up: formatRate(stats.perAppAggregateTxBytesPerSecond)
+                )
+                .accessibilityElement(children: .combine)
+                .accessibilityLabel(
+                    "Total rate: receive \(formatRate(stats.perAppAggregateRxBytesPerSecond)), send \(formatRate(stats.perAppAggregateTxBytesPerSecond))"
+                )
+            }
+        ) {
+            VStack(alignment: .leading, spacing: 8) {
+                if allAppsSorted.count > perAppStatsTopN {
+                    Button(showAllPerAppStats ? "Show top \(perAppStatsTopN) only" : "Show all (\(allAppsSorted.count))") {
                         showAllPerAppStats.toggle()
                     }
                     .buttonStyle(.borderless)
                     .controlSize(.small)
                 }
-                Divider()
-                if displayedPerAppStats.isEmpty {
-                    Text("Waiting for app-tunnel traffic…")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                } else {
-                    ForEach(displayedPerAppStats, id: \.key) { app, entry in
-                        HStack(alignment: .center, spacing: 8) {
-                            Text(app)
-                                .lineLimit(1)
-                            Spacer(minLength: 8)
-                            directionalThroughputCaption(
-                                down: formatBytes(entry.rxBytes),
-                                up: formatBytes(entry.txBytes)
-                            )
-                            .accessibilityElement(children: .combine)
-                            .accessibilityLabel("Received \(formatBytes(entry.rxBytes)), sent \(formatBytes(entry.txBytes))")
+                ScrollView {
+                    if displayedApps.isEmpty {
+                        Text("Waiting for app-tunnel traffic…")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .frame(maxWidth: .infinity, minHeight: perAppTrafficListMinHeight, alignment: .topLeading)
+                    } else {
+                        LazyVStack(alignment: .leading, spacing: 6) {
+                            ForEach(displayedApps, id: \.0) { app, entry in
+                                let destRows = destinationsByApp[app] ?? []
+                                let residual = residualBytes(parent: entry, tcpDestinations: destRows)
+                                let isExpanded = expandedAppTrafficApps.contains(app)
+                                let isHovered = hoveredAppTrafficRow == app
+                                VStack(alignment: .leading, spacing: 6) {
+                                    HStack(alignment: .center, spacing: 8) {
+                                        Button {
+                                            withAnimation(.easeInOut(duration: 0.2)) {
+                                                if isExpanded {
+                                                    expandedAppTrafficApps.remove(app)
+                                                } else {
+                                                    expandedAppTrafficApps.insert(app)
+                                                }
+                                            }
+                                        } label: {
+                                            HStack(spacing: 10) {
+                                                Image(systemName: "chevron.right")
+                                                    .font(.headline.weight(.semibold))
+                                                    .foregroundStyle(.secondary)
+                                                    .frame(width: 18, alignment: .center)
+                                                    .rotationEffect(.degrees(isExpanded ? 90 : 0))
+                                                Text(app)
+                                                    .font(.headline)
+                                                    .lineLimit(1)
+                                                    .foregroundStyle(.primary)
+                                                Spacer(minLength: 8)
+                                                directionalThroughputCaption(
+                                                    down: formatBytes(entry.rxBytes),
+                                                    up: formatBytes(entry.txBytes)
+                                                )
+                                                .accessibilityElement(children: .combine)
+                                                .accessibilityLabel(
+                                                    "Received \(formatBytes(entry.rxBytes)), sent \(formatBytes(entry.txBytes))"
+                                                )
+                                            }
+                                            .contentShape(Rectangle())
+                                        }
+                                        .buttonStyle(.plain)
+                                        .accessibilityLabel(app)
+                                        .accessibilityHint(
+                                            isExpanded ? "Collapse TCP destination details" : "Expand to show TCP destination details"
+                                        )
+
+                                        trafficAppSubtreeCopyButton(
+                                            app: app,
+                                            destRows: destRows,
+                                            residual: residual
+                                        )
+                                    }
+                                    .padding(.vertical, 8)
+                                    .padding(.horizontal, 10)
+                                    .background {
+                                        RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                            .fill(Color.primary.opacity(isHovered ? 0.07 : 0))
+                                    }
+                                    .animation(.easeInOut(duration: 0.12), value: isHovered)
+                                    .onHover { hovering in
+                                        if hovering {
+                                            hoveredAppTrafficRow = app
+                                        } else if hoveredAppTrafficRow == app {
+                                            hoveredAppTrafficRow = nil
+                                        }
+                                    }
+
+                                    if isExpanded {
+                                        appTrafficExpandedContent(
+                                            destRows: destRows,
+                                            residual: residual
+                                        )
+                                        .padding(.leading, 26)
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                        .transition(.opacity.combined(with: .move(edge: .top)))
+                                    }
+                                }
+                            }
                         }
+                        .frame(maxWidth: .infinity, alignment: .leading)
                     }
                 }
+                .frame(minHeight: perAppTrafficListMinHeight, maxHeight: perAppTrafficListMaxHeight)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         }
+    }
+
+    @ViewBuilder
+    private func appTrafficExpandedContent(
+        destRows: [PerDestinationTransferRow],
+        residual: (rxBytes: UInt64, txBytes: UInt64)
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            ForEach(destRows) { row in
+                HStack(alignment: .center, spacing: 8) {
+                    DestinationLiteralLabel(
+                        literal: row.remoteLiteral,
+                        destinationListLabels: appState.destinationRuleStore.matchingDestinationListLabels(
+                            forLiteral: row.remoteLiteral
+                        ),
+                        resolver: reverseDNS
+                    )
+                    Spacer(minLength: 8)
+                    directionalThroughputCaption(
+                        down: formatBytes(row.rxBytes),
+                        up: formatBytes(row.txBytes)
+                    )
+                    .accessibilityElement(children: .combine)
+                    .accessibilityLabel(
+                        "Received \(formatBytes(row.rxBytes)), sent \(formatBytes(row.txBytes))"
+                    )
+                }
+            }
+            if residual.rxBytes > 0 || residual.txBytes > 0 {
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack(alignment: .center, spacing: 8) {
+                        Text("Other traffic")
+                            .lineLimit(1)
+                        Spacer(minLength: 8)
+                        directionalThroughputCaption(
+                            down: formatBytes(residual.rxBytes),
+                            up: formatBytes(residual.txBytes)
+                        )
+                        .accessibilityElement(children: .combine)
+                        .accessibilityLabel(
+                            "Other traffic: received \(formatBytes(residual.rxBytes)), sent \(formatBytes(residual.txBytes))"
+                        )
+                        trafficOtherResidualCopyButton()
+                    }
+                    Text("UDP, TCP without IP literals, etc.")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            if destRows.isEmpty && residual.rxBytes == 0 && residual.txBytes == 0 {
+                Text("No relayed payload counted yet.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private var destinationsByApp: [String: [PerDestinationTransferRow]] {
+        Dictionary(grouping: appState.vpnManager.stats.perDestinationStats, by: \.appDisplayName)
+            .mapValues { rows in
+                rows.sorted { lhs, rhs in
+                    let lTotal = lhs.rxBytes &+ lhs.txBytes
+                    let rTotal = rhs.rxBytes &+ rhs.txBytes
+                    if lTotal != rTotal { return lTotal > rTotal }
+                    return lhs.remoteLiteral < rhs.remoteLiteral
+                }
+            }
+    }
+
+    private func parentEntry(for app: String) -> AppTransferEntry {
+        let stats = appState.vpnManager.stats
+        if let entry = stats.perAppStats[app] { return entry }
+        let rows = destinationsByApp[app] ?? []
+        let rx = rows.reduce(UInt64(0)) { $0 &+ $1.rxBytes }
+        let tx = rows.reduce(UInt64(0)) { $0 &+ $1.txBytes }
+        return AppTransferEntry(txBytes: tx, rxBytes: rx, signingIdentifiers: [])
+    }
+
+    private var allAppsSorted: [(String, AppTransferEntry)] {
+        let stats = appState.vpnManager.stats
+        let keys = Set(stats.perAppStats.keys).union(destinationsByApp.keys)
+        return keys.map { ($0, parentEntry(for: $0)) }
+            .sorted { lhs, rhs in
+                let lTotal = lhs.1.rxBytes &+ lhs.1.txBytes
+                let rTotal = rhs.1.rxBytes &+ rhs.1.txBytes
+                if lTotal != rTotal { return lTotal > rTotal }
+                return lhs.0 < rhs.0
+            }
+    }
+
+    private var displayedApps: [(String, AppTransferEntry)] {
+        if showAllPerAppStats || allAppsSorted.count <= perAppStatsTopN {
+            return allAppsSorted
+        }
+        return Array(allAppsSorted.prefix(perAppStatsTopN))
+    }
+
+    private func residualBytes(parent: AppTransferEntry, tcpDestinations: [PerDestinationTransferRow]) -> (
+        rxBytes: UInt64, txBytes: UInt64
+    ) {
+        let sumRx = tcpDestinations.reduce(UInt64(0)) { $0 &+ $1.rxBytes }
+        let sumTx = tcpDestinations.reduce(UInt64(0)) { $0 &+ $1.txBytes }
+        let rx = parent.rxBytes > sumRx ? parent.rxBytes &- sumRx : 0
+        let tx = parent.txBytes > sumTx ? parent.txBytes &- sumTx : 0
+        return (rx, tx)
     }
 
     private var systemResourceTableRows: [SystemResourceTableRow] {
@@ -168,22 +435,51 @@ struct StatusView: View {
         return rows
     }
 
-    private var displayedPerAppStats: [(key: String, value: AppTransferEntry)] {
-        if showAllPerAppStats || sortedPerAppStats.count <= perAppStatsTopN {
-            return sortedPerAppStats
-        }
-        return Array(sortedPerAppStats.prefix(perAppStatsTopN))
-    }
-
-    private var sortedPerAppStats: [(key: String, value: AppTransferEntry)] {
-        appState.vpnManager.stats.perAppStats
-            .sorted { lhs, rhs in
-                let lTotal = lhs.value.rxBytes &+ lhs.value.txBytes
-                let rTotal = rhs.value.rxBytes &+ rhs.value.txBytes
-                if lTotal != rTotal { return lTotal > rTotal }
-                return lhs.key < rhs.key
+    /// SwiftUI `Table` treats vertical space flexibly and draws filler rows; use a tight grid so
+    /// height tracks real rows (no clipping, no scrolling for normal row counts).
+    private var systemResourcesInsetList: some View {
+        let rows = systemResourceTableRows
+        return VStack(alignment: .leading, spacing: 0) {
+            HStack(alignment: .firstTextBaseline, spacing: 12) {
+                Text("Component")
+                    .frame(minWidth: 100, maxWidth: .infinity, alignment: .leading)
+                Text("CPU")
+                    .frame(width: 72, alignment: .trailing)
+                Text("Memory")
+                    .frame(width: 100, alignment: .trailing)
             }
-            .map { ($0.key, $0.value) }
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(.secondary)
+            .padding(.vertical, 6)
+
+            Divider()
+
+            ForEach(Array(rows.enumerated()), id: \.element.id) { index, row in
+                HStack(alignment: .firstTextBaseline, spacing: 12) {
+                    Text(row.title)
+                        .lineLimit(1)
+                        .frame(minWidth: 100, maxWidth: .infinity, alignment: .leading)
+                    Text(String(format: "%.1f%%", row.cpuPercent))
+                        .monospacedDigit()
+                        .frame(width: 72, alignment: .trailing)
+                    Text(formatBytes(row.memoryBytes))
+                        .monospacedDigit()
+                        .frame(width: 100, alignment: .trailing)
+                }
+                .font(.callout)
+                .padding(.vertical, 6)
+                .padding(.horizontal, 4)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background {
+                    RoundedRectangle(cornerRadius: 4)
+                        .fill(index.isMultiple(of: 2) ? Color.primary.opacity(0.045) : Color.clear)
+                }
+                .accessibilityElement(children: .combine)
+                .accessibilityLabel("\(row.title), CPU \(String(format: "%.1f", row.cpuPercent)) percent, memory \(formatBytes(row.memoryBytes))")
+            }
+        }
+        .environment(\.controlSize, .small)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private var statusBadge: some View {
@@ -263,7 +559,133 @@ struct StatusView: View {
         return "\(ByteCountFormatter.string(fromByteCount: rounded, countStyle: .binary))/s"
     }
 
+    private func destinationClipboardLine(for row: PerDestinationTransferRow) -> String {
+        let lists = appState.destinationRuleStore.matchingDestinationListLabels(forLiteral: row.remoteLiteral)
+        let suffix = lists.isEmpty ? "" : " [\(lists.joined(separator: ", "))]"
+        let core = reverseDNS.displayLabel(for: row.remoteLiteral)
+        return "\(core)\(suffix)"
+    }
+
+    private func appSubtreeClipboardText(
+        app: String,
+        destRows: [PerDestinationTransferRow],
+        residual: (rxBytes: UInt64, txBytes: UInt64)
+    ) -> String {
+        var lines: [String] = []
+        lines.append(app)
+        if destRows.isEmpty, residual.rxBytes == 0, residual.txBytes == 0 {
+            lines.append("  No relayed payload counted yet.")
+        }
+        for row in destRows {
+            lines.append("  \(destinationClipboardLine(for: row))")
+        }
+        if residual.rxBytes > 0 || residual.txBytes > 0 {
+            lines.append("  Other traffic")
+            lines.append("  UDP, TCP without IP literals, etc.")
+        }
+        return lines.joined(separator: "\n")
+    }
+
+    private func copySubtreeToPasteboard(_ string: String) {
+        #if os(macOS)
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(string, forType: .string)
+        #endif
+    }
+
+    private func trafficAppSubtreeCopyButton(
+        app: String,
+        destRows: [PerDestinationTransferRow],
+        residual: (rxBytes: UInt64, txBytes: UInt64)
+    ) -> some View {
+        Button {
+            copySubtreeToPasteboard(appSubtreeClipboardText(app: app, destRows: destRows, residual: residual))
+        } label: {
+            Image(systemName: "doc.on.doc")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .buttonStyle(.borderless)
+        .help("Copy this app’s traffic breakdown")
+        .accessibilityLabel("Copy traffic breakdown for \(app)")
+    }
+
+    private func trafficOtherResidualCopyButton() -> some View {
+        Button {
+            copySubtreeToPasteboard(
+                [
+                    "Other traffic",
+                    "UDP, TCP without IP literals, etc.",
+                ].joined(separator: "\n")
+            )
+        } label: {
+            Image(systemName: "doc.on.doc")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .buttonStyle(.borderless)
+        .help("Copy Other traffic line")
+        .accessibilityLabel("Copy Other traffic")
+    }
+
     private var backendLabel: String {
         "Network Extension"
+    }
+}
+
+private struct DestinationLiteralLabel: View {
+    let literal: String
+    let destinationListLabels: [String]
+    @ObservedObject var resolver: ReverseDNSResolver
+
+    /// Split suffix must stay aligned with `ReverseDNSResolver` (`hostname · literal`).
+    private static let dnsHostnameSeparator = " · "
+
+    private var listBracketSuffix: String? {
+        guard !destinationListLabels.isEmpty else { return nil }
+        return "[\(destinationListLabels.joined(separator: ", "))]"
+    }
+
+    /// Non-empty hostname when PTR resolved (`hostname · literal`).
+    private var hostnamePrefixIncludingSeparator: String? {
+        let full = resolver.displayLabel(for: literal)
+        guard let range = full.range(of: Self.dnsHostnameSeparator) else { return nil }
+        let ipSuffix = String(full[range.upperBound...])
+        guard ipSuffix == literal else { return nil }
+        let host = String(full[..<range.lowerBound])
+        guard !host.isEmpty else { return nil }
+        return host + Self.dnsHostnameSeparator
+    }
+
+    private var accessibilitySummary: String {
+        let core = resolver.accessibilityLabel(for: literal)
+        guard !destinationListLabels.isEmpty else { return core }
+        return core + ". Matches lists \(destinationListLabels.joined(separator: ", "))"
+    }
+
+    var body: some View {
+        HStack(spacing: 6) {
+            if let hostnamePrefixIncludingSeparator {
+                Text(hostnamePrefixIncludingSeparator)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .textSelection(.disabled)
+            }
+            Text(literal)
+                .textSelection(.enabled)
+                .lineLimit(1)
+                .truncationMode(.middle)
+            if let listBracketSuffix {
+                Text(listBracketSuffix)
+                    .foregroundStyle(.secondary)
+                    .font(.caption)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .textSelection(.disabled)
+            }
+        }
+        .task(id: literal) { await resolver.resolve(literal) }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(accessibilitySummary)
     }
 }

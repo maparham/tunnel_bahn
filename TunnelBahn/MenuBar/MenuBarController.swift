@@ -39,6 +39,7 @@ final class MenuBarController: NSObject, ObservableObject, NSMenuDelegate {
     private var routingMode: AppSettings.RoutingMode = .fullTunnel
     private var canEnableAppTunnelRouting = false
     private var vpnShowsAsOn = false
+    private var destinationFilterSummary: String?
 
     /// Asset name: `TunnelBahn/Resources/Assets.xcassets/MenuBarTunnel.imageset`
     private static let menuBarTunnelAssetName = "MenuBarTunnel"
@@ -76,7 +77,8 @@ final class MenuBarController: NSObject, ObservableObject, NSMenuDelegate {
         txBytesPerSecond: Double,
         tunnelModeLabel: String,
         routingMode: AppSettings.RoutingMode,
-        canEnableAppTunnelRouting: Bool
+        canEnableAppTunnelRouting: Bool,
+        destinationFilterSummary: String? = nil
     ) {
         let previousState = currentState
         currentState = connectionState
@@ -88,6 +90,7 @@ final class MenuBarController: NSObject, ObservableObject, NSMenuDelegate {
         currentTunnelModeLabel = tunnelModeLabel
         self.routingMode = routingMode
         self.canEnableAppTunnelRouting = canEnableAppTunnelRouting
+        self.destinationFilterSummary = destinationFilterSummary
         vpnShowsAsOn = Self.vpnIsActive(connectionState)
         if previousState != connectionState {
             debugLog("update connection state=\(connectionState.rawValue)")
@@ -322,6 +325,12 @@ final class MenuBarController: NSObject, ObservableObject, NSMenuDelegate {
         let modeItem = NSMenuItem(title: "Mode: \(currentTunnelModeLabel)", action: nil, keyEquivalent: "")
         modeItem.isEnabled = false
         items.append(modeItem)
+
+        if let destinationFilterSummary, !destinationFilterSummary.isEmpty {
+            let destItem = NSMenuItem(title: destinationFilterSummary, action: nil, keyEquivalent: "")
+            destItem.isEnabled = false
+            items.append(destItem)
+        }
 
         if currentState == .connected || currentState == .reconnecting {
             let ratesItem = NSMenuItem(

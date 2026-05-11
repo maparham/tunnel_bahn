@@ -31,4 +31,9 @@ enum SharedPaths {
     static func perAppRoutedSigningIdentifiersFileURL() -> URL? {
         appGroupContainer()?.appendingPathComponent("per-app-routed-signing-identifiers.json")
     }
+
+    /// Host-written JSON read by `TransparentProxyProvider` (`DestinationRoutingFilePayload`).
+    static func destinationRangesFileURL() -> URL? {
+        appGroupContainer()?.appendingPathComponent("destination-routing.json")
+    }
 }

@@ -37,6 +37,8 @@ struct ConnectionStats: Codable {
     /// will not equal the WireGuard aggregate `bytesIn`/`bytesOut` (which are encrypted-frame
     /// totals on the UDP transport).
     var perAppStats: [String: AppTransferEntry]
+    /// TCP-only session totals per app display name and remote IP literal; same flush cadence as `perAppStats`.
+    var perDestinationStats: [PerDestinationTransferRow]
     /// Wall-clock time of the last app-tunnel stats flush from the extension. Used by the UI
     /// to detect staleness.
     var perAppStatsUpdatedAt: Date?
@@ -70,6 +72,7 @@ struct ConnectionStats: Codable {
         perAppAggregateRxBytesPerSecond: 0,
         perAppAggregateTxBytesPerSecond: 0,
         perAppStats: [:],
+        perDestinationStats: [],
         perAppStatsUpdatedAt: nil,
         appCPUUsage: 0,
         appMemoryUsage: 0,
