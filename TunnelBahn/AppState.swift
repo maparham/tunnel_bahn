@@ -7,6 +7,7 @@ final class AppState: ObservableObject {
     var profileStore: ProfileStore
     var appDiscovery: AppDiscoveryService
     var appRuleStore: AppRuleStore
+    var resourceMonitor: ResourceMonitor
     var vpnManager: VPNManager
     private var cancellables: Set<AnyCancellable> = []
 
@@ -23,7 +24,9 @@ final class AppState: ObservableObject {
         self.profileStore = profileStore
         self.appDiscovery = appDiscovery
         self.appRuleStore = appRuleStore
-        self.vpnManager = VPNManager(settings: settings)
+        let resourceMonitor = ResourceMonitor()
+        self.resourceMonitor = resourceMonitor
+        self.vpnManager = VPNManager(settings: settings, resourceMonitor: resourceMonitor)
         bindChildStores()
     }
 
@@ -53,6 +56,12 @@ final class AppState: ObservableObject {
             .store(in: &cancellables)
 
         vpnManager.objectWillChange
+            .sink { [weak self] _ in
+                self?.objectWillChange.send()
+            }
+            .store(in: &cancellables)
+
+        resourceMonitor.objectWillChange
             .sink { [weak self] _ in
                 self?.objectWillChange.send()
             }

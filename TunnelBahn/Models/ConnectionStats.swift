@@ -40,6 +40,18 @@ struct ConnectionStats: Codable {
     /// Wall-clock time of the last app-tunnel stats flush from the extension. Used by the UI
     /// to detect staleness.
     var perAppStatsUpdatedAt: Date?
+    /// Host app CPU usage (sum of non-idle thread scales; may exceed 100% on multi-core).
+    var appCPUUsage: Double
+    /// Host app resident memory size (RSS), bytes.
+    var appMemoryUsage: UInt64
+    /// Packet tunnel extension process; may exceed 100% on multi-core (same semantics as `appCPUUsage`).
+    var packetTunnelCPUUsage: Double
+    var packetTunnelMemoryUsage: UInt64
+    /// Transparent proxy extension process.
+    var transparentProxyCPUUsage: Double
+    var transparentProxyMemoryUsage: UInt64
+    /// Wall-clock time of the last merged write from either extension.
+    var extensionStatsUpdatedAt: Date?
 
     static let empty = ConnectionStats(
         state: .disconnected,
@@ -58,6 +70,13 @@ struct ConnectionStats: Codable {
         perAppAggregateRxBytesPerSecond: 0,
         perAppAggregateTxBytesPerSecond: 0,
         perAppStats: [:],
-        perAppStatsUpdatedAt: nil
+        perAppStatsUpdatedAt: nil,
+        appCPUUsage: 0,
+        appMemoryUsage: 0,
+        packetTunnelCPUUsage: 0,
+        packetTunnelMemoryUsage: 0,
+        transparentProxyCPUUsage: 0,
+        transparentProxyMemoryUsage: 0,
+        extensionStatsUpdatedAt: nil
     )
 }

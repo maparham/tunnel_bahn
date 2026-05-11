@@ -1,4 +1,5 @@
 import Foundation
+import Combine
 import Darwin
 import NetworkExtension
 import OSLog
@@ -13,6 +14,8 @@ final class VPNManager: ObservableObject {
 
     private var manager = NETunnelProviderManager()
     private let settings: AppSettings
+    private weak var resourceMonitor: ResourceMonitor?
+    private var resourceMonitorCancellables = Set<AnyCancellable>()
     private let publicIPSession = URLSession(configuration: .ephemeral)
     private var statsRefreshTask: Task<Void, Never>?
     private var lastTransferSnapshot: TransferSnapshot?
@@ -30,9 +33,19 @@ final class VPNManager: ObservableObject {
     /// Single shared disconnect work item so manual disconnect and termination cannot run `performDisconnect` concurrently.
     private var disconnectCoordinatorTask: Task<Void, Never>?
 
-    init(settings: AppSettings) {
+    init(settings: AppSettings, resourceMonitor: ResourceMonitor?) {
         self.settings = settings
+        self.resourceMonitor = resourceMonitor
         traceLog("init")
+        if let resourceMonitor {
+            resourceMonitor.$cpuUsage
+                .combineLatest(resourceMonitor.$memoryUsage)
+                .sink { [weak self] _, _ in
+                    self?.syncResourceStatsFromMonitor()
+                    self?.syncExtensionResourceStats()
+                }
+                .store(in: &resourceMonitorCancellables)
+        }
         NotificationCenter.default.addObserver(
             forName: .NEVPNStatusDidChange,
             object: nil,
@@ -966,6 +979,7 @@ final class VPNManager: ObservableObject {
 
         await perAppStatsProxy.disable()
         PerAppTransferStore.reset()
+        ExtensionResourceStore.reset()
         clearPersistedPerAppRoutedSigningIdentifiers()
 
         manager.connection.stopVPNTunnel()
@@ -999,6 +1013,7 @@ final class VPNManager: ObservableObject {
         stats.perAppStats = [:]
         stats.perAppStatsUpdatedAt = nil
         stopStatsRefresh()
+        syncExtensionResourceStats()
         shouldAutoReconnect = false
         isBusy = false
         connectCancelled = false
@@ -1216,7 +1231,36 @@ final class VPNManager: ObservableObject {
             stats.perAppAggregateTxBytesPerSecond = 0
             stats.perAppStatsCollectionActive = false
         }
+        syncResourceStatsFromMonitor()
+        syncExtensionResourceStats()
         traceLog("syncStatus manager=\(status.rawValue) appState=\(stats.state.rawValue)")
+    }
+
+    private func syncExtensionResourceStats() {
+        guard stats.state == .connected || stats.state == .reconnecting else {
+            stats.packetTunnelCPUUsage = 0
+            stats.packetTunnelMemoryUsage = 0
+            stats.transparentProxyCPUUsage = 0
+            stats.transparentProxyMemoryUsage = 0
+            stats.extensionStatsUpdatedAt = nil
+            return
+        }
+        let snapshot = ExtensionResourceStore.read()
+        stats.packetTunnelCPUUsage = snapshot.packetTunnelCPU
+        stats.packetTunnelMemoryUsage = snapshot.packetTunnelMemory
+        stats.transparentProxyCPUUsage = snapshot.transparentProxyCPU
+        stats.transparentProxyMemoryUsage = snapshot.transparentProxyMemory
+        stats.extensionStatsUpdatedAt = snapshot.lastUpdate == .distantPast ? nil : snapshot.lastUpdate
+    }
+
+    private func syncResourceStatsFromMonitor() {
+        guard let resourceMonitor else {
+            stats.appCPUUsage = 0
+            stats.appMemoryUsage = 0
+            return
+        }
+        stats.appCPUUsage = resourceMonitor.cpuUsage
+        stats.appMemoryUsage = resourceMonitor.memoryUsage
     }
 
     private func loadPersistedRuntimeProfile() -> WireGuardProfile? {
@@ -1289,6 +1333,8 @@ final class VPNManager: ObservableObject {
                 stats.perAppStats = [:]
             }
         }
+        syncResourceStatsFromMonitor()
+        syncExtensionResourceStats()
     }
 
     private func loadRuntimeConfiguration() async -> String? {

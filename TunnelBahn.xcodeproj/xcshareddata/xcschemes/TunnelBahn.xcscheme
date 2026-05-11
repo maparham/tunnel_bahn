@@ -1,11 +1,11 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <Scheme
    LastUpgradeVersion = "1430"
-   version = "1.7">
+   wasCreatedForAppExtension = "YES"
+   version = "1.3">
    <BuildAction
       parallelizeBuildables = "YES"
-      buildImplicitDependencies = "YES"
-      runPostActionsOnFailure = "NO">
+      buildImplicitDependencies = "YES">
       <BuildActionEntries>
          <BuildActionEntry
             buildForTesting = "YES"
@@ -15,21 +15,7 @@
             buildForAnalyzing = "YES">
             <BuildableReference
                BuildableIdentifier = "primary"
-               BlueprintIdentifier = "CFA3635ACC3080BD57C99AE9"
-               BuildableName = "TunnelBahn.app"
-               BlueprintName = "TunnelBahn"
-               ReferencedContainer = "container:TunnelBahn.xcodeproj">
-            </BuildableReference>
-         </BuildActionEntry>
-         <BuildActionEntry
-            buildForTesting = "YES"
-            buildForRunning = "YES"
-            buildForProfiling = "YES"
-            buildForArchiving = "YES"
-            buildForAnalyzing = "YES">
-            <BuildableReference
-               BuildableIdentifier = "primary"
-               BlueprintIdentifier = "DC8DE4556E366FEF06B5073D"
+               BlueprintIdentifier = "A5DFE5D3B5175D2D358E833E"
                BuildableName = "PacketTunnelExtension.appex"
                BlueprintName = "PacketTunnelExtension"
                ReferencedContainer = "container:TunnelBahn.xcodeproj">
@@ -43,9 +29,23 @@
             buildForAnalyzing = "YES">
             <BuildableReference
                BuildableIdentifier = "primary"
-               BlueprintIdentifier = "B46E0883A2A00FAA50D148F0"
+               BlueprintIdentifier = "8D036A9487EEA447427A4EE2"
                BuildableName = "TransparentProxyExtension.appex"
                BlueprintName = "TransparentProxyExtension"
+               ReferencedContainer = "container:TunnelBahn.xcodeproj">
+            </BuildableReference>
+         </BuildActionEntry>
+         <BuildActionEntry
+            buildForTesting = "YES"
+            buildForRunning = "YES"
+            buildForProfiling = "YES"
+            buildForArchiving = "YES"
+            buildForAnalyzing = "YES">
+            <BuildableReference
+               BuildableIdentifier = "primary"
+               BlueprintIdentifier = "F1B81DFB16C0AC3C70771F60"
+               BuildableName = "TunnelBahn.app"
+               BlueprintName = "TunnelBahn"
                ReferencedContainer = "container:TunnelBahn.xcodeproj">
             </BuildableReference>
          </BuildActionEntry>
@@ -55,14 +55,13 @@
       buildConfiguration = "Debug"
       selectedDebuggerIdentifier = "Xcode.DebuggerFoundation.Debugger.LLDB"
       selectedLauncherIdentifier = "Xcode.DebuggerFoundation.Launcher.LLDB"
-      shouldUseLaunchSchemeArgsEnv = "YES"
-      onlyGenerateCoverageForSpecifiedTargets = "NO">
+      shouldUseLaunchSchemeArgsEnv = "YES">
       <MacroExpansion>
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "CFA3635ACC3080BD57C99AE9"
-            BuildableName = "TunnelBahn.app"
-            BlueprintName = "TunnelBahn"
+            BlueprintIdentifier = "A5DFE5D3B5175D2D358E833E"
+            BuildableName = "PacketTunnelExtension.appex"
+            BlueprintName = "PacketTunnelExtension"
             ReferencedContainer = "container:TunnelBahn.xcodeproj">
          </BuildableReference>
       </MacroExpansion>
@@ -71,8 +70,8 @@
    </TestAction>
    <LaunchAction
       buildConfiguration = "Debug"
-      selectedDebuggerIdentifier = "Xcode.DebuggerFoundation.Debugger.LLDB"
-      selectedLauncherIdentifier = "Xcode.DebuggerFoundation.Launcher.LLDB"
+      selectedDebuggerIdentifier = ""
+      selectedLauncherIdentifier = "Xcode.IDEFoundation.Launcher.PosixSpawn"
       launchStyle = "0"
       useCustomWorkingDirectory = "NO"
       ignoresPersistentStateOnLaunch = "NO"
@@ -83,14 +82,21 @@
          runnableDebuggingMode = "0">
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "CFA3635ACC3080BD57C99AE9"
+            BlueprintIdentifier = "F1B81DFB16C0AC3C70771F60"
             BuildableName = "TunnelBahn.app"
             BlueprintName = "TunnelBahn"
             ReferencedContainer = "container:TunnelBahn.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>
-      <CommandLineArguments>
-      </CommandLineArguments>
+      <MacroExpansion>
+         <BuildableReference
+            BuildableIdentifier = "primary"
+            BlueprintIdentifier = "A5DFE5D3B5175D2D358E833E"
+            BuildableName = "PacketTunnelExtension.appex"
+            BlueprintName = "PacketTunnelExtension"
+            ReferencedContainer = "container:TunnelBahn.xcodeproj">
+         </BuildableReference>
+      </MacroExpansion>
    </LaunchAction>
    <ProfileAction
       buildConfiguration = "Release"
@@ -102,9 +108,9 @@
          runnableDebuggingMode = "0">
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "CFA3635ACC3080BD57C99AE9"
-            BuildableName = "TunnelBahn.app"
-            BlueprintName = "TunnelBahn"
+            BlueprintIdentifier = "A5DFE5D3B5175D2D358E833E"
+            BuildableName = "PacketTunnelExtension.appex"
+            BlueprintName = "PacketTunnelExtension"
             ReferencedContainer = "container:TunnelBahn.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>

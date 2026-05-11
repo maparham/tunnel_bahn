@@ -1,5 +1,12 @@
 import SwiftUI
 
+private struct SystemResourceTableRow: Identifiable {
+    let id: String
+    let title: String
+    let cpuPercent: Double
+    let memoryBytes: UInt64
+}
+
 struct StatusView: View {
     @EnvironmentObject private var appState: AppState
     @State private var showAllPerAppStats = false
@@ -29,6 +36,29 @@ struct StatusView: View {
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
+            }
+
+            GroupBox("System Resources") {
+                Table(systemResourceTableRows) {
+                    TableColumn("Component") { row in
+                        Text(row.title)
+                    }
+                    .width(min: 100, ideal: 140)
+                    TableColumn("CPU") { row in
+                        Text(String(format: "%.1f%%", row.cpuPercent))
+                            .monospacedDigit()
+                            .frame(maxWidth: .infinity, alignment: .trailing)
+                    }
+                    .width(ideal: 72)
+                    TableColumn("Memory") { row in
+                        Text(formatBytes(row.memoryBytes))
+                            .monospacedDigit()
+                            .frame(maxWidth: .infinity, alignment: .trailing)
+                    }
+                    .width(ideal: 100)
+                }
+                .frame(maxWidth: .infinity, minHeight: CGFloat(systemResourceTableRows.count) * 22 + 28)
+                .tableStyle(.inset(alternatesRowBackgrounds: true))
             }
 
             if appState.vpnManager.stats.perAppStatsCollectionActive {
@@ -61,17 +91,19 @@ struct StatusView: View {
     private var perAppTrafficSection: some View {
         GroupBox {
             VStack(alignment: .leading, spacing: 8) {
-                HStack {
+                let stats = appState.vpnManager.stats
+                HStack(alignment: .center, spacing: 8) {
                     Text("App-Tunnel Traffic")
                         .font(.headline)
-                    Spacer()
-                    if let updated = appState.vpnManager.stats.perAppStatsUpdatedAt,
-                       updated != .distantPast
-                    {
-                        Text(updated, style: .relative)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
+                    Spacer(minLength: 8)
+                    directionalThroughputCaption(
+                        down: formatRate(stats.perAppAggregateRxBytesPerSecond),
+                        up: formatRate(stats.perAppAggregateTxBytesPerSecond)
+                    )
+                    .accessibilityElement(children: .combine)
+                    .accessibilityLabel(
+                        "Total rate: receive \(formatRate(stats.perAppAggregateRxBytesPerSecond)), send \(formatRate(stats.perAppAggregateTxBytesPerSecond))"
+                    )
                 }
                 if sortedPerAppStats.count > perAppStatsTopN {
                     Button(showAllPerAppStats ? "Show top \(perAppStatsTopN) only" : "Show all (\(sortedPerAppStats.count))") {
@@ -81,21 +113,6 @@ struct StatusView: View {
                     .controlSize(.small)
                 }
                 Divider()
-                let stats = appState.vpnManager.stats
-                HStack(alignment: .center, spacing: 8) {
-                    Text("Total rate")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(.secondary)
-                    Spacer(minLength: 8)
-                    directionalThroughputCaption(
-                        down: formatRate(stats.perAppAggregateRxBytesPerSecond),
-                        up: formatRate(stats.perAppAggregateTxBytesPerSecond)
-                    )
-                    .accessibilityElement(children: .combine)
-                    .accessibilityLabel(
-                        "Combined receive rate \(formatRate(stats.perAppAggregateRxBytesPerSecond)), send rate \(formatRate(stats.perAppAggregateTxBytesPerSecond))"
-                    )
-                }
                 if displayedPerAppStats.isEmpty {
                     Text("Waiting for app-tunnel traffic…")
                         .font(.caption)
@@ -118,6 +135,37 @@ struct StatusView: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         }
+    }
+
+    private var systemResourceTableRows: [SystemResourceTableRow] {
+        let s = appState.vpnManager.stats
+        var rows: [SystemResourceTableRow] = [
+            SystemResourceTableRow(
+                id: "app",
+                title: "Application",
+                cpuPercent: s.appCPUUsage,
+                memoryBytes: s.appMemoryUsage
+            )
+        ]
+        if s.state == .connected {
+            rows.append(
+                contentsOf: [
+                    SystemResourceTableRow(
+                        id: "packetTunnel",
+                        title: "Packet Tunnel",
+                        cpuPercent: s.packetTunnelCPUUsage,
+                        memoryBytes: s.packetTunnelMemoryUsage
+                    ),
+                    SystemResourceTableRow(
+                        id: "transparentProxy",
+                        title: "Transparent Proxy",
+                        cpuPercent: s.transparentProxyCPUUsage,
+                        memoryBytes: s.transparentProxyMemoryUsage
+                    )
+                ]
+            )
+        }
+        return rows
     }
 
     private var displayedPerAppStats: [(key: String, value: AppTransferEntry)] {

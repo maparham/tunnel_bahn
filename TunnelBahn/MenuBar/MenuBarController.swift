@@ -100,6 +100,7 @@ final class MenuBarController: NSObject, ObservableObject, NSMenuDelegate {
         if isMenuOpen {
             refreshLiveRatesItem()
             syncRoutingModeMenuItems()
+            syncProfileMenuItems()
             if currentState == .connected || currentState == .reconnecting {
                 startMenuRefreshTimerIfNeeded()
             } else {
@@ -122,6 +123,7 @@ final class MenuBarController: NSObject, ObservableObject, NSMenuDelegate {
         self.isBusy = isBusy
         if isMenuOpen {
             syncRoutingModeMenuItems()
+            syncProfileMenuItems()
         } else {
             statusItem?.menu = buildMenu()
         }
@@ -155,6 +157,38 @@ final class MenuBarController: NSObject, ObservableObject, NSMenuDelegate {
         }
     }
 
+    private func syncProfileMenuItems() {
+        guard let menu = statusItem?.menu else { return }
+        let connectAction = #selector(connectProfileTapped(_:))
+        for item in menu.items {
+            guard item.action == connectAction,
+                  let idString = item.representedObject as? String,
+                  let id = UUID(uuidString: idString),
+                  let profile = profiles.first(where: { $0.id == id })
+            else {
+                continue
+            }
+            applyProfileMenuItemPresentation(item, profile: profile)
+        }
+    }
+
+    private func applyProfileMenuItemPresentation(_ item: NSMenuItem, profile: WireGuardProfile) {
+        let text = titleForProfileItem(profile)
+        item.title = text
+        let isConnectedProfile = profile.id == activeProfileID
+        let baseMenuFont = NSFont.menuFont(ofSize: 0)
+        let font = isConnectedProfile
+            ? NSFontManager.shared.convert(baseMenuFont, toHaveTrait: .boldFontMask)
+            : NSFontManager.shared.convert(baseMenuFont, toHaveTrait: .unboldFontMask)
+        let enabled = !isBusy
+        let color: NSColor = enabled ? .labelColor : .disabledControlTextColor
+        item.attributedTitle = NSAttributedString(string: text, attributes: [
+            .font: font,
+            .foregroundColor: color,
+        ])
+        item.isEnabled = enabled
+    }
+
     private func vpnToolTipText() -> String {
         vpnShowsAsOn ? "TunnelBahn — VPN on" : "TunnelBahn — VPN off"
     }
@@ -165,6 +199,8 @@ final class MenuBarController: NSObject, ObservableObject, NSMenuDelegate {
 
     private func buildMenu() -> NSMenu {
         let menu = NSMenu()
+        // Otherwise AppKit re-validates items with actions and overrides `isEnabled` (e.g. routing mode while connected).
+        menu.autoenablesItems = false
         menu.delegate = self
         tunnelRatesMenuItem = nil
 
@@ -223,11 +259,11 @@ final class MenuBarController: NSObject, ObservableObject, NSMenuDelegate {
             menu.addItem(noProfiles)
         } else {
             for profile in sortedProfiles() {
-                let item = NSMenuItem(title: titleForProfileItem(profile), action: #selector(connectProfileTapped(_:)), keyEquivalent: "")
+                let item = NSMenuItem(title: "", action: #selector(connectProfileTapped(_:)), keyEquivalent: "")
                 item.target = self
                 item.representedObject = profile.id.uuidString
-                item.isEnabled = !isBusy
                 item.state = .off
+                applyProfileMenuItemPresentation(item, profile: profile)
                 menu.addItem(item)
             }
         }
@@ -376,6 +412,7 @@ final class MenuBarController: NSObject, ObservableObject, NSMenuDelegate {
     func menuWillOpen(_: NSMenu) {
         isMenuOpen = true
         syncRoutingModeMenuItems()
+        syncProfileMenuItems()
         refreshLiveRatesItem()
         startMenuRefreshTimerIfNeeded()
     }
