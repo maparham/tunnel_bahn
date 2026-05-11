@@ -217,7 +217,7 @@ final class VPNManager: ObservableObject {
 
             /// When true: `forPerAppVPN` + transparent proxy + tunnel rules that only include the proxy
             /// (and optional host probe). Used for app-tunnel split **or** full-tunnel app-tunnel byte accounting.
-            let useAppTunnelNEStack = profileOkForAccounting && (hasAppTunnelSelection || isFullTrafficAccountingShape)
+            let useAppTunnelNEStack = hasAppTunnelSelection || (profileOkForAccounting && isFullTrafficAccountingShape)
 
             #if DEBUG
             logConnectModeDecision(
@@ -231,25 +231,6 @@ final class VPNManager: ObservableObject {
             )
             #endif
 
-            // App-tunnel allow-list: selected apps are forced into the tunnel; peers need default-route AllowedIPs.
-            if hasAppTunnelSelection, !profileOkForAccounting {
-                stats.state = .error
-                stats.lastError = "A routed app needs default-route AllowedIPs on the peer (e.g. 0.0.0.0/0 and ::/0). Update the profile and reconnect."
-                stats.connectedProfileID = nil
-                stats.endpoint = nil
-                traceLog("connect aborted: app-tunnel routed app but profile AllowedIPs is not default-route")
-                emitConnectSummaryLine(
-                    outcome: "aborted",
-                    profileName: profile.name,
-                    reason: "app_tunnel_needs_default_route_allowedips",
-                    wantedAppTunnel: true,
-                    neAppRuleCount: requestedAppRules.count,
-                    routingMethod: nil,
-                    onDemand: nil,
-                    managerAppRuleCount: nil
-                )
-                return
-            }
 
             if useAppTunnelNEStack {
                 if hasAppTunnelSelection {

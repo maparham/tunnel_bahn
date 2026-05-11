@@ -40,7 +40,7 @@ Per-app routing (`sourceApplication`) sends app packets to `NEPacketTunnelFlow`.
 
 ## Stability / DNS Notes
 
-- Per-app mode now **keeps profile DNS servers** (no forced DNS clearing).
+- DNS settings are only applied when the profile has a default route (`0.0.0.0/0` or `::/0` in `AllowedIPs`). For split-tunnel profiles, DNS settings are omitted entirely — applying them for servers outside `AllowedIPs` would cause macOS to install a default route on the tunnel interface, overriding split routing.
 - Packet processing is serialized on `packetQueue` to avoid concurrent access to BoringTun state and scratch buffers.
 
 ## Quick Verify

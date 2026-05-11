@@ -10,6 +10,13 @@ This project is designed for your machine-first workflow. Homebrew dependencies 
 brew install xcodegen wireguard-tools swiftformat
 ```
 
+Rust is required to build the BoringTun bridge library (built automatically by Xcode on first build):
+
+```bash
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+rustup target add aarch64-apple-darwin x86_64-apple-darwin
+```
+
 ## Generate project
 
 ```bash
@@ -30,11 +37,11 @@ This project uses **Network Extension per-app VPN routing**:
 - The tunnel is created with `NETunnelProviderManager.forPerAppVPN()` and `routingMethod = .sourceApplication`.
 - Routing is an **allow‑list**: only apps matched by `NEAppRule` are forced into the tunnel; all other apps bypass it.
 - Practical setup: set **Settings → Unmatched apps = Bypass VPN**, then enable **Route via VPN** only for the apps you want tunneled.
-- For routed apps to reach the Internet, the WireGuard peer typically needs default‑route `AllowedIPs` (e.g. `0.0.0.0/0` and `::/0`).
+- Routed apps work with any `AllowedIPs` — full-tunnel (`0.0.0.0/0`) or split-tunnel (specific CIDRs). Only traffic matching `AllowedIPs` is sent through the tunnel.
 
 ## Important notes
 
 - Building requires full Xcode (not only Command Line Tools).
 - Per-app VPN routing is configured via `NETunnelProviderManager` app rules (`NEAppRule`).
 - The app requires `packet-tunnel-provider` Network Extension entitlement.
-- `WireGuardKit` is added via Swift Package Manager in `project.yml`.
+- The WireGuard data plane uses the Cloudflare BoringTun library (`BoringTunBridge/`), built as a static Rust library.

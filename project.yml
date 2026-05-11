@@ -12,9 +12,6 @@ settings:
     SWIFT_VERSION: 5.10
     CODE_SIGN_STYLE: Automatic
     DEVELOPMENT_TEAM: 92G3VZAPVG
-packages:
-  wireguard-apple:
-    path: Vendor/wireguard-apple
 targets:
   TunnelBahn:
     type: application
@@ -52,9 +49,6 @@ targets:
         LIBRARY_SEARCH_PATHS: $(inherited) $(SRCROOT)/Frameworks
         OTHER_LDFLAGS: $(inherited) -lboringtun_bridge
         ENABLE_USER_SCRIPT_SANDBOXING: NO
-    dependencies:
-      - package: wireguard-apple
-        product: WireGuardKit
     preBuildScripts:
       - name: Build BoringTunBridge (universal)
         script: |

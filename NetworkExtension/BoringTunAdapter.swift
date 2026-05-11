@@ -314,6 +314,32 @@ final class BoringTunAdapter: @unchecked Sendable {
         let remote = tunnelRemoteHost.split(separator: ":").first.map(String.init) ?? "0.0.0.0"
         let settings = NEPacketTunnelNetworkSettings(tunnelRemoteAddress: remote)
 
+        let allAllowedIPs = profile.peers.flatMap { $0.allowedIPs }
+        let hasDefaultRoute = allAllowedIPs.contains("0.0.0.0/0") || allAllowedIPs.contains("::/0")
+
+        // Gateway addresses are the tunnel's own interface addresses (needed for route installation).
+        let v4Gateway = profile.interface.addresses.first(where: { $0.contains(".") && $0.contains("/") })
+            .flatMap { $0.split(separator: "/").first }.map(String.init)
+        let v6Gateway = profile.interface.addresses.first(where: { $0.contains(":") && $0.contains("/") })
+            .flatMap { $0.split(separator: "/").first }.map(String.init)
+
+        let v4AllowedRoutes: [NEIPv4Route] = allAllowedIPs.compactMap { cidr in
+            guard cidr.contains(".") else { return nil }
+            let parts = cidr.split(separator: "/")
+            guard parts.count == 2, let prefix = Int(parts[1]) else { return nil }
+            let route = NEIPv4Route(destinationAddress: String(parts[0]), subnetMask: ipv4SubnetMask(prefix: prefix))
+            route.gatewayAddress = v4Gateway
+            return route
+        }
+        let v6AllowedRoutes: [NEIPv6Route] = allAllowedIPs.compactMap { cidr in
+            guard cidr.contains(":") else { return nil }
+            let parts = cidr.split(separator: "/")
+            guard parts.count == 2, let prefix = Int(parts[1]) else { return nil }
+            let route = NEIPv6Route(destinationAddress: String(parts[0]), networkPrefixLength: NSNumber(value: min(max(prefix, 0), 128)))
+            route.gatewayAddress = v6Gateway
+            return route
+        }
+
         let v4CIDRs = profile.interface.addresses.filter { $0.contains(".") && $0.contains("/") }
         if !v4CIDRs.isEmpty {
             let addrs = v4CIDRs.map { String($0.split(separator: "/").first!) }
@@ -323,7 +349,7 @@ final class BoringTunAdapter: @unchecked Sendable {
                 return ipv4SubnetMask(prefix: p)
             }
             let ipv4 = NEIPv4Settings(addresses: addrs, subnetMasks: masks)
-            ipv4.includedRoutes = [NEIPv4Route.default()]
+            ipv4.includedRoutes = v4AllowedRoutes.isEmpty ? (hasDefaultRoute ? [NEIPv4Route.default()] : []) : v4AllowedRoutes
             settings.ipv4Settings = ipv4
         }
 
@@ -336,11 +362,15 @@ final class BoringTunAdapter: @unchecked Sendable {
                 return NSNumber(value: min(max(p, 0), 128))
             }
             let ipv6 = NEIPv6Settings(addresses: addrs, networkPrefixLengths: prefixes)
-            ipv6.includedRoutes = [NEIPv6Route.default()]
+            ipv6.includedRoutes = v6AllowedRoutes.isEmpty ? [] : v6AllowedRoutes
             settings.ipv6Settings = ipv6
         }
 
-        if !profile.interface.dnsServers.isEmpty {
+        if !profile.interface.dnsServers.isEmpty && hasDefaultRoute {
+            // Only apply tunnel DNS when a default route is present. With split-tunnel
+            // AllowedIPs, setting dnsSettings with servers outside the AllowedIPs CIDRs
+            // causes macOS to install a default route on utun to make those servers reachable,
+            // overriding AllowedIPs and routing all traffic through the tunnel.
             let dns = NEDNSSettings(servers: profile.interface.dnsServers)
             dns.matchDomains = [""]
             settings.dnsSettings = dns
