@@ -94,7 +94,8 @@ final class UDPFlowRelay {
             conn = cached
         } else {
             Self.log.notice("UDP new NWConnection signingID=\(self.signingID, privacy: .public) remote=\(String(describing: modern), privacy: .public)")
-            conn = NWConnection(to: modern, using: NWParameters.udp)
+            let params = NWParameters.udp
+            conn = NWConnection(to: modern, using: params)
             legacyEndpoints[key] = legacyEndpoint
             connections[key] = conn
             startRelayingInbound(from: conn, key: key)

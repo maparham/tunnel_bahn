@@ -53,7 +53,8 @@ final class TCPFlowRelay {
         }
 
         Self.log.notice("TCP start signingID=\(self.signingID, privacy: .public) remote=\(String(describing: endpoint), privacy: .public)")
-        let conn = NWConnection(to: endpoint, using: NWParameters.tcp)
+        let params = NWParameters.tcp
+        let conn = NWConnection(to: endpoint, using: params)
         connection = conn
         conn.stateUpdateHandler = { [weak self] (state: NWConnection.State) in
             guard let self else { return }

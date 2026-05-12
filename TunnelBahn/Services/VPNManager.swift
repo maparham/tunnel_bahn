@@ -158,11 +158,6 @@ final class VPNManager: ObservableObject {
 
                     let finalStatus = manager.connection.status
                     traceLog("profile switch: after stop status=\(connectionStatusString(finalStatus))")
-                    
-                    // Stop the transparent proxy so it doesn't keep stale state/connections from old profile.
-                    // When we reconnect, it will be restarted fresh.
-                    await perAppStatsProxy.disable()
-                    traceLog("profile switch: transparent proxy disabled")
                 }
             }
 
@@ -219,6 +214,8 @@ final class VPNManager: ObservableObject {
             /// (and optional host probe). Used for app-tunnel split **or** full-tunnel app-tunnel byte accounting.
             let useAppTunnelNEStack = hasAppTunnelSelection || (profileOkForAccounting && isFullTrafficAccountingShape)
 
+            Self.osLog.notice("[connect] routingMode=\(self.settings.routingMode.rawValue, privacy: .public) hasAppTunnelSelection=\(hasAppTunnelSelection, privacy: .public) profileOkForAccounting=\(profileOkForAccounting, privacy: .public) useAppTunnelNEStack=\(useAppTunnelNEStack, privacy: .public) requestedAppRules=\(requestedAppRules.count, privacy: .public)")
+
             #if DEBUG
             logConnectModeDecision(
                 originalProfile: profile,
@@ -233,6 +230,13 @@ final class VPNManager: ObservableObject {
 
 
             if useAppTunnelNEStack {
+                // Always stop the proxy before writing the destination routing file so that
+                // startProxy() always reads the current config. Without this, a same-profile
+                // reconnect leaves the proxy running with stale in-memory state (enforceFiltering
+                // may be false until the next flush tick fires, causing minutes of broken bypass).
+                await perAppStatsProxy.disable()
+                traceLog("connect: transparent proxy stopped before config write")
+
                 if hasAppTunnelSelection {
                     persistPerAppStatsRoutingConfig(appRules: requestedAppRules, routeAllIdentifiedFlows: false)
                     traceLog("app-tunnel split: persisted \(requestedAppRules.count) NEAppRule signing identifier(s) for transparent proxy filter")
@@ -240,10 +244,19 @@ final class VPNManager: ObservableObject {
                     persistPerAppStatsRoutingConfig(appRules: [], routeAllIdentifiedFlows: true)
                     traceLog("full-traffic accounting: persisted routeAllIdentifiedFlows for transparent proxy")
                 }
-                persistDestinationRoutingFromHost(
-                    enforceFiltering: settings.enforceDestinationFiltering,
-                    ranges: destinationCidrStrings
-                )
+                // For split-tunnel profiles, force destination filtering to AllowedIPs so the
+                // proxy only relays flows whose destination is inside the tunnel. Flows to
+                // internet destinations are returned false → OS handles them natively via en0.
+                if !profileOkForAccounting {
+                    let allowedIPs = extensionProfile.peers.flatMap { $0.allowedIPs }
+                    persistDestinationRoutingFromHost(enforceFiltering: true, ranges: allowedIPs)
+                    traceLog("split-tunnel: proxy destination filter set to AllowedIPs (\(allowedIPs.count) CIDRs)")
+                } else {
+                    persistDestinationRoutingFromHost(
+                        enforceFiltering: settings.enforceDestinationFiltering,
+                        ranges: destinationCidrStrings
+                    )
+                }
                 traceLog(
                     "VPN accounting stack: tunnel DNS servers=[\(extensionProfile.interface.dnsServers.joined(separator: ", "))]"
                 )
@@ -260,21 +273,17 @@ final class VPNManager: ObservableObject {
                 )
             }
             
-            // For app-tunnel traffic counting via transparent proxy: only include the transparent proxy's
-            // own signing ID in the tunnel's NEAppRules. The transparent proxy will intercept ALL flows
-            // and decide which to relay (and count). If we put the user's app signing IDs in the tunnel's
-            // NEAppRules, macOS routes those flows directly through the tunnel without presenting them
-            // to the transparent proxy, making app-tunnel counting impossible.
+            // Proxy signing ID is always in appRules when the NE stack is active. The proxy
+            // intercepts flows and decides per-flow whether to relay (in-AllowedIPs) or pass
+            // through (out-of-AllowedIPs). Apps not in tunnel appRules bypass the tunnel entirely.
             var finalAppRules: [NEAppRule] = []
             if useAppTunnelNEStack {
                 let proxyRule = PerAppStatsProxyManager.extensionAppRule()
                 finalAppRules = [proxyRule]
                 if settings.includeHostAppInPerAppRulesForProbe, let hostRule = makeHostAppNEAppRule() {
-                    finalAppRules.append(hostRule)
+                    finalAppRules = NEAppRuleBuilder.dedupe(finalAppRules + [hostRule], log: traceLog)
                 }
-                traceLog(
-                    "app-tunnel stats: tunnel NEAppRules only include proxy+host (count=\(finalAppRules.count)), transparent proxy will handle user app routing"
-                )
+                traceLog("app-tunnel: tunnel NEAppRules count=\(finalAppRules.count)")
             }
 
             let runtimeStateData = try makeRuntimeStateData(profile: extensionProfile)
@@ -331,6 +340,7 @@ final class VPNManager: ObservableObject {
                 )
                 return
             case .stillStarting:
+                Self.osLog.notice("[connect] NEVPN stillStarting — deferring proxy/stats start")
                 traceLog("connect: NEVPN still starting after initial wait; deferring completion")
                 stats.state = .connecting
                 stats.connectedProfileID = profile.id
@@ -340,6 +350,7 @@ final class VPNManager: ObservableObject {
                     extensionProfile: extensionProfile,
                     hasAppTunnelSelection: hasAppTunnelSelection,
                     useAppTunnelNEStack: useAppTunnelNEStack,
+                    profileOkForAccounting: profileOkForAccounting,
                     rulesForVPNManagerCount: rulesForVPNManager.count
                 )
                 return
@@ -349,6 +360,7 @@ final class VPNManager: ObservableObject {
                     extensionProfile: extensionProfile,
                     hasAppTunnelSelection: hasAppTunnelSelection,
                     useAppTunnelNEStack: useAppTunnelNEStack,
+                    profileOkForAccounting: profileOkForAccounting,
                     rulesForVPNManagerCount: rulesForVPNManager.count
                 )
             }
@@ -434,6 +446,7 @@ final class VPNManager: ObservableObject {
         extensionProfile: WireGuardProfile,
         hasAppTunnelSelection: Bool,
         useAppTunnelNEStack: Bool,
+        profileOkForAccounting: Bool,
         rulesForVPNManagerCount: Int
     ) {
         let expectedID = profile.id
@@ -446,6 +459,7 @@ final class VPNManager: ObservableObject {
                 extensionProfile: extensionProfile,
                 hasAppTunnelSelection: hasAppTunnelSelection,
                 useAppTunnelNEStack: useAppTunnelNEStack,
+                profileOkForAccounting: profileOkForAccounting,
                 rulesForVPNManagerCount: rulesForVPNManagerCount
             )
         }
@@ -457,6 +471,7 @@ final class VPNManager: ObservableObject {
         extensionProfile: WireGuardProfile,
         hasAppTunnelSelection: Bool,
         useAppTunnelNEStack: Bool,
+        profileOkForAccounting: Bool,
         rulesForVPNManagerCount: Int
     ) async {
         let deadline = Date().addingTimeInterval(120)
@@ -474,6 +489,7 @@ final class VPNManager: ObservableObject {
                     extensionProfile: extensionProfile,
                     hasAppTunnelSelection: hasAppTunnelSelection,
                     useAppTunnelNEStack: useAppTunnelNEStack,
+                    profileOkForAccounting: profileOkForAccounting,
                     rulesForVPNManagerCount: rulesForVPNManagerCount
                 )
                 return
@@ -507,6 +523,7 @@ final class VPNManager: ObservableObject {
                 extensionProfile: extensionProfile,
                 hasAppTunnelSelection: hasAppTunnelSelection,
                 useAppTunnelNEStack: useAppTunnelNEStack,
+                profileOkForAccounting: profileOkForAccounting,
                 rulesForVPNManagerCount: rulesForVPNManagerCount
             )
             return
@@ -533,8 +550,10 @@ final class VPNManager: ObservableObject {
         extensionProfile: WireGuardProfile,
         hasAppTunnelSelection: Bool,
         useAppTunnelNEStack: Bool,
+        profileOkForAccounting: Bool,
         rulesForVPNManagerCount: Int
     ) async {
+        Self.osLog.notice("[connect] applySuccessfulConnectPostTunnel hasAppTunnelSelection=\(hasAppTunnelSelection, privacy: .public) useAppTunnelNEStack=\(useAppTunnelNEStack, privacy: .public) profileOkForAccounting=\(profileOkForAccounting, privacy: .public)")
         stats.state = .connected
         stats.connectedAt = .now
         stats.connectedProfileID = profile.id
@@ -544,9 +563,12 @@ final class VPNManager: ObservableObject {
 
         if useAppTunnelNEStack {
             PerAppTransferStore.reset()
+            Self.osLog.notice("[connect] calling perAppStatsProxy.enable()")
             do {
                 try await perAppStatsProxy.enable()
+                Self.osLog.notice("[connect] perAppStatsProxy.enable() succeeded")
             } catch {
+                Self.osLog.notice("[connect] perAppStatsProxy.enable() failed: \(error.localizedDescription, privacy: .public)")
                 traceLog("app-tunnel stats proxy enable failed: \(error.localizedDescription)")
                 stats.lastError = "App-tunnel accounting could not start: \(error.localizedDescription)"
                 await coordinatedDisconnect(waitForTunnelStop: false)

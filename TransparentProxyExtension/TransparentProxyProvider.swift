@@ -42,7 +42,7 @@ final class TransparentProxyProvider: NETransparentProxyProvider {
     /// When false, flows that pass signing-ID eligibility are relayed for any remote.
     /// When true, relay only IPv4/v6 literals whose address matches at least one CIDR snapshot.
     private var enforceDestinationFiltering = false
-    private var destinationPreparedRanges: [IPCIDRMatcher.PreparedRange] = []
+    private var destinationRawCIDRs: [String] = []
 
     private static let flushInterval: DispatchTimeInterval = .milliseconds(1500)
     private static let perAppRoutedSigningIDsDefaultsKey = "perAppRoutedSigningIdentifiers"
@@ -54,23 +54,7 @@ final class TransparentProxyProvider: NETransparentProxyProvider {
         refreshDestinationConfig()
 
         let settings = NETransparentProxyNetworkSettings(tunnelRemoteAddress: "127.0.0.1")
-        let tcpAny = NENetworkRule(
-            remoteNetwork: nil,
-            remotePrefix: 0,
-            localNetwork: nil,
-            localPrefix: 0,
-            protocol: .TCP,
-            direction: .outbound
-        )
-        let udpAny = NENetworkRule(
-            remoteNetwork: nil,
-            remotePrefix: 0,
-            localNetwork: nil,
-            localPrefix: 0,
-            protocol: .UDP,
-            direction: .outbound
-        )
-        settings.includedNetworkRules = [tcpAny, udpAny]
+        settings.includedNetworkRules = buildIncludedNetworkRules()
 
         setTunnelNetworkSettings(settings) { [weak self] error in
             guard let self else { return }
@@ -105,10 +89,6 @@ final class TransparentProxyProvider: NETransparentProxyProvider {
         Self.log.notice("handleNewFlow: signingID=\(signingID, privacy: .public) isRouted=\(routed, privacy: .public) flowType=\(String(describing: type(of: flow)), privacy: .public)")
         
         guard routed else {
-            return false
-        }
-
-        if !destinationAllowsRelay(flow) {
             return false
         }
 
@@ -280,34 +260,42 @@ final class TransparentProxyProvider: NETransparentProxyProvider {
         Self.log.notice("loadFromUserDefaultsOrFallback: final count=\(ids.count, privacy: .public), ids=\(ids.sorted().joined(separator: ","), privacy: .public)")
     }
 
-    /// Returns `false` only when filtering is enforced and remote is not an IP literal contained in ranges.
-    private func destinationAllowsRelay(_ flow: NEAppProxyFlow) -> Bool {
+    /// Builds the NENetworkRules for the proxy's includedNetworkRules.
+    /// When destination filtering is enforced (split-tunnel), only intercept flows whose
+    /// remote is within the AllowedIPs CIDRs — all other flows are left to the OS and
+    /// exit via the routing table (en0 for internet) without ever entering the proxy.
+    /// This avoids the need for any bypass relay mechanism entirely.
+    private func buildIncludedNetworkRules() -> [NENetworkRule] {
         destinationLock.lock()
         let enforce = enforceDestinationFiltering
-        let matchers = destinationPreparedRanges
+        let cidrs = destinationRawCIDRs
         destinationLock.unlock()
 
-        guard enforce else { return true }
-        if flow is NEAppProxyUDPFlow {
-            // v1 limitation: UDP accept has no canonical `remoteEndpoint`; per-datagram evaluation would belong in UDPFlowRelay.
-            Self.log.notice("destination filter skipped for UDP flow (requires per-datagram v2)")
-            return true
+        let catchAll: [NENetworkRule] = [
+            NENetworkRule(remoteNetwork: nil, remotePrefix: 0, localNetwork: nil, localPrefix: 0, protocol: .TCP, direction: .outbound),
+            NENetworkRule(remoteNetwork: nil, remotePrefix: 0, localNetwork: nil, localPrefix: 0, protocol: .UDP, direction: .outbound),
+        ]
+
+        guard enforce, !cidrs.isEmpty else { return catchAll }
+
+        var rules: [NENetworkRule] = []
+        for cidr in cidrs {
+            let parts = cidr.split(separator: "/")
+            guard parts.count == 2, let prefix = Int(parts[1]) else { continue }
+            let networkIP = String(parts[0])
+            let endpoint = NWHostEndpoint(hostname: networkIP, port: "0")
+            rules.append(NENetworkRule(remoteNetwork: endpoint, remotePrefix: prefix, localNetwork: nil, localPrefix: 0, protocol: .TCP, direction: .outbound))
+            rules.append(NENetworkRule(remoteNetwork: endpoint, remotePrefix: prefix, localNetwork: nil, localPrefix: 0, protocol: .UDP, direction: .outbound))
         }
-        guard !matchers.isEmpty else {
-            Self.log.notice(
-                "handleNewFlow: destination filtering enabled but ranges empty → bypass \(String(describing: type(of: flow)), privacy: .public)"
-            )
-            return false
+
+        if rules.isEmpty {
+            // All CIDRs were unparseable — intercept nothing rather than falling back to catch-all,
+            // which would route internet traffic into the tunnel (opposite of split-tunnel intent).
+            Self.log.error("buildIncludedNetworkRules: all CIDRs unparseable — using empty rule set")
+            return []
         }
-        guard let host = literalRemoteHostname(from: flow),
-              IPCIDRMatcher.literalMatches(host, ranges: matchers)
-        else {
-            Self.log.notice(
-                "handleNewFlow: destination filter miss or non-literal hostname flowType=\(String(describing: type(of: flow)), privacy: .public)"
-            )
-            return false
-        }
-        return true
+        Self.log.notice("buildIncludedNetworkRules: split-tunnel \(rules.count, privacy: .public) rules for \(cidrs.count, privacy: .public) CIDRs")
+        return rules
     }
 
     private func literalRemoteHostname(from flow: NEAppProxyFlow) -> String? {
@@ -342,34 +330,43 @@ final class TransparentProxyProvider: NETransparentProxyProvider {
         Self.log.notice("refreshDestinationConfig called")
         guard let fileURL = SharedPaths.destinationRangesFileURL() else {
             Self.log.notice("refreshDestinationConfig fileURL nil")
-            applyDestinationPayload(enforce: false, matchers: [])
+            applyDestinationPayload(enforce: false, rawCIDRs: [])
             return
         }
         guard let data = try? Data(contentsOf: fileURL) else {
             Self.log.notice("refreshDestinationConfig: file missing/unreadable \(fileURL.lastPathComponent, privacy: .public)")
-            applyDestinationPayload(enforce: false, matchers: [])
+            applyDestinationPayload(enforce: false, rawCIDRs: [])
             return
         }
         do {
             let payload = try JSONDecoder().decode(DestinationRoutingFilePayload.self, from: data)
-            let matchers = IPCIDRMatcher.prepare(payload.ranges)
             Self.log.notice(
-                "refreshDestinationConfig: enforce=\(payload.enforceDestinationFiltering, privacy: .public) parseableRanges=\(matchers.count, privacy: .public)"
+                "refreshDestinationConfig: enforce=\(payload.enforceDestinationFiltering, privacy: .public) ranges=\(payload.ranges.count, privacy: .public)"
             )
-            applyDestinationPayload(enforce: payload.enforceDestinationFiltering, matchers: matchers)
+            applyDestinationPayload(enforce: payload.enforceDestinationFiltering, rawCIDRs: payload.ranges)
         } catch {
             Self.log.notice(
                 "refreshDestinationConfig decode failed \(error.localizedDescription, privacy: .public)"
             )
-            applyDestinationPayload(enforce: false, matchers: [])
+            applyDestinationPayload(enforce: false, rawCIDRs: [])
         }
     }
 
-    private func applyDestinationPayload(enforce: Bool, matchers: [IPCIDRMatcher.PreparedRange]) {
+    private func applyDestinationPayload(enforce: Bool, rawCIDRs: [String]) {
         destinationLock.lock()
+        let changed = enforce != enforceDestinationFiltering || rawCIDRs != destinationRawCIDRs
         enforceDestinationFiltering = enforce
-        destinationPreparedRanges = matchers
+        destinationRawCIDRs = rawCIDRs
         destinationLock.unlock()
+
+        guard changed else { return }
+        let settings = NETransparentProxyNetworkSettings(tunnelRemoteAddress: "127.0.0.1")
+        settings.includedNetworkRules = buildIncludedNetworkRules()
+        setTunnelNetworkSettings(settings) { error in
+            if let error {
+                Self.log.error("applyDestinationPayload setTunnelNetworkSettings failed: \(error.localizedDescription, privacy: .public)")
+            }
+        }
     }
 
     private func startFlushTimer() {

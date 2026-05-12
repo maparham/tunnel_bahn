@@ -70,6 +70,12 @@ final class PerAppStatsProxyManager {
                         try? await stale.saveToPreferences()
                         try? await stale.loadFromPreferences()
                     }
+                    let deadline = Date().addingTimeInterval(5)
+                    while Date() < deadline {
+                        let status = stale.connection.status
+                        if status == .disconnected || status == .invalid { break }
+                        try? await Task.sleep(for: .milliseconds(100))
+                    }
                 }
             } catch {
                 debugLog("disable: loadAll failed: \(error.localizedDescription)")
@@ -86,7 +92,17 @@ final class PerAppStatsProxyManager {
                 debugLog("disable: save failed: \(error.localizedDescription)")
             }
         }
-        debugLog("transparent proxy stopped")
+        // Wait for the extension process to actually stop so that the next enable()
+        // always triggers a fresh startProxy (and reads the updated config files).
+        let deadline = Date().addingTimeInterval(5)
+        while Date() < deadline {
+            let status = manager.connection.status
+            if status == .disconnected || status == .invalid {
+                break
+            }
+            try? await Task.sleep(for: .milliseconds(100))
+        }
+        debugLog("transparent proxy stopped (status=\(manager.connection.status.rawValue))")
     }
 
     private func debugLog(_ message: String) {

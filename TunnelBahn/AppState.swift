@@ -154,7 +154,11 @@ final class AppState: ObservableObject {
     }
 
     /// Writes `destination-routing.json` to match Routing settings + rules (tunnel up or down).
+    /// Skipped while a connect is in progress or when a split-tunnel profile is active —
+    /// `connect()` writes the authoritative AllowedIPs-based filter for split-tunnel profiles,
+    /// and a concurrent write here would overwrite it with stale generic preference values.
     func syncDestinationRoutingFileWithPreferences() {
+        guard !vpnManager.isBusy, !vpnManager.stats.perAppSplitTunnelActive else { return }
         vpnManager.syncDestinationRoutingFromHostActivity(
             enforceFiltering: settings.enforceDestinationFiltering,
             flattenedRangeStrings: destinationRuleStore.enabledFlattenedCidrs()

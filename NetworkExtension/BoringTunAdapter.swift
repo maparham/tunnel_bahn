@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 import NetworkExtension
 import os.log
@@ -48,6 +49,11 @@ final class BoringTunAdapter: @unchecked Sendable {
 
     /// Scratch buffer reused on `packetQueue` only (BoringTun needs ~64 KiB for reads).
     private var scratch = [UInt8](repeating: 0, count: 65536)
+
+    /// AllowedIPs parsed into prefix ranges for outbound packet filtering (set on packetQueue via start).
+    /// Nil means pass all (full-tunnel: 0.0.0.0/0 is in AllowedIPs so no filtering needed).
+    private var allowedV4Ranges: [(UInt32, UInt32)]? = nil   // (network, mask) in host byte order
+    private var allowedV6Ranges: [([UInt8], [UInt8])]? = nil // (network, mask) as 16-byte arrays
 
     init(provider: NEPacketTunnelProvider) {
         self.provider = provider
@@ -108,6 +114,11 @@ final class BoringTunAdapter: @unchecked Sendable {
         tunnelIOStarted = false
         udpRxBytesTotal = 0
         udpTxBytesTotal = 0
+        let allAllowedIPs = profile.peers.flatMap { $0.allowedIPs }
+        let hasV4Default = allAllowedIPs.contains("0.0.0.0/0")
+        let hasV6Default = allAllowedIPs.contains("::/0")
+        allowedV4Ranges = hasV4Default ? nil : Self.parseV4Ranges(allAllowedIPs)
+        allowedV6Ranges = hasV6Default ? nil : Self.parseV6Ranges(allAllowedIPs)
 
         udpStateObservation = session.observe(\NWUDPSession.state, options: [.initial, .new]) { [weak self] observed, _ in
             guard let self, self.isRunning else { return }
@@ -221,6 +232,10 @@ final class BoringTunAdapter: @unchecked Sendable {
     private func handleTunPacket(_ packet: Data) {
         guard let tunnel, isRunning else { return }
         guard !packet.isEmpty else { return }
+        // Drop packets whose destination is outside AllowedIPs. With per-app VPN sourceApplication
+        // routing, the kernel forces all matched-app traffic to utun regardless of the routing table,
+        // so we must enforce AllowedIPs here rather than relying on kernel routes.
+        if !isAllowedOutbound(packet) { return }
         let res = packet.withUnsafeBytes { buf -> TunnelbahnWgResult in
             guard let base = buf.bindMemory(to: UInt8.self).baseAddress else {
                 return TunnelbahnWgResult(op: UInt32(TUNNELBAHN_WG_DONE), size: 0)
@@ -228,6 +243,61 @@ final class BoringTunAdapter: @unchecked Sendable {
             return tunnelbahn_wg_write(tunnel, base, UInt32(packet.count), &scratch, UInt32(scratch.count))
         }
         sendNetworkIfNeeded(res)
+    }
+
+    /// Returns true if the packet's destination IP is covered by AllowedIPs (or AllowedIPs is full-tunnel).
+    private func isAllowedOutbound(_ packet: Data) -> Bool {
+        guard packet.count >= 1 else { return false }
+        let version = (packet[0] >> 4) & 0xF
+        if version == 4 {
+            guard let ranges = allowedV4Ranges else { return true } // nil = full-tunnel
+            guard packet.count >= 20 else { return false }
+            let dst = packet.withUnsafeBytes { buf -> UInt32 in
+                let b = buf.bindMemory(to: UInt8.self)
+                return (UInt32(b[16]) << 24) | (UInt32(b[17]) << 16) | (UInt32(b[18]) << 8) | UInt32(b[19])
+            }
+            return ranges.contains { (net, mask) in (dst & mask) == net }
+        } else if version == 6 {
+            guard let ranges = allowedV6Ranges else { return true }
+            guard packet.count >= 40 else { return false }
+            let dst = packet.withUnsafeBytes { Array($0.bindMemory(to: UInt8.self)[24..<40]) }
+            return ranges.contains { (net, mask) in
+                for i in 0..<16 { if (dst[i] & mask[i]) != net[i] { return false } }
+                return true
+            }
+        }
+        return false
+    }
+
+    private static func parseV4Ranges(_ allowedIPs: [String]) -> [(UInt32, UInt32)] {
+        allowedIPs.compactMap { cidr -> (UInt32, UInt32)? in
+            guard cidr.contains(".") else { return nil }
+            let parts = cidr.split(separator: "/")
+            guard parts.count == 2, let prefix = Int(parts[1]), prefix >= 0, prefix <= 32 else { return nil }
+            var addr = in_addr()
+            guard inet_pton(AF_INET, String(parts[0]), &addr) == 1 else { return nil }
+            let net = UInt32(bigEndian: addr.s_addr)
+            let mask: UInt32 = prefix == 0 ? 0 : (~UInt32(0)) << (32 - prefix)
+            return (net & mask, mask)
+        }
+    }
+
+    private static func parseV6Ranges(_ allowedIPs: [String]) -> [([UInt8], [UInt8])] {
+        allowedIPs.compactMap { cidr -> ([UInt8], [UInt8])? in
+            guard cidr.contains(":") else { return nil }
+            let parts = cidr.split(separator: "/")
+            guard parts.count == 2, let prefix = Int(parts[1]), prefix >= 0, prefix <= 128 else { return nil }
+            var addr = in6_addr()
+            guard inet_pton(AF_INET6, String(parts[0]), &addr) == 1 else { return nil }
+            let netBytes: [UInt8] = withUnsafeBytes(of: addr) { Array($0) }
+            var mask = [UInt8](repeating: 0, count: 16)
+            for i in 0..<16 {
+                let bits = min(max(prefix - i * 8, 0), 8)
+                mask[i] = bits == 0 ? 0 : UInt8(~(0xFF >> bits))
+            }
+            let net = zip(netBytes, mask).map { $0 & $1 }
+            return (net, mask)
+        }
     }
 
     private func handleIncomingDatagram(_ datagram: Data) {
