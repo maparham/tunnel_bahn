@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import SwiftUI
 
 @MainActor
@@ -40,6 +41,7 @@ final class MenuBarController: NSObject, ObservableObject, NSMenuDelegate {
     private var canEnableAppTunnelRouting = false
     private var vpnShowsAsOn = false
     private var destinationFilterSummary: String?
+    private var appStateCancellable: AnyCancellable?
 
     /// Asset name: `TunnelBahn/Resources/Assets.xcassets/MenuBarTunnel.imageset`
     private static let menuBarTunnelAssetName = "MenuBarTunnel"
@@ -66,6 +68,20 @@ final class MenuBarController: NSObject, ObservableObject, NSMenuDelegate {
         statusItem?.button?.attributedTitle = NSAttributedString(string: "")
         statusItem?.menu = buildMenu()
         debugLog("menu configured")
+    }
+
+    /// Subscribe to `appState` changes via Combine so the tray updates even when the window is closed.
+    func bindAppState(_ appState: AppState, refreshMenuBar: @escaping @MainActor () -> Void) {
+        appStateCancellable = appState.objectWillChange
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                guard self != nil else { return }
+                // objectWillChange fires *before* the mutation; defer one runloop turn so
+                // all @Published values have already been committed when we read them.
+                DispatchQueue.main.async {
+                    refreshMenuBar()
+                }
+            }
     }
 
     func update(

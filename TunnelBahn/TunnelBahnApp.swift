@@ -79,47 +79,46 @@ struct TunnelBahnApp: App {
                             appState.settings.routingMode = mode
                         }
                     )
+                    menuBarController.bindAppState(appState, refreshMenuBar: refreshMenuBar)
                     refreshMenuBar()
                     traceLog("menu configured with state=\(appState.vpnManager.stats.state.rawValue)")
                 }
-                .onChange(of: appState.vpnManager.stats.state) { _, newValue in
-                    traceLog("vpn state changed -> \(newValue.rawValue)")
-                    if newValue != .disconnected {
-                        autoReconnectTask?.cancel()
-                        autoReconnectTask = nil
-                    }
-                    if newValue == .disconnected,
-                       appState.settings.autoReconnect,
-                       appState.vpnManager.shouldAutoReconnect
-                    {
-                        autoReconnectTask?.cancel()
-                        let task = Task { @MainActor in
-                            defer { autoReconnectTask = nil }
-                            try? await Task.sleep(for: .seconds(2))
-                            guard !Task.isCancelled else { return }
-                            guard appState.vpnManager.stats.state == .disconnected,
-                                  appState.settings.autoReconnect,
-                                  appState.vpnManager.shouldAutoReconnect
-                            else {
-                                traceLog("auto reconnect skipped (state or settings changed)")
-                                return
-                            }
-                            guard !appState.vpnManager.isBusy else {
-                                traceLog("auto reconnect skipped (manager busy)")
-                                return
-                            }
-                            traceLog("auto reconnect attempt starting")
-                            Task { await quickConnect() }
-                        }
-                        autoReconnectTask = task
-                        traceLog("auto reconnect scheduled in 2 seconds (single-flight)")
-                    }
-                }
-                .onChange(of: MenuBarRefreshInputs(appState: appState)) { _, _ in
-                    refreshMenuBar()
-                }
         }
         .defaultSize(width: 980, height: 680)
+        // Scene-level observers keep firing even when the window is closed.
+        .onChange(of: appState.vpnManager.stats.state) { _, newValue in
+            traceLog("vpn state changed -> \(newValue.rawValue)")
+            if newValue != .disconnected {
+                autoReconnectTask?.cancel()
+                autoReconnectTask = nil
+            }
+            if newValue == .disconnected,
+               appState.settings.autoReconnect,
+               appState.vpnManager.shouldAutoReconnect
+            {
+                autoReconnectTask?.cancel()
+                let task = Task { @MainActor in
+                    defer { autoReconnectTask = nil }
+                    try? await Task.sleep(for: .seconds(2))
+                    guard !Task.isCancelled else { return }
+                    guard appState.vpnManager.stats.state == .disconnected,
+                          appState.settings.autoReconnect,
+                          appState.vpnManager.shouldAutoReconnect
+                    else {
+                        traceLog("auto reconnect skipped (state or settings changed)")
+                        return
+                    }
+                    guard !appState.vpnManager.isBusy else {
+                        traceLog("auto reconnect skipped (manager busy)")
+                        return
+                    }
+                    traceLog("auto reconnect attempt starting")
+                    Task { await quickConnect() }
+                }
+                autoReconnectTask = task
+                traceLog("auto reconnect scheduled in 2 seconds (single-flight)")
+            }
+        }
         .commands {
             CommandMenu("VPN") {
                 Button("Connect") { Task { await quickConnect() } }
