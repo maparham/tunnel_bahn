@@ -14,6 +14,9 @@
 		07BF00AABBCCDD1122334499 /* DestinationRouting.swift in Sources */ = {isa = PBXBuildFile; fileRef = 07BF00AABBCCDD11223344AA /* DestinationRouting.swift */; };
 		07BF00DDEEFF009988776655 /* DestinationRouting.swift in Sources */ = {isa = PBXBuildFile; fileRef = 07BF00AABBCCDD11223344AA /* DestinationRouting.swift */; };
 		07BF11AABBCCDD11223344AA /* DestinationCidrRule.swift in Sources */ = {isa = PBXBuildFile; fileRef = 07BF11AABBCCDD11223344BB /* DestinationCidrRule.swift */; };
+		DD0001AABBCCDD1122334401 /* DestinationDomainRule.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD0001AABBCCDD1122334402 /* DestinationDomainRule.swift */; };
+		DD0002AABBCCDD1122334403 /* DomainResolver.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD0002AABBCCDD1122334404 /* DomainResolver.swift */; };
+		DD0003AABBCCDD1122334405 /* DomainResolutionCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD0003AABBCCDD1122334406 /* DomainResolutionCoordinator.swift */; };
 		07BF22AABBCCDD11223344CC /* DestinationRuleStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 07BF22AABBCCDD11223344DD /* DestinationRuleStore.swift */; };
 		07BF33AABBCCDD11223344EE /* RoutingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 07BF33AABBCCDD11223344FF /* RoutingView.swift */; };
 		09BD4C6EA2737467C4AFA12E /* StatusView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F86BBF39930242EB8FF86F54 /* StatusView.swift */; };
@@ -130,6 +133,9 @@
 		056AF191BDE4A37210A30210 /* MenuBarController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MenuBarController.swift; sourceTree = "<group>"; };
 		07BF00AABBCCDD11223344AA /* DestinationRouting.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DestinationRouting.swift; sourceTree = "<group>"; };
 		07BF11AABBCCDD11223344BB /* DestinationCidrRule.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DestinationCidrRule.swift; sourceTree = "<group>"; };
+		DD0001AABBCCDD1122334402 /* DestinationDomainRule.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DestinationDomainRule.swift; sourceTree = "<group>"; };
+		DD0002AABBCCDD1122334404 /* DomainResolver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DomainResolver.swift; sourceTree = "<group>"; };
+		DD0003AABBCCDD1122334406 /* DomainResolutionCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DomainResolutionCoordinator.swift; sourceTree = "<group>"; };
 		07BF22AABBCCDD11223344DD /* DestinationRuleStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DestinationRuleStore.swift; sourceTree = "<group>"; };
 		07BF33AABBCCDD11223344FF /* RoutingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RoutingView.swift; sourceTree = "<group>"; };
 		132EDEF0EA68675638E19645 /* WireGuardConfigParser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WireGuardConfigParser.swift; sourceTree = "<group>"; };
@@ -287,6 +293,8 @@
 				8C416906295219B27FC07EF8 /* AppSettings.swift */,
 				C9E8D7C6B5A4938271605F0A /* DestinationCidrTextParser.swift */,
 				07BF22AABBCCDD11223344DD /* DestinationRuleStore.swift */,
+				DD0002AABBCCDD1122334404 /* DomainResolver.swift */,
+				DD0003AABBCCDD1122334406 /* DomainResolutionCoordinator.swift */,
 				6D9A4FB22EE531616E707012 /* LaunchAtLoginService.swift */,
 				5C79F57236D533D1E1A9AD5D /* NEAppRuleBuilder.swift */,
 				F7E43092154982D7DF581773 /* PerAppStatsProxyManager.swift */,
@@ -317,6 +325,7 @@
 				147A18331F2C2E8D4BE615DC /* ConnectionStats.swift */,
 				07BF11AABBCCDD11223344BB /* DestinationCidrRule.swift */,
 				E8D7C6B5A4938271605F0CED /* DestinationCidrBulkGroup.swift */,
+				DD0001AABBCCDD1122334402 /* DestinationDomainRule.swift */,
 				AA0001AABBCCDD1122334402 /* ProfileRoutingSnapshot.swift */,
 				597D1A15AF482ECB340F8519 /* WireGuardProfile.swift */,
 			);
@@ -542,7 +551,10 @@
 				B6D78E25A29EC4E097CDF76C /* AppSettings.swift in Sources */,
 				07BF11AABBCCDD11223344AA /* DestinationCidrRule.swift in Sources */,
 				E8D7C6B5A4938271605F0CEE /* DestinationCidrBulkGroup.swift in Sources */,
+				DD0001AABBCCDD1122334401 /* DestinationDomainRule.swift in Sources */,
 				07BF22AABBCCDD11223344CC /* DestinationRuleStore.swift in Sources */,
+				DD0002AABBCCDD1122334403 /* DomainResolver.swift in Sources */,
+				DD0003AABBCCDD1122334405 /* DomainResolutionCoordinator.swift in Sources */,
 				C9E8D7C6B5A4938271605F0B /* DestinationCidrTextParser.swift in Sources */,
 				7A61CBAADF0E7A340007085E /* AppState.swift in Sources */,
 				9F1EB3AA4E164B4139E3D474 /* AppsView.swift in Sources */,

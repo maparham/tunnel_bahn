@@ -9,12 +9,31 @@ struct DestinationCidrImportResult: Equatable {
 private struct DestinationRoutingPersisted: Codable {
     var customRules: [DestinationCidrRule]
     var bulkGroups: [DestinationCidrBulkGroup]
+    var domainRules: [DestinationDomainRule]
+
+    enum CodingKeys: String, CodingKey {
+        case customRules, bulkGroups, domainRules
+    }
+
+    init(customRules: [DestinationCidrRule], bulkGroups: [DestinationCidrBulkGroup], domainRules: [DestinationDomainRule]) {
+        self.customRules = customRules
+        self.bulkGroups = bulkGroups
+        self.domainRules = domainRules
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        customRules = try c.decodeIfPresent([DestinationCidrRule].self, forKey: .customRules) ?? []
+        bulkGroups = try c.decodeIfPresent([DestinationCidrBulkGroup].self, forKey: .bulkGroups) ?? []
+        domainRules = try c.decodeIfPresent([DestinationDomainRule].self, forKey: .domainRules) ?? []
+    }
 }
 
 @MainActor
 final class DestinationRuleStore: ObservableObject {
     @Published private(set) var customRules: [DestinationCidrRule] = []
     @Published private(set) var bulkGroups: [DestinationCidrBulkGroup] = []
+    @Published private(set) var domainRules: [DestinationDomainRule] = []
 
     private let defaultsKey = "destinationCidrRules"
 
@@ -107,9 +126,25 @@ final class DestinationRuleStore: ObservableObject {
         save()
     }
 
-    func replaceAll(customRules newCustomRules: [DestinationCidrRule], bulkGroups newBulkGroups: [DestinationCidrBulkGroup]) {
+    func replaceAll(
+        customRules newCustomRules: [DestinationCidrRule],
+        bulkGroups newBulkGroups: [DestinationCidrBulkGroup],
+        domainRules newDomainRules: [DestinationDomainRule] = []
+    ) {
         customRules = newCustomRules
         bulkGroups = newBulkGroups
+        // Carry over in-memory resolution state when domain IDs match.
+        domainRules = newDomainRules.map { incoming in
+            if let existing = domainRules.first(where: { $0.id == incoming.id }) {
+                var merged = incoming
+                merged.resolvedCidrs = existing.resolvedCidrs
+                merged.resolvedAt = existing.resolvedAt
+                merged.resolvedTTL = existing.resolvedTTL
+                merged.status = existing.status
+                return merged
+            }
+            return incoming
+        }
         save()
     }
 
@@ -119,6 +154,59 @@ final class DestinationRuleStore: ObservableObject {
         guard !trimmed.isEmpty else { return }
         bulkGroups[index].title = trimmed
         save()
+    }
+
+    // MARK: - Domain rules
+
+    /// Returns false if the domain is blank or already present.
+    func addDomainRule(domain: String) -> Bool {
+        let trimmed = domain.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !trimmed.isEmpty else { return false }
+        guard !domainRules.contains(where: { $0.domain == trimmed }) else { return false }
+        domainRules.append(DestinationDomainRule(domain: trimmed))
+        save()
+        return true
+    }
+
+    func removeAllDomainRules() {
+        domainRules.removeAll()
+        save()
+    }
+
+    func removeDomainRule(id: UUID) {
+        domainRules.removeAll { $0.id == id }
+        save()
+    }
+
+    func setDomainEnabled(_ enabled: Bool, for id: UUID) {
+        guard let index = domainRules.firstIndex(where: { $0.id == id }) else { return }
+        domainRules[index].isEnabled = enabled
+        save()
+    }
+
+    // MARK: - Resolution state mutators (ephemeral — no save())
+
+    func markResolving(id: UUID) {
+        guard let index = domainRules.firstIndex(where: { $0.id == id }) else { return }
+        domainRules[index].status = .resolving
+        objectWillChange.send()
+    }
+
+    func applyResolution(id: UUID, cidrs: [String], ttl: TimeInterval) {
+        guard let index = domainRules.firstIndex(where: { $0.id == id }) else { return }
+        let existing = domainRules[index].resolvedCidrs
+        let merged = existing + cidrs.filter { !existing.contains($0) }
+        domainRules[index].resolvedCidrs = merged
+        domainRules[index].resolvedAt = Date()
+        domainRules[index].resolvedTTL = ttl
+        domainRules[index].status = .resolved(cidrCount: merged.count)
+        objectWillChange.send()
+    }
+
+    func applyResolutionFailure(id: UUID, message: String) {
+        guard let index = domainRules.firstIndex(where: { $0.id == id }) else { return }
+        domainRules[index].status = .failed(message: message)
+        objectWillChange.send()
     }
 
     func updateCidr(_ id: UUID, cidr: String) {
@@ -189,6 +277,11 @@ final class DestinationRuleStore: ObservableObject {
                 append(c)
             }
         }
+        for rule in domainRules where rule.isEnabled {
+            for cidr in rule.resolvedCidrs {
+                append(cidr)
+            }
+        }
         return out
     }
 
@@ -208,7 +301,7 @@ final class DestinationRuleStore: ObservableObject {
     }
 
     private func save() {
-        let payload = DestinationRoutingPersisted(customRules: customRules, bulkGroups: bulkGroups)
+        let payload = DestinationRoutingPersisted(customRules: customRules, bulkGroups: bulkGroups, domainRules: domainRules)
         let encoder = JSONEncoder()
         guard let data = try? encoder.encode(payload) else { return }
         AppGroupStore.defaults.set(data, forKey: defaultsKey)
@@ -222,6 +315,7 @@ final class DestinationRuleStore: ObservableObject {
         if let v2 = try? decoder.decode(DestinationRoutingPersisted.self, from: data) {
             customRules = v2.customRules
             bulkGroups = v2.bulkGroups
+            domainRules = v2.domainRules
             return
         }
         if let legacy = try? decoder.decode([DestinationCidrRule].self, from: data) {

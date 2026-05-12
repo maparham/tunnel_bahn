@@ -7,6 +7,9 @@ struct RoutingView: View {
     @EnvironmentObject private var appState: AppState
     @State private var newCidrDraft = ""
     @State private var lastAddRejected = false
+    @State private var newDomainDraft = ""
+    @State private var lastDomainAddRejected = false
+    @State private var confirmDeleteAllDomains = false
     @State private var importError: String?
     @State private var lastImportSummary: String?
     @State private var bulkPrefixBrowse: BulkPrefixBrowsePayload?
@@ -25,9 +28,16 @@ struct RoutingView: View {
         }
     }
 
-    /// Controls in the bulk lists and custom ranges sections are disabled when filtering is off or the VPN is connected.
+    /// True when at least one destination entry exists and is enabled.
+    private var hasAnyDestinations: Bool {
+        appState.destinationRuleStore.customRules.contains(where: \.isEnabled)
+            || appState.destinationRuleStore.bulkGroups.contains(where: \.isEnabled)
+            || appState.destinationRuleStore.domainRules.contains(where: \.isEnabled)
+    }
+
+    /// Controls in the bulk lists and custom ranges sections are disabled when the VPN is connected.
     private var controlsDisabled: Bool {
-        destinationRoutingEditingLocked || !appState.settings.enforceDestinationFiltering
+        destinationRoutingEditingLocked
     }
 
     var body: some View {
@@ -35,11 +45,30 @@ struct RoutingView: View {
             VStack(alignment: .leading, spacing: 0) {
                 restrictProxySection()
                 bulkListsStandaloneSection()
-                    .opacity(appState.settings.enforceDestinationFiltering ? 1 : 0.4)
                 customRangesStandaloneSection()
-                    .opacity(appState.settings.enforceDestinationFiltering ? 1 : 0.4)
+                domainNamesSection()
+
+                HStack(spacing: 6) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .foregroundStyle(.yellow)
+                    Text("If an IP does not match any rule here, it will bypass the VPN tunnel.")
+                        .foregroundStyle(.secondary)
+                }
+                .font(.footnote)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 10)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .onAppear {
+            if !hasAnyDestinations {
+                appState.settings.enforceDestinationFiltering = false
+            }
+        }
+        .onChange(of: hasAnyDestinations) { _, hasAny in
+            if !hasAny {
+                appState.settings.enforceDestinationFiltering = false
+            }
         }
         .navigationTitle("Advanced")
         .alert("Import Failed", isPresented: .init(
@@ -59,17 +88,32 @@ struct RoutingView: View {
     private func restrictProxySection() -> some View {
         GroupBox {
             VStack(alignment: .leading, spacing: 10) {
-                Toggle(isOn: $appState.settings.enforceDestinationFiltering) {
-                    Text("Destination Routing")
-                        .font(.headline)
+                HStack(spacing: 10) {
+                    Toggle(isOn: Binding(
+                        get: { appState.settings.enforceDestinationFiltering },
+                        set: { newValue in
+                            if newValue && !hasAnyDestinations { return }
+                            appState.settings.enforceDestinationFiltering = newValue
+                        }
+                    )) {
+                        Text("Destination Routing")
+                            .font(.headline)
+                    }
+                    .toggleStyle(.switch)
+                    .help(
+                        destinationRoutingEditingLocked
+                            ? "Disconnect the VPN to change destination routing."
+                            : "Toggle destination CIDR filtering for proxied TCP flows."
+                    )
+                    .disabled(destinationRoutingEditingLocked || !hasAnyDestinations)
+
+                    if !hasAnyDestinations {
+                        Label("Add destination IPs or CIDRs below to enable this feature.", systemImage: "info.circle.fill")
+                            .font(.footnote)
+                            .foregroundStyle(.blue)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
                 }
-                .toggleStyle(.switch)
-                .help(
-                    destinationRoutingEditingLocked
-                        ? "Disconnect the VPN to change destination routing."
-                        : "Toggle destination CIDR filtering for proxied TCP flows."
-                )
-                .disabled(destinationRoutingEditingLocked)
 
                 Text(
                     "TCP only and IP destinations only (no DNS). UDP isn’t included."
@@ -142,8 +186,6 @@ struct RoutingView: View {
                             .foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
                     }
-
-                    warningRow()
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
@@ -195,27 +237,6 @@ struct RoutingView: View {
         .padding(.horizontal, 16)
         .padding(.top, 10)
         .padding(.bottom, 8)
-    }
-
-    @ViewBuilder
-    private func warningRow() -> some View {
-        let enabledCount = enabledParsingRangeCount()
-        let enforceOn = appState.settings.enforceDestinationFiltering
-        if enforceOn, enabledCount == 0 {
-            Label(
-                "No valid CIDRs are enabled — with filtering on, proxied flows are not relayed.",
-                systemImage: "exclamationmark.triangle.fill"
-            )
-            .font(.footnote)
-            .foregroundStyle(.orange)
-            .fixedSize(horizontal: false, vertical: true)
-        }
-    }
-
-    private func enabledParsingRangeCount() -> Int {
-        appState.destinationRuleStore.enabledFlattenedCidrs()
-            .filter { !IPCIDRMatcher.prepare([$0]).isEmpty }
-            .count
     }
 
     private func addRow() -> some View {
@@ -301,6 +322,150 @@ struct RoutingView: View {
         lastImportSummary =
             "Added \(result.added) · skipped \(result.skippedInvalid) invalid · skipped \(result.skippedDuplicate) duplicate"
     }
+
+    // MARK: - Domain names section
+
+    private func domainNamesSection() -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            GroupBox {
+                VStack(alignment: .leading, spacing: 12) {
+                    HStack(alignment: .firstTextBaseline, spacing: 6) {
+                        Text("Domain names")
+                            .font(.headline)
+                        Spacer(minLength: 0)
+                        if !appState.destinationRuleStore.domainRules.isEmpty {
+                            Button { confirmDeleteAllDomains = true } label: {
+                                Image(systemName: "trash")
+                                    .imageScale(.small)
+                            }
+                            .buttonStyle(.borderless)
+                            .help("Remove all domains")
+                            .disabled(controlsDisabled)
+                        }
+                    }
+                    .confirmationDialog("Remove all domains?", isPresented: $confirmDeleteAllDomains) {
+                        Button("Remove All", role: .destructive) {
+                            appState.destinationRuleStore.removeAllDomainRules()
+                        }
+                    }
+
+                    if appState.destinationRuleStore.domainRules.isEmpty {
+                        Text("No domains yet.")
+                            .foregroundStyle(.secondary)
+                    } else {
+                        ForEach(appState.destinationRuleStore.domainRules) { rule in
+                            DestinationDomainRuleRow(ruleID: rule.id, controlsDisabled: controlsDisabled) {
+                                bulkPrefixBrowse = BulkPrefixBrowsePayload(
+                                    id: rule.id,
+                                    title: rule.domain,
+                                    cidrs: rule.resolvedCidrs
+                                )
+                            }
+                            .environmentObject(appState)
+                        }
+                    }
+
+                    domainAddRow()
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.vertical, 4)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            Text("Domain names are resolved to IP addresses and merged into the routing list. CDN domains and shared IPs may match unintended destinations. In full-tunnel mode, domain entries affect filtering policy but do not change which traffic exits the tunnel.")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.top, 4)
+        }
+        .padding(.horizontal, 16)
+        .padding(.top, 10)
+        .padding(.bottom, 8)
+    }
+
+    private func domainAddRow() -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                TextField("e.g. x.com", text: $newDomainDraft)
+                    .textFieldStyle(.roundedBorder)
+                    .accessibilityLabel("Domain name")
+                    .onSubmit { commitDomainDraft() }
+                    .onChange(of: newDomainDraft) { _, _ in lastDomainAddRejected = false }
+                    .disabled(controlsDisabled)
+
+                Button("Add") { commitDomainDraft() }
+                    .disabled(
+                        controlsDisabled ||
+                        newDomainDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    )
+            }
+            if lastDomainAddRejected {
+                Text("Enter a valid domain name or remove duplicate.")
+                    .font(.footnote)
+                    .foregroundStyle(.red)
+            }
+        }
+        .padding(.vertical, 4)
+    }
+
+    private func commitDomainDraft() {
+        let trimmed = newDomainDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        let domains = Self.extractDomains(from: trimmed)
+        guard !domains.isEmpty else {
+            lastDomainAddRejected = true
+            return
+        }
+        var anyAdded = false
+        for domain in domains {
+            if appState.destinationRuleStore.addDomainRule(domain: domain) {
+                if let rule = appState.destinationRuleStore.domainRules.last {
+                    appState.domainResolutionCoordinator.enqueueResolution(for: rule.id, domain: rule.domain)
+                }
+                anyAdded = true
+            }
+        }
+        if anyAdded {
+            newDomainDraft = ""
+            lastDomainAddRejected = false
+        } else {
+            // All domains were duplicates
+            lastDomainAddRejected = true
+        }
+    }
+
+    /// Extracts the host from a URL or bare domain string, then also adds the
+    /// parent domain when the host has more than two labels (e.g. www.youtube.com → youtube.com).
+    /// Returns an ordered, deduplicated list so the most-specific entry comes first.
+    private static func extractDomains(from input: String) -> [String] {
+        // Attempt URL parse; prepend scheme if missing so URLComponents can parse the host.
+        let candidate = input.lowercased()
+        let urlString = candidate.hasPrefix("http://") || candidate.hasPrefix("https://")
+            ? candidate
+            : "https://\(candidate)"
+
+        guard let components = URLComponents(string: urlString),
+              let host = components.host,
+              !host.isEmpty
+        else { return [] }
+
+        // Strip trailing dot (absolute FQDN notation).
+        let bare = host.hasSuffix(".") ? String(host.dropLast()) : host
+        guard !bare.isEmpty else { return [] }
+
+        var results: [String] = [bare]
+
+        // If host has ≥ 3 labels, also add the parent (drop the leading label).
+        let labels = bare.split(separator: ".", omittingEmptySubsequences: false)
+        if labels.count >= 3 {
+            let parent = labels.dropFirst().joined(separator: ".")
+            if parent != bare {
+                results.append(parent)
+            }
+        }
+
+        return results
+    }
 }
 
 // MARK: - Bulk group row (one line per import; toggle / remove / browse)
@@ -320,6 +485,7 @@ private struct DestinationCidrBulkGroupRow: View {
     @FocusState private var titleFieldFocused: Bool
     @State private var editingTitle = false
     @State private var titleDraft = ""
+    @State private var confirmDelete = false
 
     private var storedTitle: String {
         storedGroup()?.title ?? "Bulk list"
@@ -438,17 +604,15 @@ private struct DestinationCidrBulkGroupRow: View {
 
             Spacer(minLength: 0)
 
-            Button("View…") {
-                onBrowse()
+            Button { onBrowse() } label: {
+                Image(systemName: "eye")
             }
+            .buttonStyle(.borderless)
+            .help("View prefixes")
             .disabled(controlsDisabled || storedGroup() == nil)
 
-            Button {
-                appState.destinationRuleStore.removeBulkGroup(id: groupID)
-            } label: {
-                Image(systemName: "minus.circle.fill")
-                    .symbolRenderingMode(.palette)
-                    .foregroundStyle(.secondary, .quaternary)
+            Button { confirmDelete = true } label: {
+                Image(systemName: "xmark")
             }
             .buttonStyle(.borderless)
             .help("Remove this bulk list")
@@ -456,6 +620,11 @@ private struct DestinationCidrBulkGroupRow: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.vertical, 4)
+        .confirmationDialog("Remove \"\(storedTitle)\"?", isPresented: $confirmDelete) {
+            Button("Remove", role: .destructive) {
+                appState.destinationRuleStore.removeBulkGroup(id: groupID)
+            }
+        }
     }
 }
 
@@ -505,6 +674,7 @@ private struct DestinationCidrRuleRow: View {
 
     @EnvironmentObject private var appState: AppState
     @State private var draft: String = ""
+    @State private var confirmDelete = false
 
     private func storedRecord() -> DestinationCidrRule? {
         appState.destinationRuleStore.customRules.first(where: { $0.id == ruleID })
@@ -531,18 +701,19 @@ private struct DestinationCidrRuleRow: View {
                 }
                 .disabled(controlsDisabled)
 
-            Button {
-                appState.destinationRuleStore.removeRule(id: ruleID)
-            } label: {
-                Image(systemName: "minus.circle.fill")
-                    .symbolRenderingMode(.palette)
-                    .foregroundStyle(.secondary, .quaternary)
+            Button { confirmDelete = true } label: {
+                Image(systemName: "xmark")
             }
             .buttonStyle(.borderless)
             .help("Remove this range")
             .disabled(controlsDisabled)
         }
         .padding(.vertical, 2)
+        .confirmationDialog("Remove \"\(storedRecord()?.cidr ?? "")\"?", isPresented: $confirmDelete) {
+            Button("Remove", role: .destructive) {
+                appState.destinationRuleStore.removeRule(id: ruleID)
+            }
+        }
     }
 
     private func persistDraftOrRevert() {
@@ -557,5 +728,80 @@ private struct DestinationCidrRuleRow: View {
         }
         appState.destinationRuleStore.updateCidr(ruleID, cidr: trimmed)
         draft = storedRecord()?.cidr ?? trimmed
+    }
+}
+
+// MARK: - Domain rule row
+
+private struct DestinationDomainRuleRow: View {
+    let ruleID: UUID
+    var controlsDisabled: Bool
+    @State private var confirmDelete = false
+    let onBrowse: () -> Void
+
+    @EnvironmentObject private var appState: AppState
+
+    private func rule() -> DestinationDomainRule? {
+        appState.destinationRuleStore.domainRules.first { $0.id == ruleID }
+    }
+
+    private var statusLabel: String {
+        switch rule()?.status {
+        case .pending: return "Pending"
+        case .resolving: return "Resolving\u{2026}"
+        case .resolved(let count): return "\(count) IP\(count == 1 ? "" : "s")"
+        case .failed(let msg): return "Error: \(msg)"
+        case nil: return ""
+        }
+    }
+
+    private var statusColor: Color {
+        switch rule()?.status {
+        case .failed: return .red
+        default: return .secondary
+        }
+    }
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Toggle("", isOn: Binding(
+                get: { rule()?.isEnabled ?? false },
+                set: { appState.destinationRuleStore.setDomainEnabled($0, for: ruleID) }
+            ))
+            .labelsHidden()
+            .toggleStyle(.checkbox)
+            .disabled(controlsDisabled)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(rule()?.domain ?? "")
+                    .font(.body)
+                    .lineLimit(1)
+                Text(statusLabel)
+                    .font(.caption)
+                    .foregroundStyle(statusColor)
+            }
+
+            Spacer(minLength: 0)
+
+            Button { onBrowse() } label: {
+                Image(systemName: "eye")
+            }
+            .buttonStyle(.borderless)
+            .help("View resolved IPs")
+            .disabled(rule()?.resolvedCidrs.isEmpty ?? true)
+
+            Button { confirmDelete = true } label: {
+                Image(systemName: "xmark")
+            }
+            .buttonStyle(.borderless)
+            .help("Remove this domain")
+            .disabled(controlsDisabled)
+        }
+        .padding(.vertical, 2)
+        .confirmationDialog("Remove \"\(rule()?.domain ?? "")\"?", isPresented: $confirmDelete) {
+            Button("Remove", role: .destructive) {
+                appState.destinationRuleStore.removeDomainRule(id: ruleID)
+            }
+        }
     }
 }

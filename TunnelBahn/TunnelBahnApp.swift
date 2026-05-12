@@ -63,6 +63,10 @@ struct TunnelBahnApp: App {
                 .task {
                     traceLog("app startup task started")
                     appDelegate.vpnManager = appState.vpnManager
+                    // Wire window delegate now that the SwiftUI window definitely exists.
+                    if let window = NSApp.windows.first {
+                        window.delegate = appDelegate
+                    }
                     await appState.vpnManager.load()
                     appState.syncDestinationRoutingFileWithPreferences()
                     menuBarController.configure(
@@ -70,7 +74,12 @@ struct TunnelBahnApp: App {
                             Task { await connect(profileID: profileID) }
                         },
                         onDisconnect: { appState.vpnManager.disconnect() },
-                        onOpen: { NSApp.activate(ignoringOtherApps: true) },
+                        onOpen: {
+                            NSApp.setActivationPolicy(.regular)
+                            NSApp.applicationIconImage = makeDockIcon()
+                            NSApp.windows.first?.makeKeyAndOrderFront(nil)
+                            NSApp.activate(ignoringOtherApps: true)
+                        },
                         onSelectRoutingMode: { mode in
                             if mode == .appTunnel {
                                 let routed = appState.appRuleStore.rules.filter { $0.action == .routeVPN }.count
@@ -144,6 +153,7 @@ struct TunnelBahnApp: App {
         }
         appState.profileStore.select(id: profileID)
         traceLog("connect using profile=\(profile.name)")
+        await appState.domainResolutionCoordinator.resolveAllAndWait()
         await appState.vpnManager.connect(
             profile: profile,
             rules: appState.appRuleStore.rules,
@@ -209,11 +219,62 @@ struct TunnelBahnApp: App {
     }
 }
 
+private func makeDockIcon() -> NSImage? {
+    guard let source = NSImage(named: "MenuBarTunnel") else { return nil }
+    let canvasSize: CGFloat = 512
+    let iconFraction: CGFloat = 0.85
+    let sourceSize = source.size
+    guard sourceSize.width > 0, sourceSize.height > 0 else { return nil }
+    let scale = min(canvasSize * iconFraction / sourceSize.width,
+                    canvasSize * iconFraction / sourceSize.height)
+    let drawSize = NSSize(width: sourceSize.width * scale, height: sourceSize.height * scale)
+    let canvas = NSImage(size: NSSize(width: canvasSize, height: canvasSize))
+    canvas.lockFocus()
+    let origin = NSPoint(x: (canvasSize - drawSize.width) / 2,
+                         y: (canvasSize - drawSize.height) / 2)
+    source.draw(in: NSRect(origin: origin, size: drawSize))
+    canvas.unlockFocus()
+    return canvas
+}
+
 @MainActor
-final class AppLifecycleDelegate: NSObject, NSApplicationDelegate {
+final class AppLifecycleDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     weak var vpnManager: VPNManager?
     private var terminateReplySent = false
     private var isHandlingTermination = false
+
+    func applicationDidFinishLaunching(_: Notification) {
+        // Start as a regular app (Dock visible) since the window opens on launch.
+        NSApp.setActivationPolicy(.regular)
+        NSApp.applicationIconImage = makeDockIcon()
+        if let window = NSApp.windows.first {
+            window.delegate = self
+        }
+    }
+
+    func applicationShouldTerminateAfterLastWindowClosed(_: NSApplication) -> Bool {
+        return false
+    }
+
+    // When the window is re-opened (e.g. clicking the tray "Open" item), restore the Dock icon.
+    func applicationShouldHandleReopen(_: NSApplication, hasVisibleWindows: Bool) -> Bool {
+        if !hasVisibleWindows {
+            NSApp.windows.first?.makeKeyAndOrderFront(nil)
+        }
+        NSApp.setActivationPolicy(.regular)
+        NSApp.applicationIconImage = makeDockIcon()
+        return true
+    }
+
+    // MARK: - NSWindowDelegate
+
+    func windowShouldClose(_ sender: NSWindow) -> Bool {
+        // Hide instead of closing so the window doesn't end up minimized in the Dock.
+        sender.orderOut(nil)
+        NSApp.setActivationPolicy(.accessory)
+        NSApp.applicationIconImage = nil
+        return false
+    }
 
     func applicationShouldTerminate(_: NSApplication) -> NSApplication.TerminateReply {
         guard let vpnManager else {

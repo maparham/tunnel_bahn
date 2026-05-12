@@ -11,6 +11,7 @@ final class AppState: ObservableObject {
     var profileRoutingStore: ProfileRoutingStore
     var resourceMonitor: ResourceMonitor
     var vpnManager: VPNManager
+    var domainResolutionCoordinator: DomainResolutionCoordinator
     private var cancellables: Set<AnyCancellable> = []
     private var lastKnownProfileID: UUID?
 
@@ -34,7 +35,9 @@ final class AppState: ObservableObject {
         let resourceMonitor = ResourceMonitor()
         self.resourceMonitor = resourceMonitor
         self.vpnManager = VPNManager(settings: settings, resourceMonitor: resourceMonitor)
+        self.domainResolutionCoordinator = DomainResolutionCoordinator(ruleStore: destinationRuleStore)
         bindChildStores()
+        domainResolutionCoordinator.start()
 
         // Load the selected profile's snapshot on first launch.
         lastKnownProfileID = profileStore.selectedProfileID
@@ -81,6 +84,18 @@ final class AppState: ObservableObject {
             .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in
                 self?.syncDestinationRoutingFileWithPreferences()
+                self?.domainResolutionCoordinator.isConnected = false
+            }
+            .store(in: &cancellables)
+
+        vpnManager.$stats
+            .map(\.state)
+            .removeDuplicates()
+            .filter { $0 == .connected }
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                self?.domainResolutionCoordinator.isConnected = true
+                self?.domainResolutionCoordinator.resolveAll()
             }
             .store(in: &cancellables)
 
@@ -132,7 +147,12 @@ final class AppState: ObservableObject {
         settings.routingMode = snapshot.routingMode
         settings.enforceDestinationFiltering = snapshot.enforceDestinationFiltering
         appRuleStore.replaceAll(snapshot.appRules)
-        destinationRuleStore.replaceAll(customRules: snapshot.customCidrRules, bulkGroups: snapshot.bulkGroups)
+        destinationRuleStore.replaceAll(
+            customRules: snapshot.customCidrRules,
+            bulkGroups: snapshot.bulkGroups,
+            domainRules: snapshot.domainRules
+        )
+        domainResolutionCoordinator.resolveAll()
         syncDestinationRoutingFileWithPreferences()
     }
 
@@ -148,9 +168,23 @@ final class AppState: ObservableObject {
             enforceDestinationFiltering: settings.enforceDestinationFiltering,
             appRules: appRuleStore.rules,
             customCidrRules: destinationRuleStore.customRules,
-            bulkGroups: destinationRuleStore.bulkGroups
+            bulkGroups: destinationRuleStore.bulkGroups,
+            domainRules: destinationRuleStore.domainRules
         )
         profileRoutingStore.save(snapshot: snapshot, for: profileID)
+    }
+
+    /// Resolves all enabled domain rules before connecting so the routing file is fully
+    /// populated when the proxy extension reads it. A second pass fires automatically
+    /// after the tunnel comes up (via the connected-state observer in bindChildStores).
+    func connectSelectedProfile(rules: [AppRule]) async {
+        guard let profile = profileStore.selectedProfile else { return }
+        await domainResolutionCoordinator.resolveAllAndWait()
+        await vpnManager.connect(
+            profile: profile,
+            rules: rules,
+            destinationCidrStrings: destinationRuleStore.enabledFlattenedCidrs()
+        )
     }
 
     /// Writes `destination-routing.json` to match Routing settings + rules (tunnel up or down).

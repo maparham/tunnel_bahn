@@ -11,8 +11,6 @@ struct ProfileDetailView: View {
     let rxBytesPerSecond: Double
     let txBytesPerSecond: Double
     let lastError: String?
-    let onActivate: () -> Void
-    let onDeactivate: () -> Void
     let onEdit: () -> Void
     let onRename: (String) -> Void
 
@@ -167,24 +165,6 @@ struct ProfileDetailView: View {
             }
 
             HStack(spacing: 12) {
-                Button {
-                    if isActive {
-                        onDeactivate()
-                    } else {
-                        onActivate()
-                    }
-                } label: {
-                    if isBusy {
-                        ProgressView()
-                            .controlSize(.small)
-                    } else {
-                        Text(isActive ? "Deactivate" : "Activate")
-                    }
-                }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.large)
-                .disabled(isBusy)
-
                 Button("Edit…", action: onEdit)
                     .buttonStyle(.bordered)
                     .disabled(isBusy)

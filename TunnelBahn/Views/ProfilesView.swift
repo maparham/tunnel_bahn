@@ -7,6 +7,7 @@ private enum ProfileDetailTab {
 }
 
 struct ProfilesView: View {
+    @EnvironmentObject private var appState: AppState
     @ObservedObject var profileStore: ProfileStore
     @ObservedObject var vpnManager: VPNManager
     @ObservedObject var settings: AppSettings
@@ -176,8 +177,8 @@ struct ProfilesView: View {
             }()
 
             VStack(spacing: 0) {
-                // Sub-tab picker anchored below the profile header area
-                HStack {
+                // Segment tabs + activate/deactivate on one row
+                HStack(alignment: .center, spacing: 12) {
                     Picker("", selection: $profileDetailTab) {
                         Text("Overview").tag(ProfileDetailTab.overview)
                         Text("Apps").tag(ProfileDetailTab.apps)
@@ -185,7 +186,26 @@ struct ProfilesView: View {
                     }
                     .pickerStyle(.segmented)
                     .fixedSize()
-                    Spacer()
+
+                    Spacer(minLength: 0)
+
+                    Button {
+                        if isSelectedProfileActive {
+                            vpnManager.disconnect()
+                        } else {
+                            Task { await connectSelectedProfile() }
+                        }
+                    } label: {
+                        if vpnManager.isBusy {
+                            ProgressView()
+                                .controlSize(.small)
+                        } else {
+                            Text(isSelectedProfileActive ? "Deactivate" : "Activate")
+                        }
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.large)
+                    .disabled(vpnManager.isBusy)
                 }
                 .padding(.horizontal, 20)
                 .padding(.vertical, 10)
@@ -205,12 +225,6 @@ struct ProfilesView: View {
                         rxBytesPerSecond: vpnManager.stats.rxBytesPerSecond,
                         txBytesPerSecond: vpnManager.stats.txBytesPerSecond,
                         lastError: vpnManager.stats.lastError,
-                        onActivate: {
-                            Task { await connectSelectedProfile() }
-                        },
-                        onDeactivate: {
-                            vpnManager.disconnect()
-                        },
                         onEdit: {
                             editingProfile = profileStore.selectedProfile
                         },
@@ -360,12 +374,7 @@ struct ProfilesView: View {
     }
 
     private func connectSelectedProfile() async {
-        guard let profile = profileStore.selectedProfile else { return }
-        await vpnManager.connect(
-            profile: profile,
-            rules: appRuleStore.rules,
-            destinationCidrStrings: destinationRuleStore.enabledFlattenedCidrs()
-        )
+        await appState.connectSelectedProfile(rules: appRuleStore.rules)
     }
 
     private func copyProfileConfigToClipboard(_ profile: WireGuardProfile) {
