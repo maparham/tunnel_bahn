@@ -159,26 +159,28 @@ struct ProfileDetailView: View {
                     title: statusTitle,
                     color: statusColor
                 )
+
+                Button("Edit", action: onEdit)
+                    .buttonStyle(.bordered)
+                    .disabled(isBusy)
             }
             .onChange(of: profile.id) {
                 cancelNameEdit()
             }
 
-            HStack(spacing: 12) {
-                Button("Edit…", action: onEdit)
-                    .buttonStyle(.bordered)
-                    .disabled(isBusy)
+            if connectionState != .disconnected || (lastError != nil && !(lastError!.isEmpty)) {
+                HStack(spacing: 12) {
+                    if connectionState != .disconnected {
+                        Text(tunnelModeLabel)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
 
-                if connectionState != .disconnected {
-                    Text(tunnelModeLabel)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-
-                if let lastError, !lastError.isEmpty {
-                    Text(lastError)
-                        .font(.caption)
-                        .foregroundStyle(.red)
+                    if let lastError, !lastError.isEmpty {
+                        Text(lastError)
+                            .font(.caption)
+                            .foregroundStyle(.red)
+                    }
                 }
             }
         }

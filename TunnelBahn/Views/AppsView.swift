@@ -27,50 +27,74 @@ struct AppsView: View {
         AppConstants.isPerAppSplitTunnelEnabled && selectedCount > 0
     }
 
-    private var routingModeSelection: Binding<AppSettings.RoutingMode> {
+    private var routingModeBinding: Binding<AppSettings.RoutingMode> {
         Binding(
             get: { appState.settings.routingMode },
-            set: { newValue in
-                if newValue == .appTunnel, !canEnableAppTunnelMode { return }
-                appState.settings.routingMode = newValue
+            set: { newMode in
+                if newMode == .appTunnel, !canEnableAppTunnelMode { return }
+                appState.settings.routingMode = newMode
             }
         )
     }
 
-    private var appTunnelRadioLabel: String {
-        if canEnableAppTunnelMode {
-            return "Tunnel selected apps only"
+    private static let tunnelAllAppsTooltip =
+        "All network traffic from every app is routed through the VPN."
+
+    private static let tunnelSelectedAppsTooltip =
+        "Only the apps you select are routed through the VPN. Everything else goes directly to the internet."
+
+    private static let appTunnelWarningTooltip =
+        "This mode only protects selected apps. All other apps connect directly to the internet. This can expose your real IP address and DNS queries to third parties."
+
+    private static func attributed(_ string: String, bold: [String]) -> AttributedString {
+        var result = AttributedString(string)
+        for word in bold {
+            var searchStart = result.startIndex
+            while searchStart < result.endIndex,
+                  let range = result[searchStart...].range(of: word) {
+                result[range].font = .callout.bold()
+                searchStart = range.upperBound
+            }
         }
-        if AppConstants.isPerAppSplitTunnelEnabled {
-            return "Tunnel selected apps only (select at least one app)"
-        }
-        return "Tunnel selected apps only"
+        return result
     }
 
-    /// Apps shown in “All Apps”; excludes any already in the selected (VPN) list.
+    /// Apps shown in "All Apps"; excludes any already in the selected (VPN) list.
     private var discoverableAppsExcludingSelected: [DiscoveredApp] {
         appState.appDiscovery.filteredApps.filter { !isSelected($0) }
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            HStack {
-                Text("Routing Mode")
-                    .font(.title2.bold())
+            HStack(spacing: 12) {
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack(spacing: 6) {
+                        RadioButton(
+                            isOn: appState.settings.routingMode == .fullTunnel,
+                            label: "Tunnel all apps",
+                            disabled: rulesLocked
+                        ) { routingModeBinding.wrappedValue = .fullTunnel }
+                        Image(systemName: "info.circle")
+                            .foregroundStyle(.secondary)
+                            .instantTooltip(Self.tunnelAllAppsTooltip)
+                    }
+                    HStack(spacing: 6) {
+                        RadioButton(
+                            isOn: appState.settings.routingMode == .appTunnel,
+                            label: "Tunnel selected apps",
+                            disabled: rulesLocked || !canEnableAppTunnelMode
+                        ) { routingModeBinding.wrappedValue = .appTunnel }
+                        Image(systemName: "info.circle")
+                            .foregroundStyle(.secondary)
+                            .instantTooltip(Self.tunnelSelectedAppsTooltip)
+                    }
+                }
+
                 Spacer()
+
                 Button("Refresh App List") {
                     appState.appDiscovery.refresh()
                 }
-            }
-
-            if !AppConstants.isPerAppSplitTunnelEnabled {
-                Picker("Mode", selection: routingModeSelection) {
-                    Text("Full Tunnel (all apps)").tag(AppSettings.RoutingMode.fullTunnel)
-                    Text(appTunnelRadioLabel).tag(AppSettings.RoutingMode.appTunnel)
-                        .disabled(!canEnableAppTunnelMode)
-                }
-                .pickerStyle(.radioGroup)
-                .disabled(rulesLocked)
             }
 
             if !AppConstants.isPerAppSplitTunnelEnabled {
@@ -88,13 +112,9 @@ struct AppsView: View {
             }
 
             if AppConstants.isPerAppSplitTunnelEnabled {
+                let isAppTunnel = appState.settings.routingMode == .appTunnel
                 HStack(alignment: .top, spacing: 16) {
                     VStack(alignment: .leading, spacing: 10) {
-                        routingModeRadioRow(
-                            mode: .fullTunnel,
-                            label: "Full Tunnel (all apps)",
-                            rowDisabled: false
-                        )
                         GroupBox("All Apps") {
                             VStack(alignment: .leading, spacing: 10) {
                                 TextField("Search applications", text: $appState.appDiscovery.searchText)
@@ -130,16 +150,11 @@ struct AppsView: View {
                     .frame(maxWidth: .infinity)
 
                     VStack(alignment: .leading, spacing: 10) {
-                        routingModeRadioRow(
-                            mode: .appTunnel,
-                            label: appTunnelRadioLabel,
-                            rowDisabled: !canEnableAppTunnelMode
-                        )
-                        GroupBox("Selected Apps") {
+                        GroupBox {
                             if selectedAppRules.isEmpty {
-                                Text("No apps selected.")
+                                Label("Add at least one app to enable this mode.", systemImage: "info.circle.fill")
                                     .font(.caption)
-                                    .foregroundStyle(.secondary)
+                                    .foregroundStyle(.blue)
                                     .frame(maxWidth: .infinity, alignment: .leading)
                             } else {
                                 List(selectedAppRules, id: \.appPath) { rule in
@@ -164,7 +179,18 @@ struct AppsView: View {
                                 }
                                 .frame(minHeight: 140)
                             }
+                        } label: {
+                            HStack(spacing: 6) {
+                                Text("Selected Apps")
+                                    .foregroundStyle(isAppTunnel ? Color.accentColor : Color.secondary)
+                                if isAppTunnel {
+                                    Image(systemName: "exclamationmark.triangle.fill")
+                                        .foregroundStyle(.yellow)
+                                        .instantTooltip(Self.appTunnelWarningTooltip)
+                                }
+                            }
                         }
+                        .opacity(isAppTunnel ? 1 : 0.5)
                     }
                     .frame(maxWidth: .infinity)
                 }
@@ -186,30 +212,6 @@ struct AppsView: View {
                 autoSwitchToFullTunnelIfNoSelection()
             }
         }
-    }
-
-    @ViewBuilder
-    private func routingModeRadioRow(mode: AppSettings.RoutingMode, label: String, rowDisabled: Bool) -> some View {
-        let selected = appState.settings.routingMode == mode
-        let effectiveDisabled = rulesLocked || rowDisabled
-
-        Button {
-            guard !effectiveDisabled else { return }
-            routingModeSelection.wrappedValue = mode
-        } label: {
-            HStack(alignment: .firstTextBaseline, spacing: 8) {
-                Image(systemName: selected ? "smallcircle.filled.circle" : "circle")
-                    .font(.body)
-                    .foregroundStyle(effectiveDisabled ? .secondary : .primary)
-                Text(label)
-                    .multilineTextAlignment(.leading)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .foregroundStyle(effectiveDisabled ? .secondary : .primary)
-            }
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .disabled(effectiveDisabled)
     }
 
     private func isSelected(_ app: DiscoveredApp) -> Bool {
@@ -241,3 +243,4 @@ struct AppsView: View {
         }
     }
 }
+

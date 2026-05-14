@@ -4,63 +4,71 @@ struct SettingsView: View {
     @EnvironmentObject private var appState: AppState
     @State private var launchError: String?
 
-    private var rulesLocked: Bool {
-        appState.vpnManager.stats.state != .disconnected
-    }
-
     var body: some View {
-        Form {
-            Section("Connectivity") {
-                Toggle("Auto reconnect", isOn: $appState.settings.autoReconnect)
-                Toggle("Launch at login", isOn: $appState.settings.launchAtLogin)
-                    .onChange(of: appState.settings.launchAtLogin) { _, newValue in
-                        do {
-                            try LaunchAtLoginService.setEnabled(newValue)
-                        } catch {
-                            launchError = error.localizedDescription
+        ScrollView {
+            VStack(alignment: .leading, spacing: 28) {
+                settingsSection("General") {
+                    Toggle("Launch at login", isOn: $appState.settings.launchAtLogin)
+                        .onChange(of: appState.settings.launchAtLogin) { _, newValue in
+                            do {
+                                try LaunchAtLoginService.setEnabled(newValue)
+                            } catch {
+                                launchError = error.localizedDescription
+                            }
                         }
-                    }
-            }
-
-            Section("Diagnostics") {
-                HStack {
-                    Text("Log Level")
-                    Picker("", selection: $appState.settings.diagnosticsLevel) {
-                        Text("Error").tag("error")
-                        Text("Info").tag("info")
-                        Text("Debug").tag("debug")
-                    }
-                    .labelsHidden()
-                    .pickerStyle(.menu)
-                    .fixedSize()
+                    Toggle("Auto reconnect", isOn: $appState.settings.autoReconnect)
+                    Toggle("Show traffic rates in menu bar", isOn: $appState.settings.showTrafficRates)
                 }
-                Toggle(
-                    "Tunnel connectivity probe after connect",
-                    isOn: $appState.settings.runTunnelConnectivityProbe
-                )
-                Toggle(
-                    "Include TunnelBahn in app-tunnel rules (for probe)",
-                    isOn: $appState.settings.includeHostAppInPerAppRulesForProbe
-                )
-                .disabled(!AppConstants.isPerAppSplitTunnelEnabled)
-                Text(
-                    "When connected, waits for NEVPNStatus.connected, refreshes public IP, then runs HTTPS/DNS checks. Log grep: APPSPLIT_PROBE. Phase full_tunnel vs app_tunnel_host_included vs app_tunnel_host_excluded shows whether the host app is allowed to use the tunnel under app-tunnel VPN."
-                )
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            }
 
-            Section("Security") {
-                Label("Private keys are stored in Keychain only.", systemImage: "key.fill")
-                Label("Profiles and app rules are stored in app group container.", systemImage: "folder.badge.gearshape")
+                settingsSection("Diagnostics") {
+                    HStack(spacing: 10) {
+                        Text("Log level")
+                        Picker("", selection: $appState.settings.diagnosticsLevel) {
+                            Text("Error").tag("error")
+                            Text("Info").tag("info")
+                            Text("Debug").tag("debug")
+                        }
+                        .labelsHidden()
+                        .pickerStyle(.menu)
+                        .fixedSize()
+                    }
+                    Toggle(
+                        "Run connectivity check after connect",
+                        isOn: $appState.settings.runTunnelConnectivityProbe
+                    )
+                    .help("After the VPN connects, automatically checks that the tunnel is working by verifying your public IP and making a test HTTPS/DNS request.")
+                    Toggle(
+                        "Route this app through the VPN during the check",
+                        isOn: $appState.settings.includeHostAppInPerAppRulesForProbe
+                    )
+                    .disabled(!AppConstants.isPerAppSplitTunnelEnabled)
+                    .help("When using per-app VPN rules, TunnelBahn itself is normally excluded from the tunnel. Turn this on to route TunnelBahn through the VPN while the connectivity check runs, so the check tests the tunnel directly.")
+                }
+
+                Spacer()
             }
+            .padding(20)
         }
-        .frame(maxHeight: .infinity, alignment: .top)
-        .padding()
         .alert("Launch At Login Error", isPresented: .constant(launchError != nil), actions: {
             Button("OK") { launchError = nil }
         }, message: {
             Text(launchError ?? "Unknown error")
         })
+    }
+
+    @ViewBuilder
+    private func settingsSection<Content: View>(
+        _ title: String,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text(title)
+                .font(.headline)
+                .foregroundStyle(.primary)
+            VStack(alignment: .leading, spacing: 10) {
+                content()
+            }
+            .padding(.leading, 4)
+        }
     }
 }

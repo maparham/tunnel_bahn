@@ -50,8 +50,13 @@ final class DomainResolutionCoordinator {
     /// is fully populated before the proxy extension reads it.
     func resolveAllAndWait() async {
         resolveAll()
+        // Snapshot the tasks *after* resolveAll() so we capture any newly-enqueued ones.
+        // Tasks remove themselves from inFlightByID via defer on completion, so we must
+        // hold our own references here to avoid a race where a task finishes and removes
+        // itself before the withTaskGroup loop adds it.
+        let tasks = Array(inFlightByID.values)
         await withTaskGroup(of: Void.self) { group in
-            for task in inFlightByID.values {
+            for task in tasks {
                 group.addTask { await task.value }
             }
         }

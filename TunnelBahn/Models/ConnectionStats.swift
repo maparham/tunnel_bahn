@@ -12,6 +12,7 @@ enum VPNConnectionState: String, Codable {
 struct ConnectionStats: Codable {
     var state: VPNConnectionState
     var connectedAt: Date?
+    var lastInboundAt: Date?
     var lastError: String?
     var bytesIn: UInt64
     var bytesOut: UInt64
@@ -58,6 +59,7 @@ struct ConnectionStats: Codable {
     static let empty = ConnectionStats(
         state: .disconnected,
         connectedAt: nil,
+        lastInboundAt: nil,
         lastError: nil,
         bytesIn: 0,
         bytesOut: 0,

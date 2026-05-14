@@ -125,6 +125,7 @@ struct StatusView: View {
                     infoRow("Tunnel Mode", tunnelModeLabel)
                     infoRow("Endpoint", appState.vpnManager.stats.endpoint ?? "Not connected")
                     infoRow("Connected At", formatDate(appState.vpnManager.stats.connectedAt))
+                    infoRow("Last Inbound", formatRelativeDate(appState.vpnManager.stats.lastInboundAt))
                     infoRow("Tunnel In", "\(formatRate(appState.vpnManager.stats.rxBytesPerSecond)) (Total \(formatBytes(appState.vpnManager.stats.bytesIn)))")
                     infoRow("Tunnel Out", "\(formatRate(appState.vpnManager.stats.txBytesPerSecond)) (Total \(formatBytes(appState.vpnManager.stats.bytesOut)))")
                     if appState.vpnManager.stats.perAppSplitTunnelActive {
@@ -542,6 +543,13 @@ struct StatusView: View {
     private func formatDate(_ date: Date?) -> String {
         guard let date else { return "n/a" }
         return date.formatted(date: .abbreviated, time: .standard)
+    }
+
+    private func formatRelativeDate(_ date: Date?) -> String {
+        guard let date else { return "n/a" }
+        let formatter = RelativeDateTimeFormatter()
+        formatter.unitsStyle = .abbreviated
+        return formatter.localizedString(for: date, relativeTo: Date())
     }
 
     private func formatBytes(_ value: UInt64) -> String {

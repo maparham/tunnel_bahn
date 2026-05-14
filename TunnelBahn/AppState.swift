@@ -16,7 +16,6 @@ final class AppState: ObservableObject {
     private var lastKnownProfileID: UUID?
 
     @Published var selectedTab: Int = 0
-    @Published var diagnosticsText: String = "No diagnostics yet."
 
     init() {
         let settings = AppSettings()
@@ -83,8 +82,12 @@ final class AppState: ObservableObject {
             .filter { $0 == .disconnected || $0 == .error }
             .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in
-                self?.syncDestinationRoutingFileWithPreferences()
                 self?.domainResolutionCoordinator.isConnected = false
+                // Selection may have changed while the tunnel was active; `applySnapshot` was
+                // skipped then so live stores still matched the previous profile. Reload the
+                // selected profile's snapshot now that the tunnel is idle.
+                self?.applySnapshot(for: self?.profileStore.selectedProfileID)
+                self?.syncDestinationRoutingFileWithPreferences()
             }
             .store(in: &cancellables)
 
@@ -108,6 +111,9 @@ final class AppState: ObservableObject {
             .merge(with: destinationRuleStore.objectWillChange)
             .merge(with: settings.$routingMode.dropFirst().map { _ in () }.eraseToAnyPublisher())
             .merge(with: settings.$enforceDestinationFiltering.dropFirst().map { _ in () }.eraseToAnyPublisher())
+            .merge(with: settings.$destinationBulkListsEnabled.dropFirst().map { _ in () }.eraseToAnyPublisher())
+            .merge(with: settings.$destinationCustomRangesEnabled.dropFirst().map { _ in () }.eraseToAnyPublisher())
+            .merge(with: settings.$destinationDomainNamesEnabled.dropFirst().map { _ in () }.eraseToAnyPublisher())
             .debounce(for: .milliseconds(500), scheduler: DispatchQueue.main)
             .sink { [weak self] _ in
                 self?.saveCurrentSnapshot()
@@ -143,17 +149,44 @@ final class AppState: ObservableObject {
     /// Applies the stored routing snapshot for `profileID` to the live stores.
     func applySnapshot(for profileID: UUID?) {
         guard let profileID else { return }
-        let snapshot = profileRoutingStore.snapshot(for: profileID)
+
+        // Only update live state when the tunnel is not active. While connected the
+        // extension owns the routing table; a mid-session replace can produce a hybrid
+        // policy (new-profile rules + old-profile enable flags) and corrupt routing.
+        let tunnelActive: Bool = {
+            switch vpnManager.stats.state {
+            case .connected, .connecting, .reconnecting, .disconnecting: return true
+            case .disconnected, .error: return false
+            }
+        }()
+        guard !tunnelActive else { return }
+
+        installRoutingSnapshot(profileRoutingStore.snapshot(for: profileID), syncDestinationRouting: true)
+    }
+
+    /// Loads the snapshot for the profile about to be connected into the live stores,
+    /// even if a tunnel is still active. Skips `destination-routing.json` — `connect()`
+    /// writes the authoritative routing payload for the new session.
+    func prepareLiveRoutingForConnect(profileID: UUID) {
+        installRoutingSnapshot(profileRoutingStore.snapshot(for: profileID), syncDestinationRouting: false)
+    }
+
+    private func installRoutingSnapshot(_ snapshot: ProfileRoutingSnapshot, syncDestinationRouting: Bool) {
         settings.routingMode = snapshot.routingMode
-        settings.enforceDestinationFiltering = snapshot.enforceDestinationFiltering
         appRuleStore.replaceAll(snapshot.appRules)
         destinationRuleStore.replaceAll(
             customRules: snapshot.customCidrRules,
             bulkGroups: snapshot.bulkGroups,
             domainRules: snapshot.domainRules
         )
+        settings.enforceDestinationFiltering = snapshot.enforceDestinationFiltering
+        settings.destinationBulkListsEnabled = snapshot.bulkListsEnabled
+        settings.destinationCustomRangesEnabled = snapshot.customRangesEnabled
+        settings.destinationDomainNamesEnabled = snapshot.domainNamesEnabled
         domainResolutionCoordinator.resolveAll()
-        syncDestinationRoutingFileWithPreferences()
+        if syncDestinationRouting {
+            syncDestinationRoutingFileWithPreferences()
+        }
     }
 
     /// Persists current live state as the snapshot for the selected profile.
@@ -163,9 +196,22 @@ final class AppState: ObservableObject {
     }
 
     private func saveSnapshot(for profileID: UUID) {
+        let bulkListsEnabled = settings.destinationBulkListsEnabled
+        let customRangesEnabled = settings.destinationCustomRangesEnabled
+        let domainNamesEnabled = settings.destinationDomainNamesEnabled
+        let hasEffectiveDestinations =
+            (customRangesEnabled && destinationRuleStore.customRules.contains(where: \.isEnabled))
+            || (bulkListsEnabled && destinationRuleStore.bulkGroups.contains(where: \.isEnabled))
+            || (domainNamesEnabled && destinationRuleStore.domainRules.contains(where: \.isEnabled))
+        // Never persist enforceDestinationFiltering=true with an empty effective CIDR set —
+        // that would silently activate filtering against an empty list on the next connect.
+        let enforceFiltering = settings.enforceDestinationFiltering && hasEffectiveDestinations
         let snapshot = ProfileRoutingSnapshot(
             routingMode: settings.routingMode,
-            enforceDestinationFiltering: settings.enforceDestinationFiltering,
+            enforceDestinationFiltering: enforceFiltering,
+            bulkListsEnabled: bulkListsEnabled,
+            customRangesEnabled: customRangesEnabled,
+            domainNamesEnabled: domainNamesEnabled,
             appRules: appRuleStore.rules,
             customCidrRules: destinationRuleStore.customRules,
             bulkGroups: destinationRuleStore.bulkGroups,
@@ -177,13 +223,18 @@ final class AppState: ObservableObject {
     /// Resolves all enabled domain rules before connecting so the routing file is fully
     /// populated when the proxy extension reads it. A second pass fires automatically
     /// after the tunnel comes up (via the connected-state observer in bindChildStores).
-    func connectSelectedProfile(rules: [AppRule]) async {
+    func connectSelectedProfile() async {
         guard let profile = profileStore.selectedProfile else { return }
+        prepareLiveRoutingForConnect(profileID: profile.id)
         await domainResolutionCoordinator.resolveAllAndWait()
         await vpnManager.connect(
             profile: profile,
-            rules: rules,
-            destinationCidrStrings: destinationRuleStore.enabledFlattenedCidrs()
+            rules: appRuleStore.rules,
+            destinationCidrStrings: destinationRuleStore.enabledFlattenedCidrs(
+                customRangesEnabled: settings.destinationCustomRangesEnabled,
+                bulkListsEnabled: settings.destinationBulkListsEnabled,
+                domainNamesEnabled: settings.destinationDomainNamesEnabled
+            )
         )
     }
 
@@ -195,7 +246,11 @@ final class AppState: ObservableObject {
         guard !vpnManager.isBusy, !vpnManager.stats.perAppSplitTunnelActive else { return }
         vpnManager.syncDestinationRoutingFromHostActivity(
             enforceFiltering: settings.enforceDestinationFiltering,
-            flattenedRangeStrings: destinationRuleStore.enabledFlattenedCidrs()
+            flattenedRangeStrings: destinationRuleStore.enabledFlattenedCidrs(
+                customRangesEnabled: settings.destinationCustomRangesEnabled,
+                bulkListsEnabled: settings.destinationBulkListsEnabled,
+                domainNamesEnabled: settings.destinationDomainNamesEnabled
+            )
         )
     }
 }

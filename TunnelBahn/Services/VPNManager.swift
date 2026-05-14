@@ -709,79 +709,6 @@ final class VPNManager: ObservableObject {
         isBusy = false
     }
 
-    func loadDiagnostics() async -> String {
-        guard let session = manager.connection as? NETunnelProviderSession else {
-            return "Network Extension diagnostics unavailable: tunnel session not ready."
-        }
-        return await withCheckedContinuation { continuation in
-            let race = ProviderMessageContinuationRace<String>()
-            Task {
-                try? await Task.sleep(for: .seconds(12))
-                race.resume(
-                    continuation,
-                    returning: "Network Extension diagnostics timed out (extension did not respond)."
-                )
-            }
-            do {
-                try session.sendProviderMessage(Data("diagnostics".utf8)) { data in
-                    let text = data.flatMap { String(data: $0, encoding: .utf8) } ?? "No diagnostics payload."
-                    race.resume(continuation, returning: text)
-                }
-            } catch {
-                race.resume(
-                    continuation,
-                    returning: "Network Extension diagnostics failed: \(error.localizedDescription)"
-                )
-            }
-        }
-    }
-    
-    func getManagerDiagnostics() -> String {
-        var output = "=== VPN MANAGER DIAGNOSTICS ===\n\n"
-
-        output += "Routing Configuration:\n"
-        let routingLabel = Self.routingMethodLabel(manager.routingMethod)
-        output += "  Routing Method: \(routingLabel)\n"
-        output += "  Is Enabled: \(manager.isEnabled)\n"
-        output += "  On-Demand Enabled: \(manager.isOnDemandEnabled)\n"
-        output += "  Connection Status: \(connectionStatusString(manager.connection.status))\n\n"
-        
-        output += "App Rules Configuration:\n"
-        let appRules = manager.appRules
-        if !appRules.isEmpty {
-            output += "  Total Rules: \(appRules.count)\n"
-            for (index, rule) in appRules.enumerated() {
-                output += "  [\(index)] \(rule.matchSigningIdentifier)\n"
-            }
-        } else {
-            switch manager.routingMethod {
-            case .destinationIP:
-                output += "  No app rules configured (full tunnel will route ALL traffic)\n"
-            case .sourceApplication:
-                output += "  No app rules configured (app-tunnel VPN will route NO apps)\n"
-            case .networkRule:
-                output += "  No app rules configured (network rule VPN routing)\n"
-            @unknown default:
-                output += "  No app rules configured (routing method unknown)\n"
-            }
-        }
-        output += "\n"
-        
-        output += "Manager Details:\n"
-        output += "  Description: \(manager.localizedDescription ?? "nil")\n"
-        if let proto = manager.protocolConfiguration as? NETunnelProviderProtocol {
-            output += "  Server Address: \(proto.serverAddress ?? "nil")\n"
-            output += "  Provider Bundle ID: \(proto.providerBundleIdentifier ?? "nil")\n"
-        }
-        
-        output += "\n=== EXPECTED CONFIGURATION ===\n"
-        output += "Full tunnel (like official WireGuard): destinationIP, no app rules, profile unchanged.\n"
-        output += "App-tunnel split: sourceApplication, On-Demand on, at least one app rule.\n"
-        output += "\nNote: This app disables the VPN configuration on Disconnect so app-tunnel \"VPN required\" does not block apps.\n"
-        
-        return output
-    }
-    
     private func connectionStatusString(_ status: NEVPNStatus) -> String {
         switch status {
         case .invalid: return "invalid"
@@ -791,19 +718,6 @@ final class VPNManager: ObservableObject {
         case .reasserting: return "reasserting"
         case .disconnecting: return "disconnecting"
         @unknown default: return "unknown(\(status.rawValue))"
-        }
-    }
-
-    private static func routingMethodLabel(_ method: NETunnelProviderRoutingMethod) -> String {
-        switch method {
-        case .destinationIP:
-            return "destinationIP (full tunnel)"
-        case .sourceApplication:
-            return "sourceApplication (app-tunnel VPN)"
-        case .networkRule:
-            return "networkRule (network rule VPN)"
-        @unknown default:
-            return "unknown (rawValue \(method.rawValue))"
         }
     }
 
@@ -1026,6 +940,7 @@ final class VPNManager: ObservableObject {
             stats.state = .disconnected
         }
         stats.connectedAt = nil
+        stats.lastInboundAt = nil
         stats.connectedProfileID = nil
         stats.endpoint = nil
         stats.publicIP = nil
@@ -1354,6 +1269,7 @@ final class VPNManager: ObservableObject {
 
         stats.bytesIn = totals.rxBytes
         stats.bytesOut = totals.txBytes
+        stats.lastInboundAt = totals.lastInboundAt
         lastTransferSnapshot = TransferSnapshot(date: now, rxBytes: totals.rxBytes, txBytes: totals.txBytes)
 
         // App-tunnel counters (transparent proxy accounting). Reading is non-blocking and
@@ -1408,9 +1324,10 @@ final class VPNManager: ObservableObject {
         }
     }
 
-    private static func parseTransferTotals(from runtimeConfiguration: String) -> (rxBytes: UInt64, txBytes: UInt64) {
+    private static func parseTransferTotals(from runtimeConfiguration: String) -> (rxBytes: UInt64, txBytes: UInt64, lastInboundAt: Date?) {
         var rxBytes: UInt64 = 0
         var txBytes: UInt64 = 0
+        var lastHandshakeUnix: UInt64 = 0
         for line in runtimeConfiguration.split(separator: "\n") {
             let parts = line.split(separator: "=", maxSplits: 1).map(String.init)
             guard parts.count == 2 else { continue }
@@ -1419,11 +1336,14 @@ final class VPNManager: ObservableObject {
                 rxBytes += UInt64(parts[1]) ?? 0
             case "tx_bytes":
                 txBytes += UInt64(parts[1]) ?? 0
+            case "last_inbound_unix":
+                lastHandshakeUnix = UInt64(parts[1]) ?? 0
             default:
                 continue
             }
         }
-        return (rxBytes, txBytes)
+        let lastInboundAt: Date? = lastHandshakeUnix > 0 ? Date(timeIntervalSince1970: Double(lastHandshakeUnix) / 1000) : nil
+        return (rxBytes, txBytes, lastInboundAt)
     }
 
     private func refreshPublicIPAndLocation() async {

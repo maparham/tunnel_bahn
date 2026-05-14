@@ -143,10 +143,14 @@ struct ProfilesView: View {
                 ProfileListView(
                     profiles: profileStore.profiles,
                     selectedProfileID: profileStore.selectedProfileID,
+                    connectedProfileID: vpnManager.stats.connectedProfileID,
                     onSelect: { profileStore.select(id: $0) },
                     onMove: profileStore.move,
                     rowContent: { profile in
-                        profileRowNSView(profile)
+                        profileRowNSView(profile, connectedProfileID: vpnManager.stats.connectedProfileID)
+                    },
+                    onContextMenu: { profile in
+                        profileContextMenu(profile, connectedProfileID: vpnManager.stats.connectedProfileID)
                     }
                 )
             }
@@ -182,7 +186,7 @@ struct ProfilesView: View {
                     Picker("", selection: $profileDetailTab) {
                         Text("Overview").tag(ProfileDetailTab.overview)
                         Text("Apps").tag(ProfileDetailTab.apps)
-                        Text("Routing").tag(ProfileDetailTab.routing)
+                        Text("Advanced").tag(ProfileDetailTab.routing)
                     }
                     .pickerStyle(.segmented)
                     .fixedSize()
@@ -252,23 +256,77 @@ struct ProfilesView: View {
         }
     }
 
-    private func profileRowNSView(_ profile: WireGuardProfile) -> NSView {
+    private func profileRowNSView(_ profile: WireGuardProfile, connectedProfileID: UUID?) -> NSView {
+        let isConnected = profile.id == connectedProfileID
         let view = NSHostingView(rootView:
-            profileRow(profile, onDeleteTapped: {
-                deleteConfirmationProfile = profile
-                isDeleteConfirmationPresented = true
+            profileRow(profile, isConnected: isConnected, onToggle: {
+                if vpnManager.stats.connectedProfileID == profile.id {
+                    vpnManager.disconnect()
+                } else {
+                    profileStore.select(id: profile.id)
+                    Task { await appState.connectSelectedProfile() }
+                }
             })
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
         )
         view.translatesAutoresizingMaskIntoConstraints = false
         return view
     }
 
-    private func profileRow(_ profile: WireGuardProfile, onDeleteTapped: @escaping () -> Void) -> some View {
+    private func profileContextMenu(_ profile: WireGuardProfile, connectedProfileID: UUID?) -> NSMenu {
+        let isConnected = profile.id == connectedProfileID
+        let menu = NSMenu()
+        menu.autoenablesItems = false
+
+        menu.addItem(makeMenuItem(
+            title: isConnected ? "Turn Off" : "Turn On",
+            symbolName: isConnected ? "power.circle.fill" : "power.circle"
+        ) {
+            if isConnected {
+                vpnManager.disconnect()
+            } else {
+                profileStore.select(id: profile.id)
+                Task { await appState.connectSelectedProfile() }
+            }
+        })
+        menu.addItem(.separator())
+        menu.addItem(makeMenuItem(title: "Edit", symbolName: "pencil") {
+            editingProfile = profile
+        })
+        menu.addItem(makeMenuItem(title: "Copy", symbolName: "doc.on.doc") {
+            copyProfileConfigToClipboard(profile)
+            showCopiedToast()
+        })
+        menu.addItem(.separator())
+        let deleteItem = makeMenuItem(title: "Delete", symbolName: "trash") {
+            deleteConfirmationProfile = profile
+            isDeleteConfirmationPresented = true
+        }
+        deleteItem.attributedTitle = NSAttributedString(
+            string: "Delete",
+            attributes: [.foregroundColor: NSColor.systemRed]
+        )
+        menu.addItem(deleteItem)
+        return menu
+    }
+
+    private func makeMenuItem(title: String, symbolName: String, action: @escaping () -> Void) -> NSMenuItem {
+        let item = NSMenuItem()
+        item.title = title
+        item.image = NSImage(systemSymbolName: symbolName, accessibilityDescription: nil)
+        let target = MenuItemActionTarget(action: action)
+        item.target = target
+        item.action = #selector(MenuItemActionTarget.invoke)
+        item.isEnabled = true
+        objc_setAssociatedObject(item, &menuItemTargetKey, target, .OBJC_ASSOCIATION_RETAIN)
+        return item
+    }
+
+    private func profileRow(_ profile: WireGuardProfile, isConnected: Bool, onToggle: @escaping () -> Void) -> some View {
         HStack(alignment: .center, spacing: 8) {
             Circle()
-                .fill(isConnectedProfile(profile) ? Color.green : Color.gray.opacity(0.35))
+                .fill(isConnected ? Color.green : Color.gray.opacity(0.35))
                 .frame(width: 8, height: 8)
 
             VStack(alignment: .leading, spacing: 2) {
@@ -283,22 +341,13 @@ struct ProfilesView: View {
 
             Spacer(minLength: 0)
 
-            Button {
-                copyProfileConfigToClipboard(profile)
-            } label: {
-                Image(systemName: "doc.on.doc")
+            Button(action: onToggle) {
+                Image(systemName: isConnected ? "power.circle.fill" : "power.circle")
+                    .font(.system(size: 18))
+                    .foregroundStyle(isConnected ? Color.green : Color.primary.opacity(0.5))
             }
             .buttonStyle(.plain)
-            .help("Copy config")
-
-            Button {
-                onDeleteTapped()
-            } label: {
-                Image(systemName: "trash")
-                    .foregroundStyle(.red)
-            }
-            .buttonStyle(.plain)
-            .help("Delete profile")
+            .help(isConnected ? "Turn off" : "Turn on")
         }
     }
 
@@ -374,7 +423,7 @@ struct ProfilesView: View {
     }
 
     private func connectSelectedProfile() async {
-        await appState.connectSelectedProfile(rules: appRuleStore.rules)
+        await appState.connectSelectedProfile()
     }
 
     private func copyProfileConfigToClipboard(_ profile: WireGuardProfile) {
@@ -432,5 +481,62 @@ struct ProfilesView: View {
             profileStore.add(profile)
         }
     }
+
+    private func showCopiedToast() {
+        let label = NSTextField(labelWithString: "Config copied to clipboard")
+        label.font = .systemFont(ofSize: 13)
+        label.textColor = .labelColor
+        label.translatesAutoresizingMaskIntoConstraints = false
+
+        let container = NSView()
+        container.wantsLayer = true
+        container.layer?.backgroundColor = NSColor.windowBackgroundColor.cgColor
+        container.layer?.cornerRadius = 8
+        container.layer?.borderWidth = 0.5
+        container.layer?.borderColor = NSColor.separatorColor.cgColor
+        container.addSubview(label)
+        NSLayoutConstraint.activate([
+            label.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 12),
+            label.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -12),
+            label.topAnchor.constraint(equalTo: container.topAnchor, constant: 8),
+            label.bottomAnchor.constraint(equalTo: container.bottomAnchor, constant: -8),
+        ])
+
+        let panel = NSPanel(
+            contentRect: .zero,
+            styleMask: [.nonactivatingPanel, .borderless],
+            backing: .buffered,
+            defer: false
+        )
+        panel.isOpaque = false
+        panel.backgroundColor = .clear
+        panel.hasShadow = true
+        panel.level = .floating
+        panel.contentView = container
+
+        let size = label.intrinsicContentSize
+        let panelSize = NSSize(width: size.width + 24, height: size.height + 16)
+        let mouse = NSEvent.mouseLocation
+        let origin = NSPoint(x: mouse.x - panelSize.width / 2, y: mouse.y + 12)
+        panel.setFrame(NSRect(origin: origin, size: panelSize), display: false)
+        panel.orderFront(nil)
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.8) {
+            NSAnimationContext.runAnimationGroup { ctx in
+                ctx.duration = 0.2
+                panel.animator().alphaValue = 0
+            } completionHandler: {
+                panel.orderOut(nil)
+            }
+        }
+    }
+}
+
+private var menuItemTargetKey: UInt8 = 0
+
+private final class MenuItemActionTarget: NSObject {
+    let action: () -> Void
+    init(action: @escaping () -> Void) { self.action = action }
+    @objc func invoke() { action() }
 }
 

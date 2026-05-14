@@ -41,6 +41,7 @@ final class MenuBarController: NSObject, ObservableObject, NSMenuDelegate {
     private var canEnableAppTunnelRouting = false
     private var vpnShowsAsOn = false
     private var destinationFilterSummary: String?
+    private var showTrafficRates = true
     private var appStateCancellable: AnyCancellable?
 
     /// Asset name: `TunnelBahn/Resources/Assets.xcassets/MenuBarTunnel.imageset`
@@ -94,7 +95,8 @@ final class MenuBarController: NSObject, ObservableObject, NSMenuDelegate {
         tunnelModeLabel: String,
         routingMode: AppSettings.RoutingMode,
         canEnableAppTunnelRouting: Bool,
-        destinationFilterSummary: String? = nil
+        destinationFilterSummary: String? = nil,
+        showTrafficRates: Bool = true
     ) {
         let previousState = currentState
         currentState = connectionState
@@ -107,6 +109,7 @@ final class MenuBarController: NSObject, ObservableObject, NSMenuDelegate {
         self.routingMode = routingMode
         self.canEnableAppTunnelRouting = canEnableAppTunnelRouting
         self.destinationFilterSummary = destinationFilterSummary
+        self.showTrafficRates = showTrafficRates
         vpnShowsAsOn = Self.vpnIsActive(connectionState)
         if previousState != connectionState {
             debugLog("update connection state=\(connectionState.rawValue)")
@@ -334,7 +337,7 @@ final class MenuBarController: NSObject, ObservableObject, NSMenuDelegate {
             items.append(destItem)
         }
 
-        if currentState == .connected || currentState == .reconnecting {
+        if showTrafficRates, currentState == .connected || currentState == .reconnecting {
             let ratesItem = NSMenuItem(
                 title: "↑ \(formatRate(currentTxRate))  ↓ \(formatRate(currentRxRate))",
                 action: nil,
@@ -472,6 +475,7 @@ final class MenuBarController: NSObject, ObservableObject, NSMenuDelegate {
     }
 
     private func statusBarRatesTitle() -> String {
+        guard showTrafficRates else { return "" }
         guard currentState == .connected || currentState == .reconnecting else { return "" }
         return "\(formatRate(currentTxRate)) ↑\n\(formatRate(currentRxRate)) ↓"
     }

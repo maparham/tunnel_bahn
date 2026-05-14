@@ -13,10 +13,39 @@ struct RoutingView: View {
     @State private var importError: String?
     @State private var lastImportSummary: String?
     @State private var bulkPrefixBrowse: BulkPrefixBrowsePayload?
+    private var bulkListsEnabled: Bool { appState.settings.destinationBulkListsEnabled }
+    private var customRangesEnabled: Bool { appState.settings.destinationCustomRangesEnabled }
+    private var domainNamesEnabled: Bool { appState.settings.destinationDomainNamesEnabled }
+
+    private var bulkListsEnabledBinding: Binding<Bool> {
+        Binding(get: { appState.settings.destinationBulkListsEnabled },
+                set: { appState.settings.destinationBulkListsEnabled = $0 })
+    }
+    private var customRangesEnabledBinding: Binding<Bool> {
+        Binding(get: { appState.settings.destinationCustomRangesEnabled },
+                set: { appState.settings.destinationCustomRangesEnabled = $0 })
+    }
+    private var domainNamesEnabledBinding: Binding<Bool> {
+        Binding(get: { appState.settings.destinationDomainNamesEnabled },
+                set: { appState.settings.destinationDomainNamesEnabled = $0 })
+    }
 
     /// Shown as the macOS tooltip on the bulk-lists info icon (Import… and Paste List share one parser).
     private static let bulkListsImportPasteHelpText =
         "Plain UTF-8: IPv4/IPv6 CIDRs, one per line or comma-separated on a line. Lines starting with # are comments. Invalid tokens and duplicates are skipped."
+
+    private static let allDestinationsTooltip =
+        "All network traffic is routed through the VPN regardless of destination."
+
+    private static let selectedDestinationsTooltip =
+        "Only traffic to the CIDRs and domains you configure below is routed through the VPN."
+
+    private static let customRangesTooltip =
+        "Manually enter individual IPv4/IPv6 CIDRs (e.g. 10.0.0.0/8). Only traffic to these ranges is routed through the VPN when destination filtering is on."
+
+    private static let domainNamesTooltip =
+        "Enter domain names (e.g. x.com). Their IP addresses are resolved at connect time and treated as destination CIDRs. Re-resolved every 30 seconds."
+
 
     /// Destination routing is snapshotted to the extension; avoid mid-session edits (reconnect to apply changes).
     private var destinationRoutingEditingLocked: Bool {
@@ -28,8 +57,15 @@ struct RoutingView: View {
         }
     }
 
-    /// True when at least one destination entry exists and is enabled.
+    /// True when at least one destination entry exists, is enabled, and its section is turned on.
     private var hasAnyDestinations: Bool {
+        (customRangesEnabled && appState.destinationRuleStore.customRules.contains(where: \.isEnabled))
+            || (bulkListsEnabled && appState.destinationRuleStore.bulkGroups.contains(where: \.isEnabled))
+            || (domainNamesEnabled && appState.destinationRuleStore.domainRules.contains(where: \.isEnabled))
+    }
+
+    /// True when enabled rules exist in any section regardless of section toggles.
+    private var hasAnyRulesIgnoringSectionToggles: Bool {
         appState.destinationRuleStore.customRules.contains(where: \.isEnabled)
             || appState.destinationRuleStore.bulkGroups.contains(where: \.isEnabled)
             || appState.destinationRuleStore.domainRules.contains(where: \.isEnabled)
@@ -84,34 +120,50 @@ struct RoutingView: View {
         }
     }
 
-    /// Grouped card for the enforce toggle — avoids `Form` stretching or odd split-view vertical centering when paired with `.fixedSize`.
+    private var destinationFilteringBinding: Binding<Bool> {
+        Binding(
+            get: { appState.settings.enforceDestinationFiltering },
+            set: { newValue in
+                if newValue && !hasAnyDestinations { return }
+                appState.settings.enforceDestinationFiltering = newValue
+            }
+        )
+    }
+
+    /// Grouped card for the routing radio buttons.
     private func restrictProxySection() -> some View {
         GroupBox {
             VStack(alignment: .leading, spacing: 10) {
-                HStack(spacing: 10) {
-                    Toggle(isOn: Binding(
-                        get: { appState.settings.enforceDestinationFiltering },
-                        set: { newValue in
-                            if newValue && !hasAnyDestinations { return }
-                            appState.settings.enforceDestinationFiltering = newValue
-                        }
-                    )) {
-                        Text("Destination Routing")
-                            .font(.headline)
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack(spacing: 6) {
+                        RadioButton(
+                            isOn: !appState.settings.enforceDestinationFiltering,
+                            label: "Tunnel all destinations",
+                            disabled: destinationRoutingEditingLocked
+                        ) { destinationFilteringBinding.wrappedValue = false }
+                        Image(systemName: "info.circle")
+                            .foregroundStyle(.secondary)
+                            .instantTooltip(Self.allDestinationsTooltip)
                     }
-                    .toggleStyle(.switch)
-                    .help(
-                        destinationRoutingEditingLocked
-                            ? "Disconnect the VPN to change destination routing."
-                            : "Toggle destination CIDR filtering for proxied TCP flows."
-                    )
-                    .disabled(destinationRoutingEditingLocked || !hasAnyDestinations)
-
-                    if !hasAnyDestinations {
-                        Label("Add destination IPs or CIDRs below to enable this feature.", systemImage: "info.circle.fill")
+                    HStack(spacing: 6) {
+                        RadioButton(
+                            isOn: appState.settings.enforceDestinationFiltering,
+                            label: "Tunnel selected destinations",
+                            disabled: destinationRoutingEditingLocked || !hasAnyDestinations
+                        ) { destinationFilteringBinding.wrappedValue = true }
+                        Image(systemName: "info.circle")
+                            .foregroundStyle(.secondary)
+                            .instantTooltip(Self.selectedDestinationsTooltip)
+                        if !hasAnyDestinations {
+                            Label(
+                                hasAnyRulesIgnoringSectionToggles
+                                    ? "Enable a section below to activate destination filtering."
+                                    : "Add destination IPs or CIDRs below to enable.",
+                                systemImage: "info.circle.fill"
+                            )
                             .font(.footnote)
                             .foregroundStyle(.blue)
-                            .fixedSize(horizontal: false, vertical: true)
+                        }
                     }
                 }
 
@@ -137,7 +189,7 @@ struct RoutingView: View {
             .imageScale(.small)
             .foregroundStyle(.secondary)
             .accessibilityLabel("Bulk import and paste format")
-            .help(Self.bulkListsImportPasteHelpText)
+            .instantTooltip(Self.bulkListsImportPasteHelpText)
     }
 
     @ViewBuilder
@@ -152,11 +204,14 @@ struct RoutingView: View {
                     Button("Import…") {
                         importCidrFromFile()
                     }
-                    .disabled(controlsDisabled)
+                    .disabled(controlsDisabled || !bulkListsEnabled)
                     Button("Paste List") {
                         importCidrFromPasteboard()
                     }
-                    .disabled(controlsDisabled)
+                    .disabled(controlsDisabled || !bulkListsEnabled)
+                    Toggle("", isOn: bulkListsEnabledBinding)
+                        .toggleStyle(.switch)
+                        .labelsHidden()
                 }
 
                 VStack(alignment: .leading, spacing: 8) {
@@ -167,7 +222,7 @@ struct RoutingView: View {
                         ForEach(appState.destinationRuleStore.bulkGroups) { group in
                             DestinationCidrBulkGroupRow(
                                 groupID: group.id,
-                                controlsDisabled: controlsDisabled,
+                                controlsDisabled: controlsDisabled || !bulkListsEnabled,
                                 onBrowse: {
                                     bulkPrefixBrowse = BulkPrefixBrowsePayload(
                                         id: group.id,
@@ -188,6 +243,7 @@ struct RoutingView: View {
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
+                .opacity(bulkListsEnabled ? 1 : 0.4)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.vertical, 4)
@@ -205,23 +261,34 @@ struct RoutingView: View {
                     HStack(alignment: .firstTextBaseline, spacing: 6) {
                         Text("Custom ranges")
                             .font(.headline)
-                        Spacer(minLength: 0)
-                    }
-
-                    if appState.destinationRuleStore.customRules.isEmpty {
-                        Text("No custom ranges yet.")
+                        Image(systemName: "info.circle")
+                            .font(.body)
+                            .imageScale(.small)
                             .foregroundStyle(.secondary)
-                    } else {
-                        ForEach(appState.destinationRuleStore.customRules) { rule in
-                            DestinationCidrRuleRow(
-                                ruleID: rule.id,
-                                controlsDisabled: controlsDisabled
-                            )
-                            .environmentObject(appState)
-                        }
+                            .instantTooltip(Self.customRangesTooltip)
+                        Spacer(minLength: 0)
+                        Toggle("", isOn: customRangesEnabledBinding)
+                            .toggleStyle(.switch)
+                            .labelsHidden()
                     }
 
-                    addRow()
+                    Group {
+                        if appState.destinationRuleStore.customRules.isEmpty {
+                            Text("No custom ranges yet.")
+                                .foregroundStyle(.secondary)
+                        } else {
+                            ForEach(appState.destinationRuleStore.customRules) { rule in
+                                DestinationCidrRuleRow(
+                                    ruleID: rule.id,
+                                    controlsDisabled: controlsDisabled || !customRangesEnabled
+                                )
+                                .environmentObject(appState)
+                            }
+                        }
+
+                        addRow(sectionEnabled: customRangesEnabled)
+                    }
+                    .opacity(customRangesEnabled ? 1 : 0.4)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.vertical, 4)
@@ -239,8 +306,9 @@ struct RoutingView: View {
         .padding(.bottom, 8)
     }
 
-    private func addRow() -> some View {
-        VStack(alignment: .leading, spacing: 4) {
+    private func addRow(sectionEnabled: Bool = true) -> some View {
+        let disabled = controlsDisabled || !sectionEnabled
+        return VStack(alignment: .leading, spacing: 4) {
             HStack {
                 TextField("", text: $newCidrDraft)
                     .textFieldStyle(.roundedBorder)
@@ -249,13 +317,13 @@ struct RoutingView: View {
                     .onChange(of: newCidrDraft) { _, _ in
                         lastAddRejected = false
                     }
-                    .disabled(controlsDisabled)
+                    .disabled(disabled)
 
                 Button("Add") {
                     commitDraft()
                 }
                 .disabled(
-                    controlsDisabled
+                    disabled
                         || newCidrDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                 )
             }
@@ -332,6 +400,11 @@ struct RoutingView: View {
                     HStack(alignment: .firstTextBaseline, spacing: 6) {
                         Text("Domain names")
                             .font(.headline)
+                        Image(systemName: "info.circle")
+                            .font(.body)
+                            .imageScale(.small)
+                            .foregroundStyle(.secondary)
+                            .instantTooltip(Self.domainNamesTooltip)
                         Spacer(minLength: 0)
                         if !appState.destinationRuleStore.domainRules.isEmpty {
                             Button { confirmDeleteAllDomains = true } label: {
@@ -339,9 +412,12 @@ struct RoutingView: View {
                                     .imageScale(.small)
                             }
                             .buttonStyle(.borderless)
-                            .help("Remove all domains")
-                            .disabled(controlsDisabled)
+                            .instantTooltip("Remove all domains")
+                            .disabled(controlsDisabled || !domainNamesEnabled)
                         }
+                        Toggle("", isOn: domainNamesEnabledBinding)
+                            .toggleStyle(.switch)
+                            .labelsHidden()
                     }
                     .confirmationDialog("Remove all domains?", isPresented: $confirmDeleteAllDomains) {
                         Button("Remove All", role: .destructive) {
@@ -349,53 +425,52 @@ struct RoutingView: View {
                         }
                     }
 
-                    if appState.destinationRuleStore.domainRules.isEmpty {
-                        Text("No domains yet.")
-                            .foregroundStyle(.secondary)
-                    } else {
-                        ForEach(appState.destinationRuleStore.domainRules) { rule in
-                            DestinationDomainRuleRow(ruleID: rule.id, controlsDisabled: controlsDisabled) {
-                                bulkPrefixBrowse = BulkPrefixBrowsePayload(
-                                    id: rule.id,
-                                    title: rule.domain,
-                                    cidrs: rule.resolvedCidrs
-                                )
+                    Group {
+                        if appState.destinationRuleStore.domainRules.isEmpty {
+                            Text("No domains yet.")
+                                .foregroundStyle(.secondary)
+                        } else {
+                            ForEach(appState.destinationRuleStore.domainRules) { rule in
+                                DestinationDomainRuleRow(ruleID: rule.id, controlsDisabled: controlsDisabled || !domainNamesEnabled) {
+                                    bulkPrefixBrowse = BulkPrefixBrowsePayload(
+                                        id: rule.id,
+                                        title: rule.domain,
+                                        cidrs: rule.resolvedCidrs
+                                    )
+                                }
+                                .environmentObject(appState)
                             }
-                            .environmentObject(appState)
                         }
-                    }
 
-                    domainAddRow()
+                        domainAddRow(sectionEnabled: domainNamesEnabled)
+                    }
+                    .opacity(domainNamesEnabled ? 1 : 0.4)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.vertical, 4)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
 
-            Text("Domain names are resolved to IP addresses and merged into the routing list. CDN domains and shared IPs may match unintended destinations. In full-tunnel mode, domain entries affect filtering policy but do not change which traffic exits the tunnel.")
-                .font(.footnote)
-                .foregroundStyle(.secondary)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.top, 4)
         }
         .padding(.horizontal, 16)
         .padding(.top, 10)
         .padding(.bottom, 8)
     }
 
-    private func domainAddRow() -> some View {
-        VStack(alignment: .leading, spacing: 4) {
+    private func domainAddRow(sectionEnabled: Bool = true) -> some View {
+        let disabled = controlsDisabled || !sectionEnabled
+        return VStack(alignment: .leading, spacing: 4) {
             HStack {
                 TextField("e.g. x.com", text: $newDomainDraft)
                     .textFieldStyle(.roundedBorder)
                     .accessibilityLabel("Domain name")
                     .onSubmit { commitDomainDraft() }
                     .onChange(of: newDomainDraft) { _, _ in lastDomainAddRejected = false }
-                    .disabled(controlsDisabled)
+                    .disabled(disabled)
 
                 Button("Add") { commitDomainDraft() }
                     .disabled(
-                        controlsDisabled ||
+                        disabled ||
                         newDomainDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                     )
             }
@@ -573,7 +648,7 @@ private struct DestinationCidrBulkGroupRow: View {
                         Text(storedTitle)
                             .font(.body)
                             .lineLimit(1)
-                            .help("Double-click to rename")
+                            .instantTooltip("Double-click to rename")
                             .onTapGesture(count: 2) { beginTitleEdit() }
 
                         Button(action: beginTitleEdit) {
@@ -583,7 +658,7 @@ private struct DestinationCidrBulkGroupRow: View {
                                 .foregroundStyle(.secondary)
                         }
                         .buttonStyle(.plain)
-                        .help("Edit list name")
+                        .instantTooltip("Edit list name")
                         .accessibilityLabel("Edit list name")
                         .disabled(controlsDisabled)
                     }
@@ -608,14 +683,14 @@ private struct DestinationCidrBulkGroupRow: View {
                 Image(systemName: "eye")
             }
             .buttonStyle(.borderless)
-            .help("View prefixes")
+            .instantTooltip("View prefixes")
             .disabled(controlsDisabled || storedGroup() == nil)
 
             Button { confirmDelete = true } label: {
                 Image(systemName: "xmark")
             }
             .buttonStyle(.borderless)
-            .help("Remove this bulk list")
+            .instantTooltip("Remove this bulk list")
             .disabled(controlsDisabled)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -705,7 +780,7 @@ private struct DestinationCidrRuleRow: View {
                 Image(systemName: "xmark")
             }
             .buttonStyle(.borderless)
-            .help("Remove this range")
+            .instantTooltip("Remove this range")
             .disabled(controlsDisabled)
         }
         .padding(.vertical, 2)
@@ -787,14 +862,14 @@ private struct DestinationDomainRuleRow: View {
                 Image(systemName: "eye")
             }
             .buttonStyle(.borderless)
-            .help("View resolved IPs")
+            .instantTooltip("View resolved IPs")
             .disabled(rule()?.resolvedCidrs.isEmpty ?? true)
 
             Button { confirmDelete = true } label: {
                 Image(systemName: "xmark")
             }
             .buttonStyle(.borderless)
-            .help("Remove this domain")
+            .instantTooltip("Remove this domain")
             .disabled(controlsDisabled)
         }
         .padding(.vertical, 2)

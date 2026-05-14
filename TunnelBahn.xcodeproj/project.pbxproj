@@ -19,6 +19,7 @@
 		DD0003AABBCCDD1122334405 /* DomainResolutionCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD0003AABBCCDD1122334406 /* DomainResolutionCoordinator.swift */; };
 		07BF22AABBCCDD11223344CC /* DestinationRuleStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 07BF22AABBCCDD11223344DD /* DestinationRuleStore.swift */; };
 		07BF33AABBCCDD11223344EE /* RoutingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 07BF33AABBCCDD11223344FF /* RoutingView.swift */; };
+		A1B2C3D4E5F60011AABBCCDD /* InstantTooltip.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60011AABBCCEE /* InstantTooltip.swift */; };
 		09BD4C6EA2737467C4AFA12E /* StatusView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F86BBF39930242EB8FF86F54 /* StatusView.swift */; };
 		0B228C6ED6D1928E3D540EDC /* TCPFlowRelay.swift in Sources */ = {isa = PBXBuildFile; fileRef = F353E3CB30DD269B8D220A2E /* TCPFlowRelay.swift */; };
 		0E304F12798C57930DC3DB52 /* EndpointBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8108BE3F731F12F6601FB84C /* EndpointBridge.swift */; };
@@ -33,7 +34,6 @@
 		33CC44DD55EE66FF77AA88BB /* ExtensionResourceStats.swift in Sources */ = {isa = PBXBuildFile; fileRef = E7D8A91B2C3D4E5F60718293 /* ExtensionResourceStats.swift */; };
 		34BA9126A5908F090CAC52A6 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5AF7FE9FDDCD675A8CF2918D /* SettingsView.swift */; };
 		3912BB21FF77CDAAAFC2F866 /* TunnelBahnApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1D0773D7DA0C4899C2FB05D9 /* TunnelBahnApp.swift */; };
-		3EA593950168D4BEF7A874A7 /* DiagnosticsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6EA59D18EF9A8788514029B0 /* DiagnosticsView.swift */; };
 		3FF08897B094FB314A2576AE /* AppRule.swift in Sources */ = {isa = PBXBuildFile; fileRef = C6AEA83BAE6A6F9B4EFA66D3 /* AppRule.swift */; };
 		40F4EA71AC35412ED35A962A /* PerAppTransferStats.swift in Sources */ = {isa = PBXBuildFile; fileRef = F463C60E2BBFEA611BE9243A /* PerAppTransferStats.swift */; };
 		428F287EAFBF9878D30436DC /* KeychainService.swift in Sources */ = {isa = PBXBuildFile; fileRef = B8E4AA7BE0C447E51BE149BC /* KeychainService.swift */; };
@@ -138,6 +138,7 @@
 		DD0003AABBCCDD1122334406 /* DomainResolutionCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DomainResolutionCoordinator.swift; sourceTree = "<group>"; };
 		07BF22AABBCCDD11223344DD /* DestinationRuleStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DestinationRuleStore.swift; sourceTree = "<group>"; };
 		07BF33AABBCCDD11223344FF /* RoutingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RoutingView.swift; sourceTree = "<group>"; };
+		A1B2C3D4E5F60011AABBCCEE /* InstantTooltip.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InstantTooltip.swift; sourceTree = "<group>"; };
 		132EDEF0EA68675638E19645 /* WireGuardConfigParser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WireGuardConfigParser.swift; sourceTree = "<group>"; };
 		147A18331F2C2E8D4BE615DC /* ConnectionStats.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectionStats.swift; sourceTree = "<group>"; };
 		1D0773D7DA0C4899C2FB05D9 /* TunnelBahnApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TunnelBahnApp.swift; sourceTree = "<group>"; };
@@ -158,7 +159,6 @@
 		6D9A4FB22EE531616E707012 /* LaunchAtLoginService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LaunchAtLoginService.swift; sourceTree = "<group>"; };
 		6DCB83B1688B1EF965FFC092 /* TransparentProxyExtension.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = TransparentProxyExtension.entitlements; sourceTree = "<group>"; };
 		6DF2B41F806A433B201BFFDA /* ProfileEditorSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProfileEditorSheet.swift; sourceTree = "<group>"; };
-		6EA59D18EF9A8788514029B0 /* DiagnosticsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiagnosticsView.swift; sourceTree = "<group>"; };
 		7758E4B01EF07FE4AFE8EA1C /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		7A326E604708829F35A2C2FE /* AppGroup.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppGroup.swift; sourceTree = "<group>"; };
 		804194AB9838F944A7CD9DD5 /* PerAppTransferStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PerAppTransferStore.swift; sourceTree = "<group>"; };
@@ -229,12 +229,12 @@
 			children = (
 				5D12CC90B02F8E0E071FEEB3 /* AppsView.swift */,
 				8C066CA526386F398EAAD416 /* ContentView.swift */,
-				6EA59D18EF9A8788514029B0 /* DiagnosticsView.swift */,
-				B3B3A483CAA076196A178605 /* ProfileDetailView.swift */,
+					B3B3A483CAA076196A178605 /* ProfileDetailView.swift */,
 				6DF2B41F806A433B201BFFDA /* ProfileEditorSheet.swift */,
 				C101AA2BA46E11A0A4EC93C3 /* ProfilesView.swift */,
 				F1A2B3C4D5E6F7A8B9C0D1E3 /* ProfileListView.swift */,
 				07BF33AABBCCDD11223344FF /* RoutingView.swift */,
+				A1B2C3D4E5F60011AABBCCEE /* InstantTooltip.swift */,
 				5AF7FE9FDDCD675A8CF2918D /* SettingsView.swift */,
 				F86BBF39930242EB8FF86F54 /* StatusView.swift */,
 			);
@@ -562,8 +562,7 @@
 				2A3981ACBD6448C3B6161E9D /* Constants.swift in Sources */,
 				07BF00AABBCCDD1122334499 /* DestinationRouting.swift in Sources */,
 				7F6E967524842A75F4E177EA /* ContentView.swift in Sources */,
-				3EA593950168D4BEF7A874A7 /* DiagnosticsView.swift in Sources */,
-				428F287EAFBF9878D30436DC /* KeychainService.swift in Sources */,
+					428F287EAFBF9878D30436DC /* KeychainService.swift in Sources */,
 				A685DC94E4525F366418659B /* LaunchAtLoginService.swift in Sources */,
 				B7B011C8DBC55ABB5B06F53D /* MenuBarController.swift in Sources */,
 				AF818DB11B0B8DC2DE23EE6C /* NEAppRuleBuilder.swift in Sources */,
@@ -585,6 +584,7 @@
 				A19F882B4C3D5E6F708192A1 /* ReverseDNSResolver.swift in Sources */,
 				CC563120D4B12D5595010390 /* RoutingAction.swift in Sources */,
 				07BF33AABBCCDD11223344EE /* RoutingView.swift in Sources */,
+				A1B2C3D4E5F60011AABBCCDD /* InstantTooltip.swift in Sources */,
 				34BA9126A5908F090CAC52A6 /* SettingsView.swift in Sources */,
 				09BD4C6EA2737467C4AFA12E /* StatusView.swift in Sources */,
 				3912BB21FF77CDAAAFC2F866 /* TunnelBahnApp.swift in Sources */,

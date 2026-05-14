@@ -46,6 +46,9 @@ final class BoringTunAdapter: @unchecked Sendable {
     /// Updated on `packetQueue` only.
     private var udpRxBytesTotal: UInt64 = 0
     private var udpTxBytesTotal: UInt64 = 0
+    /// Wall-clock time of the most recent successfully decrypted inbound packet.
+    /// Updated on `packetQueue` only.
+    private var lastInboundAt: Date?
 
     /// Scratch buffer reused on `packetQueue` only (BoringTun needs ~64 KiB for reads).
     private var scratch = [UInt8](repeating: 0, count: 65536)
@@ -114,6 +117,7 @@ final class BoringTunAdapter: @unchecked Sendable {
         tunnelIOStarted = false
         udpRxBytesTotal = 0
         udpTxBytesTotal = 0
+        lastInboundAt = nil
         let allAllowedIPs = profile.peers.flatMap { $0.allowedIPs }
         let hasV4Default = allAllowedIPs.contains("0.0.0.0/0")
         let hasV6Default = allAllowedIPs.contains("::/0")
@@ -164,7 +168,7 @@ final class BoringTunAdapter: @unchecked Sendable {
         let snapshot = await withCheckedContinuation { continuation in
             packetQueue.async { [weak self] in
                 guard let self else {
-                    continuation.resume(returning: (running: false, tunnel: false, state: NWUDPSessionState.cancelled, rx: UInt64(0), tx: UInt64(0)))
+                    continuation.resume(returning: (running: false, tunnel: false, state: NWUDPSessionState.cancelled, rx: UInt64(0), tx: UInt64(0), lastHandshake: Optional<Date>.none))
                     return
                 }
                 continuation.resume(
@@ -173,12 +177,14 @@ final class BoringTunAdapter: @unchecked Sendable {
                         tunnel: self.tunnel != nil,
                         state: self.udpSession?.state ?? .cancelled,
                         rx: self.udpRxBytesTotal,
-                        tx: self.udpTxBytesTotal
+                        tx: self.udpTxBytesTotal,
+                        lastHandshake: self.lastInboundAt
                     )
                 )
             }
         }
 
+        let lastInboundUnix = snapshot.lastHandshake.map { UInt64($0.timeIntervalSince1970 * 1000) } ?? 0
         return """
         backend=BoringTun (tunnelbahn_wg FFI)
         running=\(snapshot.running)
@@ -186,6 +192,7 @@ final class BoringTunAdapter: @unchecked Sendable {
         udp=\(snapshot.state)
         rx_bytes=\(snapshot.rx)
         tx_bytes=\(snapshot.tx)
+        last_inbound_unix=\(lastInboundUnix)
         """
     }
 
@@ -313,8 +320,10 @@ final class BoringTunAdapter: @unchecked Sendable {
 
         switch res.op {
         case UInt32(TUNNELBAHN_WG_WRITE_TO_TUNNEL_IPV4):
+            lastInboundAt = Date()
             deliverToPacketFlow(ipPacket: Data(scratch.prefix(Int(res.size))), protocolFamily: AF_INET)
         case UInt32(TUNNELBAHN_WG_WRITE_TO_TUNNEL_IPV6):
+            lastInboundAt = Date()
             deliverToPacketFlow(ipPacket: Data(scratch.prefix(Int(res.size))), protocolFamily: AF_INET6)
         case UInt32(TUNNELBAHN_WG_DONE):
             break

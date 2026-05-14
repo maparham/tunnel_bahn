@@ -3,10 +3,81 @@ import AppKit
 
 private let dragType = NSPasteboard.PasteboardType("com.tunnelbahn.profile-id")
 
+private final class SelectOnRightClickTableView: NSTableView {
+    var menuProvider: ((Int) -> NSMenu?)?
+    private var hoveredRow: Int = -1
+    private var hoverTrackingArea: NSTrackingArea?
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let existing = hoverTrackingArea {
+            removeTrackingArea(existing)
+        }
+        let area = NSTrackingArea(
+            rect: bounds,
+            options: [.mouseEnteredAndExited, .mouseMoved, .activeInKeyWindow, .inVisibleRect],
+            owner: self,
+            userInfo: nil
+        )
+        addTrackingArea(area)
+        hoverTrackingArea = area
+    }
+
+    override func mouseMoved(with event: NSEvent) {
+        super.mouseMoved(with: event)
+        updateHoveredRow(for: event)
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        super.mouseEntered(with: event)
+        updateHoveredRow(for: event)
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        super.mouseExited(with: event)
+        setHoveredRow(-1)
+    }
+
+    private func updateHoveredRow(for event: NSEvent) {
+        let point = convert(event.locationInWindow, from: nil)
+        setHoveredRow(row(at: point))
+    }
+
+    private func setHoveredRow(_ row: Int) {
+        guard row != hoveredRow else { return }
+        let old = hoveredRow
+        hoveredRow = row
+        for r in [old, row] where r >= 0 {
+            (rowView(atRow: r, makeIfNecessary: false) as? ProfileRowView)?.isHovered = (r == row)
+        }
+    }
+
+    override func menu(for event: NSEvent) -> NSMenu? {
+        let point = convert(event.locationInWindow, from: nil)
+        let row = self.row(at: point)
+        guard row >= 0 else { return nil }
+        if !selectedRowIndexes.contains(row) {
+            selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
+        }
+        return menuProvider?(row)
+    }
+}
+
 private final class ProfileRowView: NSTableRowView {
+    var isHovered: Bool = false {
+        didSet { if oldValue != isHovered { setNeedsDisplay(bounds) } }
+    }
+
     override var isEmphasized: Bool {
         get { false }
         set {}
+    }
+
+    override func drawBackground(in dirtyRect: NSRect) {
+        if isHovered && !isSelected {
+            NSColor.controlAccentColor.withAlphaComponent(0.07).setFill()
+            NSBezierPath(rect: bounds).fill()
+        }
     }
 
     override func drawSelection(in dirtyRect: NSRect) {
@@ -18,16 +89,18 @@ private final class ProfileRowView: NSTableRowView {
 struct ProfileListView: NSViewRepresentable {
     let profiles: [WireGuardProfile]
     let selectedProfileID: UUID?
+    let connectedProfileID: UUID?
     let onSelect: (UUID) -> Void
     let onMove: (IndexSet, Int) -> Void
     let rowContent: (WireGuardProfile) -> NSView
+    let onContextMenu: (WireGuardProfile) -> NSMenu
 
     func makeCoordinator() -> Coordinator {
         Coordinator(self)
     }
 
     func makeNSView(context: Context) -> NSScrollView {
-        let tableView = NSTableView()
+        let tableView = SelectOnRightClickTableView()
         tableView.delegate = context.coordinator
         tableView.dataSource = context.coordinator
         tableView.headerView = nil
@@ -44,6 +117,11 @@ struct ProfileListView: NSViewRepresentable {
         tableView.registerForDraggedTypes([dragType])
         tableView.setDraggingSourceOperationMask(.move, forLocal: true)
 
+        let coordinator = context.coordinator
+        tableView.menuProvider = { row in
+            coordinator.menuForRow(row)
+        }
+
         context.coordinator.tableView = tableView
 
         let scroll = NSScrollView()
@@ -55,15 +133,18 @@ struct ProfileListView: NSViewRepresentable {
     }
 
     func updateNSView(_ scrollView: NSScrollView, context: Context) {
-        let tableView = scrollView.documentView as! NSTableView
+        guard let tableView = scrollView.documentView as? NSTableView else { return }
         context.coordinator.parent = self
 
         let newIDs = profiles.map(\.id)
         let newNames = profiles.map(\.name)
 
-        if context.coordinator.profileIDs != newIDs || context.coordinator.profileNames != newNames {
+        if context.coordinator.profileIDs != newIDs
+            || context.coordinator.profileNames != newNames
+            || context.coordinator.connectedProfileID != connectedProfileID {
             context.coordinator.profileIDs = newIDs
             context.coordinator.profileNames = newNames
+            context.coordinator.connectedProfileID = connectedProfileID
             context.coordinator.cachedViews = profiles.map { rowContent($0) }
             tableView.reloadData()
         }
@@ -85,9 +166,15 @@ struct ProfileListView: NSViewRepresentable {
         var cachedViews: [NSView] = []
         var profileIDs: [UUID] = []
         var profileNames: [String] = []
+        var connectedProfileID: UUID? = nil
 
         init(_ parent: ProfileListView) {
             self.parent = parent
+        }
+
+        func menuForRow(_ row: Int) -> NSMenu? {
+            guard row >= 0, row < parent.profiles.count else { return nil }
+            return parent.onContextMenu(parent.profiles[row])
         }
 
         func numberOfRows(in tableView: NSTableView) -> Int {

@@ -38,7 +38,11 @@ private struct MenuBarRefreshInputs: Equatable {
         let state = appState.vpnManager.stats.state
         guard state == .connected || state == .reconnecting else { return nil }
         guard appState.settings.enforceDestinationFiltering else { return nil }
-        let cidrs = appState.destinationRuleStore.enabledFlattenedCidrs()
+        let cidrs = appState.destinationRuleStore.enabledFlattenedCidrs(
+                customRangesEnabled: appState.settings.destinationCustomRangesEnabled,
+                bulkListsEnabled: appState.settings.destinationBulkListsEnabled,
+                domainNamesEnabled: appState.settings.destinationDomainNamesEnabled
+            )
             .filter { !IPCIDRMatcher.prepare([$0]).isEmpty }
         if cidrs.isEmpty {
             return "Dest filter (no valid ranges)"
@@ -152,12 +156,17 @@ struct TunnelBahnApp: App {
             return
         }
         appState.profileStore.select(id: profileID)
+        appState.prepareLiveRoutingForConnect(profileID: profile.id)
         traceLog("connect using profile=\(profile.name)")
         await appState.domainResolutionCoordinator.resolveAllAndWait()
         await appState.vpnManager.connect(
             profile: profile,
             rules: appState.appRuleStore.rules,
-            destinationCidrStrings: appState.destinationRuleStore.enabledFlattenedCidrs()
+            destinationCidrStrings: appState.destinationRuleStore.enabledFlattenedCidrs(
+                customRangesEnabled: appState.settings.destinationCustomRangesEnabled,
+                bulkListsEnabled: appState.settings.destinationBulkListsEnabled,
+                domainNamesEnabled: appState.settings.destinationDomainNamesEnabled
+            )
         )
     }
 
@@ -192,7 +201,8 @@ struct TunnelBahnApp: App {
             tunnelModeLabel: modeLabel,
             routingMode: appState.settings.routingMode,
             canEnableAppTunnelRouting: canEnableAppTunnelRouting,
-            destinationFilterSummary: menuInputs.destinationFilterMenuSummary
+            destinationFilterSummary: menuInputs.destinationFilterMenuSummary,
+            showTrafficRates: appState.settings.showTrafficRates
         )
         menuBarController.updateProfiles(
             appState.profileStore.profiles,

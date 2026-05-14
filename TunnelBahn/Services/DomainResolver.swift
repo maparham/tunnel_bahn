@@ -147,7 +147,7 @@ private final class DNSQueryContext {
             DNSServiceRefDeallocate(sdRef)
             self.sdRef = nil
         }
-        // Release the +1 retain from passRetained.
+        // Release the +1 retain from passRetained in resolve().
         Unmanaged.passUnretained(self).release()
 
         switch result {

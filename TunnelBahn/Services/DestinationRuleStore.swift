@@ -194,17 +194,18 @@ final class DestinationRuleStore: ObservableObject {
 
     func applyResolution(id: UUID, cidrs: [String], ttl: TimeInterval) {
         guard let index = domainRules.firstIndex(where: { $0.id == id }) else { return }
-        let existing = domainRules[index].resolvedCidrs
-        let merged = existing + cidrs.filter { !existing.contains($0) }
-        domainRules[index].resolvedCidrs = merged
+        // Replace rather than union: stale IPs from previous resolutions (e.g. CDN rotation)
+        // must not persist across TTL expiry cycles.
+        domainRules[index].resolvedCidrs = cidrs
         domainRules[index].resolvedAt = Date()
         domainRules[index].resolvedTTL = ttl
-        domainRules[index].status = .resolved(cidrCount: merged.count)
+        domainRules[index].status = .resolved(cidrCount: cidrs.count)
         objectWillChange.send()
     }
 
     func applyResolutionFailure(id: UUID, message: String) {
         guard let index = domainRules.firstIndex(where: { $0.id == id }) else { return }
+        domainRules[index].resolvedCidrs = []
         domainRules[index].status = .failed(message: message)
         objectWillChange.send()
     }
@@ -261,7 +262,12 @@ final class DestinationRuleStore: ObservableObject {
     }
 
     /// Enabled entries only — invalid CIDR syntax may be included (extension skips unparsable strings). Order-preserving dedupe.
-    func enabledFlattenedCidrs() -> [String] {
+    /// Section-enabled flags mirror the UI toggles persisted in AppSettings.
+    func enabledFlattenedCidrs(
+        customRangesEnabled: Bool = true,
+        bulkListsEnabled: Bool = true,
+        domainNamesEnabled: Bool = true
+    ) -> [String] {
         var seen = Set<String>()
         var out: [String] = []
         func append(_ raw: String) {
@@ -269,17 +275,23 @@ final class DestinationRuleStore: ObservableObject {
             guard !t.isEmpty, seen.insert(t).inserted else { return }
             out.append(t)
         }
-        for rule in customRules where rule.isEnabled {
-            append(rule.cidr)
-        }
-        for group in bulkGroups where group.isEnabled {
-            for c in group.cidrs {
-                append(c)
+        if customRangesEnabled {
+            for rule in customRules where rule.isEnabled {
+                append(rule.cidr)
             }
         }
-        for rule in domainRules where rule.isEnabled {
-            for cidr in rule.resolvedCidrs {
-                append(cidr)
+        if bulkListsEnabled {
+            for group in bulkGroups where group.isEnabled {
+                for c in group.cidrs {
+                    append(c)
+                }
+            }
+        }
+        if domainNamesEnabled {
+            for rule in domainRules where rule.isEnabled {
+                for cidr in rule.resolvedCidrs {
+                    append(cidr)
+                }
             }
         }
         return out

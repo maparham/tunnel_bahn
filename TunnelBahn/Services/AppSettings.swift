@@ -40,6 +40,19 @@ final class AppSettings: ObservableObject {
     /// Set by AppState when a profile is selected; not persisted independently.
     @Published var enforceDestinationFiltering: Bool = false
 
+    @Published var showTrafficRates: Bool {
+        didSet { save() }
+    }
+
+    /// Set by AppState when a profile is selected; not persisted independently.
+    @Published var destinationBulkListsEnabled: Bool = true
+
+    /// Set by AppState when a profile is selected; not persisted independently.
+    @Published var destinationCustomRangesEnabled: Bool = true
+
+    /// Set by AppState when a profile is selected; not persisted independently.
+    @Published var destinationDomainNamesEnabled: Bool = true
+
     private enum Keys {
         static let autoReconnect = "autoReconnect"
         static let launchAtLogin = "launchAtLogin"
@@ -47,6 +60,7 @@ final class AppSettings: ObservableObject {
         static let diagnosticsLevel = "diagnosticsLevel"
         static let runTunnelConnectivityProbe = "runTunnelConnectivityProbe"
         static let includeHostAppInPerAppRulesForProbe = "includeHostAppInPerAppRulesForProbe"
+        static let showTrafficRates = "showTrafficRates"
     }
 
     init() {
@@ -57,6 +71,7 @@ final class AppSettings: ObservableObject {
         runTunnelConnectivityProbe = AppGroupStore.defaults.object(forKey: Keys.runTunnelConnectivityProbe) as? Bool ?? true
         includeHostAppInPerAppRulesForProbe =
             AppGroupStore.defaults.object(forKey: Keys.includeHostAppInPerAppRulesForProbe) as? Bool ?? true
+        showTrafficRates = UserDefaults.standard.object(forKey: Keys.showTrafficRates) as? Bool ?? true
     }
 
     private func save() {
@@ -66,5 +81,6 @@ final class AppSettings: ObservableObject {
         AppGroupStore.defaults.set(diagnosticsLevel, forKey: Keys.diagnosticsLevel)
         AppGroupStore.defaults.set(runTunnelConnectivityProbe, forKey: Keys.runTunnelConnectivityProbe)
         AppGroupStore.defaults.set(includeHostAppInPerAppRulesForProbe, forKey: Keys.includeHostAppInPerAppRulesForProbe)
+        UserDefaults.standard.set(showTrafficRates, forKey: Keys.showTrafficRates)
     }
 }
