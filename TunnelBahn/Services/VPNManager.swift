@@ -21,6 +21,7 @@ final class VPNManager: ObservableObject {
     private var lastTransferSnapshot: TransferSnapshot?
     private var lastPerAppAggregateSnapshot: TransferSnapshot?
     private let perAppStatsProxy = PerAppStatsProxyManager()
+    private let scopedBookmarks = ScopedBookmarkStore()
     private static let perAppRoutedSigningIDsDefaultsKey = "perAppRoutedSigningIdentifiers"
     private static let perAppRouteAllFlowsDefaultsKey = "perAppRouteAllIdentifiedFlows"
 
@@ -183,6 +184,19 @@ final class VPNManager: ObservableObject {
             }
 
             let appTunnelModeSelected = (settings.routingMode == .appTunnel)
+            if appTunnelModeSelected {
+                for rule in rules where rule.action == .routeVPN {
+                    let resolved = scopedBookmarks.startAccess(
+                        for: rule,
+                        onStaleBookmark: { [weak self] message in self?.traceLog("WARNING: \(message)") }
+                    )
+                    if resolved == nil, rule.bookmarkData != nil {
+                        traceLog(
+                            "WARNING: could not resolve security-scoped bookmark for \(rule.displayName); SecStaticCode may use fallback requirement"
+                        )
+                    }
+                }
+            }
             var requestedAppRules = appTunnelModeSelected ? NEAppRuleBuilder.build(from: rules, log: traceLog) : []
             if !appTunnelModeSelected, !rules.isEmpty {
                 traceLog("routing mode is full-tunnel; ignoring \(rules.count) app rules")
@@ -201,6 +215,7 @@ final class VPNManager: ObservableObject {
                 traceLog("App-tunnel split is disabled; ignoring \(requestedAppRules.count) built NEAppRule(s), using full tunnel")
                 requestedAppRules = []
             }
+            scopedBookmarks.stopAllAccess()
 
             let hasAppTunnelSelection =
                 AppConstants.isPerAppSplitTunnelEnabled && appTunnelModeSelected && !requestedAppRules.isEmpty

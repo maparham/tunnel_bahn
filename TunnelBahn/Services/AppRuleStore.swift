@@ -13,12 +13,14 @@ final class AppRuleStore: ObservableObject {
     func setRule(for app: DiscoveredApp, action: RoutingAction) {
         if let index = rules.firstIndex(where: { $0.appPath == app.appPath }) {
             rules[index].action = action
+            if let bm = app.bookmarkData { rules[index].bookmarkData = bm }
         } else {
             let rule = AppRule(
                 displayName: app.displayName,
                 bundleIdentifier: app.bundleIdentifier,
                 appPath: app.appPath,
-                action: action
+                action: action,
+                bookmarkData: app.bookmarkData
             )
             rules.append(rule)
         }

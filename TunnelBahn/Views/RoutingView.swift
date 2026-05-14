@@ -84,15 +84,21 @@ struct RoutingView: View {
                 customRangesStandaloneSection()
                 domainNamesSection()
 
-                HStack(spacing: 6) {
+                HStack(spacing: 8) {
                     Image(systemName: "exclamationmark.triangle.fill")
-                        .foregroundStyle(.yellow)
-                    Text("If an IP does not match any rule here, it will bypass the VPN tunnel.")
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(.orange)
+                        .font(.body)
+                    Text("If an IP does not match any rule here, it will **bypass the VPN tunnel**.")
+                        .foregroundStyle(.primary)
+                        .font(.footnote)
                 }
-                .font(.footnote)
-                .padding(.horizontal, 16)
+                .padding(.horizontal, 12)
                 .padding(.vertical, 10)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Color.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 8))
+                .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.orange.opacity(0.35), lineWidth: 1))
+                .padding(.horizontal, 16)
+                .padding(.vertical, 4)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         }

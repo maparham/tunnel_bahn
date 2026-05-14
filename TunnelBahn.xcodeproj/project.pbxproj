@@ -9,6 +9,7 @@
 /* Begin PBXBuildFile section */
 		014C2FCBF12405FEFD835E63 /* ProfileDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B3B3A483CAA076196A178605 /* ProfileDetailView.swift */; };
 		035FABFA0601E358F352C11B /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 832330F2308BBB09BCD44A43 /* Assets.xcassets */; };
+		PI001AABBCCDD11223344EE /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = PI001AABBCCDD11223344FF /* PrivacyInfo.xcprivacy */; };
 		0393E05DDE08CCC0854817CD /* PerAppStatsProxyManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = F7E43092154982D7DF581773 /* PerAppStatsProxyManager.swift */; };
 		0560454BB3AB3D5EBCE6A9BD /* TransparentProxyProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8DE7D4A99ABC9F1B9A4C3781 /* TransparentProxyProvider.swift */; };
 		07BF00AABBCCDD1122334499 /* DestinationRouting.swift in Sources */ = {isa = PBXBuildFile; fileRef = 07BF00AABBCCDD11223344AA /* DestinationRouting.swift */; };
@@ -86,6 +87,7 @@
 		D6097D76FE808A9A7C33AFCD /* PerAppTransferStats.swift in Sources */ = {isa = PBXBuildFile; fileRef = F463C60E2BBFEA611BE9243A /* PerAppTransferStats.swift */; };
 		D67A40C80D4A84EE8D02A634 /* ProfilesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C101AA2BA46E11A0A4EC93C3 /* ProfilesView.swift */; };
 		D8251767F996F7EAA35C4BEE /* AppRuleStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9295D880B3CBBD2AF7DF3388 /* AppRuleStore.swift */; };
+		SB001AABBCCDD11223344EE /* ScopedBookmarkStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = SB001AABBCCDD11223344FF /* ScopedBookmarkStore.swift */; };
 		D89C9EED55BFD8BCF4ACAB53 /* WireGuardProfile.swift in Sources */ = {isa = PBXBuildFile; fileRef = 597D1A15AF482ECB340F8519 /* WireGuardProfile.swift */; };
 		DB47FCCFDD0A705F0FBA98C9 /* PerAppCounterAggregator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4B4307871B6831A9807D56A2 /* PerAppCounterAggregator.swift */; };
 		DE8098D54768316DFCDA0BC3 /* KeychainService.swift in Sources */ = {isa = PBXBuildFile; fileRef = B8E4AA7BE0C447E51BE149BC /* KeychainService.swift */; };
@@ -164,6 +166,7 @@
 		804194AB9838F944A7CD9DD5 /* PerAppTransferStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PerAppTransferStore.swift; sourceTree = "<group>"; };
 		8108BE3F731F12F6601FB84C /* EndpointBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EndpointBridge.swift; sourceTree = "<group>"; };
 		832330F2308BBB09BCD44A43 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		PI001AABBCCDD11223344FF /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
 		840565F203C4D5FAFD4C1E19 /* TransparentProxyExtension.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = TransparentProxyExtension.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		8662E8905AA143B0792E3460 /* ResourceMonitor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ResourceMonitor.swift; sourceTree = "<group>"; };
 		876F0DFB0843A40A070235AC /* WireGuardConfigRenderer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WireGuardConfigRenderer.swift; sourceTree = "<group>"; };
@@ -174,6 +177,7 @@
 		8DE7D4A99ABC9F1B9A4C3781 /* TransparentProxyProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TransparentProxyProvider.swift; sourceTree = "<group>"; };
 		925B86B12D5DC6FCBB010E74 /* PerAppIdentityMap.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PerAppIdentityMap.swift; sourceTree = "<group>"; };
 		9295D880B3CBBD2AF7DF3388 /* AppRuleStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppRuleStore.swift; sourceTree = "<group>"; };
+		SB001AABBCCDD11223344FF /* ScopedBookmarkStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScopedBookmarkStore.swift; sourceTree = "<group>"; };
 		955861FC235940330D863A3D /* BoringTunAdapter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoringTunAdapter.swift; sourceTree = "<group>"; };
 		9C3EBCDA1A0C341A0630B092 /* AppDiscoveryService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDiscoveryService.swift; sourceTree = "<group>"; };
 		A19F882B4C3D5E6F708192A0 /* ReverseDNSResolver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReverseDNSResolver.swift; sourceTree = "<group>"; };
@@ -302,6 +306,7 @@
 				2388B271D3A5A5DC872F416A /* ProfileStore.swift */,
 				8662E8905AA143B0792E3460 /* ResourceMonitor.swift */,
 				A19F882B4C3D5E6F708192A0 /* ReverseDNSResolver.swift */,
+				SB001AABBCCDD11223344FF /* ScopedBookmarkStore.swift */,
 				B01EC846F951388033018FDA /* TunnelConnectivityProbe.swift */,
 				CF5CCD4C2857BFC6B0CC64D5 /* VPNManager.swift */,
 				132EDEF0EA68675638E19645 /* WireGuardConfigParser.swift */,
@@ -365,6 +370,7 @@
 			children = (
 				832330F2308BBB09BCD44A43 /* Assets.xcassets */,
 				A0D832DCD779F91F3A8A3581 /* Preview Content */,
+				PI001AABBCCDD11223344FF /* PrivacyInfo.xcprivacy */,
 			);
 			path = Resources;
 			sourceTree = "<group>";
@@ -490,6 +496,7 @@
 			files = (
 				035FABFA0601E358F352C11B /* Assets.xcassets in Resources */,
 				BA26CDBBB9F13DEE2C070819 /* Preview Assets.xcassets in Resources */,
+				PI001AABBCCDD11223344EE /* PrivacyInfo.xcprivacy in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -582,6 +589,7 @@
 				E1A2B3C4D5E6F7A8B9C0D1E2 /* ProfileListView.swift in Sources */,
 				A86E88A2EAE8BE3B64B79F5D /* ResourceMonitor.swift in Sources */,
 				A19F882B4C3D5E6F708192A1 /* ReverseDNSResolver.swift in Sources */,
+				SB001AABBCCDD11223344EE /* ScopedBookmarkStore.swift in Sources */,
 				CC563120D4B12D5595010390 /* RoutingAction.swift in Sources */,
 				07BF33AABBCCDD11223344EE /* RoutingView.swift in Sources */,
 				A1B2C3D4E5F60011AABBCCDD /* InstantTooltip.swift in Sources */,

@@ -115,7 +115,7 @@ struct AppsView: View {
                 let isAppTunnel = appState.settings.routingMode == .appTunnel
                 HStack(alignment: .top, spacing: 16) {
                     VStack(alignment: .leading, spacing: 10) {
-                        GroupBox("All Apps") {
+                        GroupBox("Running Apps") {
                             VStack(alignment: .leading, spacing: 10) {
                                 TextField("Search applications", text: $appState.appDiscovery.searchText)
                                     .textFieldStyle(.roundedBorder)
@@ -143,7 +143,16 @@ struct AppsView: View {
                                     }
                                     .padding(.vertical, 4)
                                 }
-                                .frame(minHeight: 220)
+                                .frame(minHeight: 180)
+
+                                Button("Add App…") {
+                                    Task {
+                                        if let app = await appState.appDiscovery.pickAndRegisterApp() {
+                                            appState.appRuleStore.setRule(for: app, action: .routeVPN)
+                                        }
+                                    }
+                                }
+                                .disabled(rulesLocked)
                             }
                         }
                     }

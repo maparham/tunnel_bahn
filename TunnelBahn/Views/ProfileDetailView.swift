@@ -11,6 +11,7 @@ struct ProfileDetailView: View {
     let rxBytesPerSecond: Double
     let txBytesPerSecond: Double
     let lastError: String?
+    let splitTunnelWarnings: [String]
     let onEdit: () -> Void
     let onRename: (String) -> Void
 
@@ -107,9 +108,47 @@ struct ProfileDetailView: View {
                         .padding(.top, 4)
                     }
                 }
+
+                if !splitTunnelWarnings.isEmpty {
+                    splitTunnelWarningBanner
+                }
             }
             .padding(20)
         }
+    }
+
+    private var splitTunnelWarningBanner: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundStyle(.orange)
+                .font(.title3)
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Privacy & IP Leak Risk")
+                    .font(.headline)
+                    .foregroundStyle(.primary)
+                ForEach(splitTunnelWarnings, id: \.self) { warning in
+                    HStack(alignment: .top, spacing: 6) {
+                        Text("•")
+                            .foregroundStyle(.secondary)
+                        Text(warning)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .font(.callout)
+                }
+            }
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.orange.opacity(0.12))
+        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .strokeBorder(Color.orange.opacity(0.35), lineWidth: 1)
+        )
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Privacy warning: " + splitTunnelWarnings.joined(separator: " "))
     }
 
     private var headerSection: some View {

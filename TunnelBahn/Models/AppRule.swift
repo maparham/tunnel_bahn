@@ -7,19 +7,22 @@ struct AppRule: Codable, Identifiable, Hashable {
     var bundleIdentifier: String
     var appPath: String
     var action: RoutingAction
+    var bookmarkData: Data?
 
     init(
         id: UUID = UUID(),
         displayName: String,
         bundleIdentifier: String,
         appPath: String,
-        action: RoutingAction
+        action: RoutingAction,
+        bookmarkData: Data? = nil
     ) {
         self.id = id
         self.displayName = displayName
         self.bundleIdentifier = bundleIdentifier
         self.appPath = appPath
         self.action = action
+        self.bookmarkData = bookmarkData
     }
 
     var useVPN: Bool {
@@ -34,6 +37,7 @@ struct AppRule: Codable, Identifiable, Hashable {
         case appPath
         case action
         case useVPN
+        case bookmarkData
     }
 
     init(from decoder: Decoder) throws {
@@ -48,6 +52,7 @@ struct AppRule: Codable, Identifiable, Hashable {
             let useVPN = try container.decodeIfPresent(Bool.self, forKey: .useVPN) ?? false
             action = useVPN ? .routeVPN : .bypass
         }
+        bookmarkData = try container.decodeIfPresent(Data.self, forKey: .bookmarkData)
     }
 
     func encode(to encoder: Encoder) throws {
@@ -57,16 +62,27 @@ struct AppRule: Codable, Identifiable, Hashable {
         try container.encode(bundleIdentifier, forKey: .bundleIdentifier)
         try container.encode(appPath, forKey: .appPath)
         try container.encode(action, forKey: .action)
+        try container.encodeIfPresent(bookmarkData, forKey: .bookmarkData)
     }
 }
 
 struct DiscoveredApp: Identifiable, Hashable {
-    var id: String {
-        appPath
-    }
+    var id: String { appPath }
 
     let displayName: String
     let bundleIdentifier: String
     let appPath: String
     let icon: NSImage
+    let bookmarkData: Data?
+
+    init(displayName: String, bundleIdentifier: String, appPath: String, icon: NSImage, bookmarkData: Data? = nil) {
+        self.displayName = displayName
+        self.bundleIdentifier = bundleIdentifier
+        self.appPath = appPath
+        self.icon = icon
+        self.bookmarkData = bookmarkData
+    }
+
+    func hash(into hasher: inout Hasher) { hasher.combine(appPath) }
+    static func == (lhs: Self, rhs: Self) -> Bool { lhs.appPath == rhs.appPath }
 }

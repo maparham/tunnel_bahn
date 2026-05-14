@@ -180,6 +180,25 @@ struct ProfilesView: View {
                 }
             }()
 
+            let isConnectedOrActive = [VPNConnectionState.connected, .connecting, .reconnecting, .disconnecting]
+                .contains(vpnManager.stats.state)
+            let appTunnelSplitActive: Bool = {
+                if isConnectedOrActive {
+                    return vpnManager.stats.perAppSplitTunnelActive
+                }
+                return settings.routingMode == .appTunnel && selectedRoutedApps > 0
+            }()
+            let splitTunnelWarnings: [String] = {
+                var w: [String] = []
+                if appTunnelSplitActive {
+                    w.append("App-Tunnel mode: traffic from apps not in your selection bypasses the VPN and exposes your real IP address.")
+                }
+                if settings.enforceDestinationFiltering {
+                    w.append("Destination routing is enabled: traffic to addresses outside your configured CIDRs and domains bypasses the VPN and exposes your real IP address.")
+                }
+                return w
+            }()
+
             VStack(spacing: 0) {
                 // Segment tabs + activate/deactivate on one row
                 HStack(alignment: .center, spacing: 12) {
@@ -229,6 +248,7 @@ struct ProfilesView: View {
                         rxBytesPerSecond: vpnManager.stats.rxBytesPerSecond,
                         txBytesPerSecond: vpnManager.stats.txBytesPerSecond,
                         lastError: vpnManager.stats.lastError,
+                        splitTunnelWarnings: splitTunnelWarnings,
                         onEdit: {
                             editingProfile = profileStore.selectedProfile
                         },
