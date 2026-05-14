@@ -105,6 +105,8 @@ struct StatusView: View {
     /// App display names with expanded TCP destination subtree (custom disclosure — clearer than default `DisclosureGroup` chrome).
     @State private var expandedAppTrafficApps: Set<String> = []
     @State private var hoveredAppTrafficRow: String?
+    @State private var hoveredDestinationRow: String?
+    @State private var copiedApp: String?
 
     private let perAppStatsTopN = 10
     /// Caps vertical growth of the app rows; list scrolls when expanded nodes exceed this.
@@ -167,6 +169,8 @@ struct StatusView: View {
                 showAllPerAppStats = false
                 expandedAppTrafficApps = []
                 hoveredAppTrafficRow = nil
+                hoveredDestinationRow = nil
+                copiedApp = nil
             }
         }
     }
@@ -305,8 +309,9 @@ struct StatusView: View {
         destRows: [PerDestinationTransferRow],
         residual: (rxBytes: UInt64, txBytes: UInt64)
     ) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: 2) {
             ForEach(destRows) { row in
+                let isDestHovered = hoveredDestinationRow == row.remoteLiteral
                 HStack(alignment: .center, spacing: 8) {
                     DestinationLiteralLabel(
                         literal: row.remoteLiteral,
@@ -325,8 +330,23 @@ struct StatusView: View {
                         "Received \(formatBytes(row.rxBytes)), sent \(formatBytes(row.txBytes))"
                     )
                 }
+                .padding(.vertical, 5)
+                .padding(.horizontal, 8)
+                .background {
+                    RoundedRectangle(cornerRadius: 7, style: .continuous)
+                        .fill(Color.primary.opacity(isDestHovered ? 0.07 : 0))
+                }
+                .animation(.easeInOut(duration: 0.12), value: isDestHovered)
+                .onHover { hovering in
+                    if hovering {
+                        hoveredDestinationRow = row.remoteLiteral
+                    } else if hoveredDestinationRow == row.remoteLiteral {
+                        hoveredDestinationRow = nil
+                    }
+                }
             }
             if residual.rxBytes > 0 || residual.txBytes > 0 {
+                let isResidualHovered = hoveredDestinationRow == "__other_traffic__"
                 VStack(alignment: .leading, spacing: 2) {
                     HStack(alignment: .center, spacing: 8) {
                         Text("Other traffic")
@@ -345,6 +365,20 @@ struct StatusView: View {
                     Text("UDP, TCP without IP literals, etc.")
                         .font(.caption2)
                         .foregroundStyle(.secondary)
+                }
+                .padding(.vertical, 5)
+                .padding(.horizontal, 8)
+                .background {
+                    RoundedRectangle(cornerRadius: 7, style: .continuous)
+                        .fill(Color.primary.opacity(isResidualHovered ? 0.07 : 0))
+                }
+                .animation(.easeInOut(duration: 0.12), value: isResidualHovered)
+                .onHover { hovering in
+                    if hovering {
+                        hoveredDestinationRow = "__other_traffic__"
+                    } else if hoveredDestinationRow == "__other_traffic__" {
+                        hoveredDestinationRow = nil
+                    }
                 }
             }
             if destRows.isEmpty && residual.rxBytes == 0 && residual.txBytes == 0 {
@@ -567,33 +601,6 @@ struct StatusView: View {
         return "\(ByteCountFormatter.string(fromByteCount: rounded, countStyle: .binary))/s"
     }
 
-    private func destinationClipboardLine(for row: PerDestinationTransferRow) -> String {
-        let lists = appState.destinationRuleStore.matchingDestinationListLabels(forLiteral: row.remoteLiteral)
-        let suffix = lists.isEmpty ? "" : " [\(lists.joined(separator: ", "))]"
-        let core = reverseDNS.displayLabel(for: row.remoteLiteral)
-        return "\(core)\(suffix)"
-    }
-
-    private func appSubtreeClipboardText(
-        app: String,
-        destRows: [PerDestinationTransferRow],
-        residual: (rxBytes: UInt64, txBytes: UInt64)
-    ) -> String {
-        var lines: [String] = []
-        lines.append(app)
-        if destRows.isEmpty, residual.rxBytes == 0, residual.txBytes == 0 {
-            lines.append("  No relayed payload counted yet.")
-        }
-        for row in destRows {
-            lines.append("  \(destinationClipboardLine(for: row))")
-        }
-        if residual.rxBytes > 0 || residual.txBytes > 0 {
-            lines.append("  Other traffic")
-            lines.append("  UDP, TCP without IP literals, etc.")
-        }
-        return lines.joined(separator: "\n")
-    }
-
     private func copySubtreeToPasteboard(_ string: String) {
         #if os(macOS)
         NSPasteboard.general.clearContents()
@@ -606,16 +613,24 @@ struct StatusView: View {
         destRows: [PerDestinationTransferRow],
         residual: (rxBytes: UInt64, txBytes: UInt64)
     ) -> some View {
-        Button {
-            copySubtreeToPasteboard(appSubtreeClipboardText(app: app, destRows: destRows, residual: residual))
+        let isCopied = copiedApp == app
+        return Button {
+            let ips = destRows.map(\.remoteLiteral).joined(separator: "\n")
+            copySubtreeToPasteboard(ips)
+            copiedApp = app
+            Task {
+                try? await Task.sleep(for: .seconds(2))
+                if copiedApp == app { copiedApp = nil }
+            }
         } label: {
-            Image(systemName: "doc.on.doc")
+            Image(systemName: isCopied ? "checkmark" : "doc.on.doc")
                 .font(.caption)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(isCopied ? .green : .secondary)
+                .animation(.easeInOut(duration: 0.15), value: isCopied)
         }
         .buttonStyle(.borderless)
-        .help("Copy this app’s traffic breakdown")
-        .accessibilityLabel("Copy traffic breakdown for \(app)")
+        .help(isCopied ? "Copied!" : "Copy IP list")
+        .accessibilityLabel(isCopied ? "Copied" : "Copy IP list for \(app)")
     }
 
     private func trafficOtherResidualCopyButton() -> some View {

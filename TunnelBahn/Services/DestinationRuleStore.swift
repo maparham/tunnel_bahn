@@ -192,10 +192,30 @@ final class DestinationRuleStore: ObservableObject {
         objectWillChange.send()
     }
 
+    /// Maximum number of resolved CIDR strings kept per domain rule (merge path only).
+    /// Older entries (head of list) are dropped first; newest-added entries survive.
+    static let resolvedCidrCap = 500
+
     func applyResolution(id: UUID, cidrs: [String], ttl: TimeInterval) {
         guard let index = domainRules.firstIndex(where: { $0.id == id }) else { return }
-        // Replace rather than union: stale IPs from previous resolutions (e.g. CDN rotation)
-        // must not persist across TTL expiry cycles.
+        var merged = domainRules[index].resolvedCidrs
+        for cidr in cidrs where !merged.contains(cidr) {
+            merged.append(cidr)
+        }
+        // Enforce per-rule cap: keep the most recently added entries (tail of list).
+        if merged.count > Self.resolvedCidrCap {
+            merged = Array(merged.suffix(Self.resolvedCidrCap))
+        }
+        domainRules[index].resolvedCidrs = merged
+        domainRules[index].resolvedAt = Date()
+        domainRules[index].resolvedTTL = ttl
+        domainRules[index].status = .resolved(cidrCount: merged.count)
+        objectWillChange.send()
+    }
+
+    /// Like `applyResolution` but replaces the stored CIDRs with the fresh result instead of merging.
+    func applyResolutionReplacing(id: UUID, cidrs: [String], ttl: TimeInterval) {
+        guard let index = domainRules.firstIndex(where: { $0.id == id }) else { return }
         domainRules[index].resolvedCidrs = cidrs
         domainRules[index].resolvedAt = Date()
         domainRules[index].resolvedTTL = ttl
@@ -205,7 +225,6 @@ final class DestinationRuleStore: ObservableObject {
 
     func applyResolutionFailure(id: UUID, message: String) {
         guard let index = domainRules.firstIndex(where: { $0.id == id }) else { return }
-        domainRules[index].resolvedCidrs = []
         domainRules[index].status = .failed(message: message)
         objectWillChange.send()
     }
@@ -289,6 +308,7 @@ final class DestinationRuleStore: ObservableObject {
         }
         if domainNamesEnabled {
             for rule in domainRules where rule.isEnabled {
+                guard case .resolved = rule.status else { continue }
                 for cidr in rule.resolvedCidrs {
                     append(cidr)
                 }

@@ -1,8 +1,14 @@
 import SwiftUI
+import AppKit
 
 struct SettingsView: View {
     @EnvironmentObject private var appState: AppState
     @State private var launchError: String?
+    @State private var backupMode: BackupMode? = nil
+    @State private var backupError: String? = nil
+    @State private var importSuccessSummary: String? = nil
+    @State private var isResetConfirmationPresented = false
+    private let backupService = BackupService()
 
     var body: some View {
         ScrollView {
@@ -45,6 +51,15 @@ struct SettingsView: View {
                     .help("When using per-app VPN rules, TunnelBahn itself is normally excluded from the tunnel. Turn this on to route TunnelBahn through the VPN while the connectivity check runs, so the check tests the tunnel directly.")
                 }
 
+                settingsSection("Backup & Restore") {
+                    HStack(spacing: 10) {
+                        Button("Export") { triggerExport() }
+                        Button("Import") { triggerImport() }
+                        Button("Reset…") { isResetConfirmationPresented = true }
+                            .foregroundStyle(.red)
+                    }
+                }
+
                 Spacer()
             }
             .padding(20)
@@ -54,6 +69,39 @@ struct SettingsView: View {
         }, message: {
             Text(launchError ?? "Unknown error")
         })
+        .alert("Backup Error", isPresented: .constant(backupError != nil), actions: {
+            Button("OK") { backupError = nil }
+        }, message: {
+            Text(backupError ?? "Unknown error")
+        })
+        .alert("Import Complete", isPresented: .constant(importSuccessSummary != nil), actions: {
+            Button("OK") { importSuccessSummary = nil }
+        }, message: {
+            Text(importSuccessSummary ?? "")
+        })
+        .alert("Reset All Settings?", isPresented: $isResetConfirmationPresented, actions: {
+            Button("Reset Everything", role: .destructive) {
+                appState.resetAll()
+            }
+            Button("Cancel", role: .cancel) {}
+        }, message: {
+            Text("This will permanently delete all profiles, app routing rules, destination routing rules, and reset general settings to defaults. This cannot be undone.")
+        })
+        .sheet(item: $backupMode) { mode in
+            BackupSheet(
+                mode: mode,
+                onComplete: { options, policy, url in
+                    switch mode {
+                    case .export:
+                        performExport(options: options, destinationURL: url)
+                    case .import:
+                        performImport(mode: mode, options: options, policy: policy)
+                    }
+                    backupMode = nil
+                },
+                onCancel: { backupMode = nil }
+            )
+        }
     }
 
     @ViewBuilder
@@ -69,6 +117,64 @@ struct SettingsView: View {
                 content()
             }
             .padding(.leading, 4)
+        }
+    }
+
+    // MARK: - Backup / Restore
+
+    private func triggerExport() {
+        backupMode = .export
+    }
+
+    private func triggerImport() {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.json]
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        panel.title = "Import TunnelBahn Backup"
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        do {
+            let data = try Data(contentsOf: url)
+            let backup = try backupService.decode(from: data)
+            backupMode = .import(backup: backup)
+        } catch {
+            backupError = error.localizedDescription
+        }
+    }
+
+    private func performExport(options: BackupOptions, destinationURL: URL?) {
+        guard let url = destinationURL else { return }
+        do {
+            let backup = try backupService.buildBackup(
+                options: options,
+                profileStore: appState.profileStore,
+                profileRoutingStore: appState.profileRoutingStore,
+                appSettings: appState.settings
+            )
+            let data = try backupService.encode(backup)
+            try data.write(to: url, options: .atomic)
+        } catch {
+            backupError = error.localizedDescription
+        }
+    }
+
+    private func performImport(mode: BackupMode, options: BackupOptions, policy: ProfileConflictPolicy) {
+        guard case let .import(backup) = mode else { return }
+        do {
+            let summary = try backupService.applyBackup(
+                backup,
+                options: options,
+                conflictPolicy: policy,
+                profileStore: appState.profileStore,
+                profileRoutingStore: appState.profileRoutingStore,
+                appSettings: appState.settings
+            )
+            // Reload live stores so appRuleStore/destinationRuleStore/settings reflect the
+            // imported snapshot for the currently-selected profile immediately.
+            appState.applySnapshot(for: appState.profileStore.selectedProfileID)
+            importSuccessSummary = summary.description
+        } catch {
+            backupError = error.localizedDescription
         }
     }
 }

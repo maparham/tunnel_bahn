@@ -67,7 +67,7 @@ struct AppsView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             HStack(spacing: 12) {
-                VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 16) {
                     HStack(spacing: 6) {
                         RadioButton(
                             isOn: appState.settings.routingMode == .fullTunnel,

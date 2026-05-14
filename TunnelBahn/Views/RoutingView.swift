@@ -80,25 +80,32 @@ struct RoutingView: View {
         ScrollView(.vertical) {
             VStack(alignment: .leading, spacing: 0) {
                 restrictProxySection()
-                bulkListsStandaloneSection()
-                customRangesStandaloneSection()
-                domainNamesSection()
 
-                HStack(spacing: 8) {
-                    Image(systemName: "exclamationmark.triangle.fill")
-                        .foregroundStyle(.orange)
-                        .font(.body)
-                    Text("If an IP does not match any rule here, it will **bypass the VPN tunnel**.")
-                        .foregroundStyle(.primary)
-                        .font(.footnote)
+                let filteringOff = !appState.settings.enforceDestinationFiltering
+
+                VStack(alignment: .leading, spacing: 0) {
+                    bulkListsStandaloneSection()
+                    customRangesStandaloneSection()
+                    domainNamesSection()
+
+                    HStack(spacing: 8) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .foregroundStyle(.orange)
+                            .font(.body)
+                        Text("If an IP does not match any rule here, it will **bypass the VPN tunnel**.")
+                            .foregroundStyle(.primary)
+                            .font(.footnote)
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 10)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Color.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 8))
+                    .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.orange.opacity(0.35), lineWidth: 1))
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 4)
                 }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 10)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(Color.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 8))
-                .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.orange.opacity(0.35), lineWidth: 1))
-                .padding(.horizontal, 16)
-                .padding(.vertical, 4)
+                .opacity(filteringOff ? 0.7 : 1.0)
+                .animation(.easeInOut(duration: 0.2), value: filteringOff)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         }
@@ -141,35 +148,37 @@ struct RoutingView: View {
         GroupBox {
             VStack(alignment: .leading, spacing: 10) {
                 VStack(alignment: .leading, spacing: 4) {
-                    HStack(spacing: 6) {
-                        RadioButton(
-                            isOn: !appState.settings.enforceDestinationFiltering,
-                            label: "Tunnel all destinations",
-                            disabled: destinationRoutingEditingLocked
-                        ) { destinationFilteringBinding.wrappedValue = false }
-                        Image(systemName: "info.circle")
-                            .foregroundStyle(.secondary)
-                            .instantTooltip(Self.allDestinationsTooltip)
-                    }
-                    HStack(spacing: 6) {
-                        RadioButton(
-                            isOn: appState.settings.enforceDestinationFiltering,
-                            label: "Tunnel selected destinations",
-                            disabled: destinationRoutingEditingLocked || !hasAnyDestinations
-                        ) { destinationFilteringBinding.wrappedValue = true }
-                        Image(systemName: "info.circle")
-                            .foregroundStyle(.secondary)
-                            .instantTooltip(Self.selectedDestinationsTooltip)
-                        if !hasAnyDestinations {
-                            Label(
-                                hasAnyRulesIgnoringSectionToggles
-                                    ? "Enable a section below to activate destination filtering."
-                                    : "Add destination IPs or CIDRs below to enable.",
-                                systemImage: "info.circle.fill"
-                            )
-                            .font(.footnote)
-                            .foregroundStyle(.blue)
+                    HStack(spacing: 16) {
+                        HStack(spacing: 6) {
+                            RadioButton(
+                                isOn: !appState.settings.enforceDestinationFiltering,
+                                label: "Tunnel all destinations",
+                                disabled: destinationRoutingEditingLocked
+                            ) { destinationFilteringBinding.wrappedValue = false }
+                            Image(systemName: "info.circle")
+                                .foregroundStyle(.secondary)
+                                .instantTooltip(Self.allDestinationsTooltip)
                         }
+                        HStack(spacing: 6) {
+                            RadioButton(
+                                isOn: appState.settings.enforceDestinationFiltering,
+                                label: "Tunnel selected destinations",
+                                disabled: destinationRoutingEditingLocked || !hasAnyDestinations
+                            ) { destinationFilteringBinding.wrappedValue = true }
+                            Image(systemName: "info.circle")
+                                .foregroundStyle(.secondary)
+                                .instantTooltip(Self.selectedDestinationsTooltip)
+                        }
+                    }
+                    if !hasAnyDestinations {
+                        Label(
+                            hasAnyRulesIgnoringSectionToggles
+                                ? "Enable a section below to activate destination filtering."
+                                : "Add destination IPs or CIDRs below to enable.",
+                            systemImage: "info.circle.fill"
+                        )
+                        .font(.footnote)
+                        .foregroundStyle(.blue)
                     }
                 }
 
@@ -218,6 +227,7 @@ struct RoutingView: View {
                     Toggle("", isOn: bulkListsEnabledBinding)
                         .toggleStyle(.switch)
                         .labelsHidden()
+                        .disabled(controlsDisabled)
                 }
 
                 VStack(alignment: .leading, spacing: 8) {
@@ -276,6 +286,7 @@ struct RoutingView: View {
                         Toggle("", isOn: customRangesEnabledBinding)
                             .toggleStyle(.switch)
                             .labelsHidden()
+                            .disabled(controlsDisabled)
                     }
 
                     Group {
@@ -424,6 +435,7 @@ struct RoutingView: View {
                         Toggle("", isOn: domainNamesEnabledBinding)
                             .toggleStyle(.switch)
                             .labelsHidden()
+                            .disabled(controlsDisabled)
                     }
                     .confirmationDialog("Remove all domains?", isPresented: $confirmDeleteAllDomains) {
                         Button("Remove All", role: .destructive) {
@@ -863,6 +875,17 @@ private struct DestinationDomainRuleRow: View {
             }
 
             Spacer(minLength: 0)
+
+            Button {
+                if let r = rule() {
+                    appState.domainResolutionCoordinator.forceResolve(id: r.id, domain: r.domain)
+                }
+            } label: {
+                Image(systemName: "arrow.clockwise")
+            }
+            .buttonStyle(.borderless)
+            .instantTooltip("Refresh resolved IPs")
+            .disabled(rule()?.status == .resolving)
 
             Button { onBrowse() } label: {
                 Image(systemName: "eye")

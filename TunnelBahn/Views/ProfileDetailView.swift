@@ -182,14 +182,22 @@ struct ProfileDetailView: View {
                         .help("Double-click to rename")
                         .onTapGesture(count: 2) { beginNameEdit() }
 
-                    if !isBusy {
-                        Button(action: beginNameEdit) {
-                            Image(systemName: "square.and.pencil")
-                                .imageScale(.small)
-                                .foregroundStyle(.secondary)
-                        }
-                        .buttonStyle(.plain)
-                        .help("Rename profile")
+                    Button(action: beginNameEdit) {
+                        Image(systemName: "square.and.pencil")
+                            .imageScale(.small)
+                            .foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.plain)
+                    .help("Rename profile")
+
+                    Text(tunnelModeLabel)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+
+                    if let lastError, !lastError.isEmpty, connectionState != .disconnected {
+                        Text(lastError)
+                            .font(.caption)
+                            .foregroundStyle(.red)
                     }
                 }
 
@@ -201,26 +209,10 @@ struct ProfileDetailView: View {
 
                 Button("Edit", action: onEdit)
                     .buttonStyle(.bordered)
-                    .disabled(isBusy)
+                    .disabled(isBusy || isActive)
             }
             .onChange(of: profile.id) {
                 cancelNameEdit()
-            }
-
-            if connectionState != .disconnected || (lastError != nil && !(lastError!.isEmpty)) {
-                HStack(spacing: 12) {
-                    if connectionState != .disconnected {
-                        Text(tunnelModeLabel)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-
-                    if let lastError, !lastError.isEmpty {
-                        Text(lastError)
-                            .font(.caption)
-                            .foregroundStyle(.red)
-                    }
-                }
             }
         }
     }
@@ -249,12 +241,10 @@ struct ProfileDetailView: View {
     }
 
     private var statusTitle: String {
-        if connectionState == .connected {
-            return isActive ? "Active" : "Inactive"
-        }
+        guard isActive else { return "Inactive" }
         switch connectionState {
         case .connected:
-            return isActive ? "Active" : "Inactive"
+            return "Active"
         case .connecting, .reconnecting:
             return "Connecting"
         case .disconnecting:
@@ -267,12 +257,10 @@ struct ProfileDetailView: View {
     }
 
     private var statusColor: Color {
-        if connectionState == .connected {
-            return isActive ? .green : .gray
-        }
+        guard isActive else { return .gray }
         switch connectionState {
         case .connected:
-            return isActive ? .green : .gray
+            return .green
         case .connecting, .disconnecting, .reconnecting:
             return .orange
         case .error:

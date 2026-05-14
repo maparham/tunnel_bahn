@@ -170,24 +170,9 @@ struct ProfilesView: View {
                     return selectedRoutedApps > 0 ? "App-Tunnel (selected apps only)" : "Full Tunnel (all traffic)"
                 }
             }()
-            let activeModeLabel = vpnManager.stats.perAppSplitTunnelActive ? "App-Tunnel (selected apps only)" : "Full Tunnel (all traffic)"
-            let modeLabel: String = {
-                switch vpnManager.stats.state {
-                case .connected, .connecting, .reconnecting, .disconnecting:
-                    return activeModeLabel
-                case .disconnected, .error:
-                    return plannedModeLabel
-                }
-            }()
+            let modeLabel = plannedModeLabel
 
-            let isConnectedOrActive = [VPNConnectionState.connected, .connecting, .reconnecting, .disconnecting]
-                .contains(vpnManager.stats.state)
-            let appTunnelSplitActive: Bool = {
-                if isConnectedOrActive {
-                    return vpnManager.stats.perAppSplitTunnelActive
-                }
-                return settings.routingMode == .appTunnel && selectedRoutedApps > 0
-            }()
+            let appTunnelSplitActive = settings.routingMode == .appTunnel && selectedRoutedApps > 0
             let splitTunnelWarnings: [String] = {
                 var w: [String] = []
                 if appTunnelSplitActive {
@@ -211,6 +196,10 @@ struct ProfilesView: View {
                     .fixedSize()
 
                     Spacer(minLength: 0)
+
+                    if isSelectedProfileActive && !splitTunnelWarnings.isEmpty {
+                        SplitTunnelWarningIcon(warnings: splitTunnelWarnings)
+                    }
 
                     Button {
                         if isSelectedProfileActive {
@@ -548,6 +537,44 @@ struct ProfilesView: View {
             } completionHandler: {
                 panel.orderOut(nil)
             }
+        }
+    }
+}
+
+private struct SplitTunnelWarningIcon: View {
+    let warnings: [String]
+    @State private var showPopover = false
+
+    var body: some View {
+        Button {
+            showPopover.toggle()
+        } label: {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundStyle(.orange)
+                .font(.system(size: 16))
+        }
+        .buttonStyle(.plain)
+        .help("Privacy & IP Leak Risk")
+        .popover(isPresented: $showPopover, arrowEdge: .bottom) {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 6) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .foregroundStyle(.orange)
+                    Text("Privacy & IP Leak Risk")
+                        .font(.headline)
+                }
+                ForEach(warnings, id: \.self) { warning in
+                    HStack(alignment: .top, spacing: 6) {
+                        Text("•").foregroundStyle(.secondary)
+                        Text(warning)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .font(.callout)
+                }
+            }
+            .padding(14)
+            .frame(maxWidth: 340)
         }
     }
 }

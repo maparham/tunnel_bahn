@@ -238,6 +238,30 @@ final class AppState: ObservableObject {
         )
     }
 
+    /// Deletes all profiles, app rules, destination rules, routing snapshots, and resets
+    /// general settings to their defaults. The VPN must be disconnected before calling.
+    func resetAll() {
+        let idsToDelete = profileStore.profiles.map(\.id)
+        for id in idsToDelete {
+            profileStore.delete(id: id)
+        }
+        appRuleStore.replaceAll([])
+        destinationRuleStore.replaceAll(customRules: [], bulkGroups: [], domainRules: [])
+        settings.routingMode = .fullTunnel
+        settings.enforceDestinationFiltering = false
+        settings.destinationBulkListsEnabled = true
+        settings.destinationCustomRangesEnabled = true
+        settings.destinationDomainNamesEnabled = true
+        settings.autoReconnect = true
+        settings.launchAtLogin = false
+        settings.showTrafficRates = true
+        settings.diagnosticsLevel = "info"
+        settings.runTunnelConnectivityProbe = true
+        settings.includeHostAppInPerAppRulesForProbe = true
+        try? LaunchAtLoginService.setEnabled(false)
+        syncDestinationRoutingFileWithPreferences()
+    }
+
     /// Writes `destination-routing.json` to match Routing settings + rules (tunnel up or down).
     /// Skipped while a connect is in progress or when a split-tunnel profile is active —
     /// `connect()` writes the authoritative AllowedIPs-based filter for split-tunnel profiles,

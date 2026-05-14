@@ -1170,19 +1170,17 @@ final class VPNManager: ObservableObject {
         case .disconnecting: stats.state = .disconnecting
         case .reasserting: stats.state = .reconnecting
         case .invalid, .disconnected:
-            // NE can briefly report disconnected/invalid during connect/switch/teardown.
-            // Keep `connectedProfileID` aligned with intentional tunnel work until teardown finishes.
-            let preserveProfileIdentity =
-                connectRunning
-                || stats.state == .connecting
-                || stats.state == .disconnecting
-                || stats.state == .reconnecting
-            stats.state = .disconnected
-            stats.publicIP = nil
-            stats.publicIPLocation = nil
-            if !preserveProfileIdentity {
+            // NE briefly reports disconnected/invalid during manager reconfiguration mid-connect.
+            // Suppress the regression while a connect task owns the tunnel lifecycle.
+            // Exception: if connectRunning is somehow stuck and the tunnel is genuinely gone,
+            // clear it so the UI does not permanently show a stale connected state.
+            if !connectRunning || isTunnelFullyStopped() {
+                connectRunning = false
+                stats.state = .disconnected
                 stats.connectedProfileID = nil
             }
+            stats.publicIP = nil
+            stats.publicIPLocation = nil
         @unknown default: stats.state = .error
         }
         if stats.state == .connected, stats.connectedProfileID == nil {

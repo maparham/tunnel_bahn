@@ -91,10 +91,36 @@ final class DomainResolutionCoordinator {
         inFlightByID[id] = task
     }
 
+    /// Cancel any in-flight query for `id` and start a fresh resolution that replaces stored CIDRs.
+    func forceResolve(id: UUID, domain: String) {
+        inFlightByID[id]?.cancel()
+        inFlightByID.removeValue(forKey: id)
+        ruleStore?.markResolving(id: id)
+        let task = Task { @MainActor [weak self] in
+            defer { self?.inFlightByID.removeValue(forKey: id) }
+            do {
+                let result = try await DomainResolver.resolve(domain: domain)
+                self?.ruleStore?.applyResolutionReplacing(id: id, cidrs: result.cidrs, ttl: result.ttl)
+            } catch {
+                let message: String
+                if let e = error as? DomainResolverError {
+                    message = e.errorDescription ?? error.localizedDescription
+                } else {
+                    message = error.localizedDescription
+                }
+                self?.ruleStore?.applyResolutionFailure(id: id, message: message)
+            }
+        }
+        inFlightByID[id] = task
+    }
+
     private func resolveExpiredDomains() {
         guard let ruleStore else { return }
         for rule in ruleStore.domainRules where rule.isEnabled {
             guard rule.isExpired() else { continue }
+            // Use merge semantics on TTL expiry: union new IPs into existing resolvedCidrs
+            // (capped at DestinationRuleStore.resolvedCidrCap per rule).
+            // Full replacement only happens when the user taps "Refresh resolved IPs".
             enqueueResolution(for: rule.id, domain: rule.domain)
         }
     }

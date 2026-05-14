@@ -34,6 +34,9 @@
 		2C2673F5D03E3CC614BA2F3A /* TransparentProxyExtension.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 840565F203C4D5FAFD4C1E19 /* TransparentProxyExtension.appex */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		33CC44DD55EE66FF77AA88BB /* ExtensionResourceStats.swift in Sources */ = {isa = PBXBuildFile; fileRef = E7D8A91B2C3D4E5F60718293 /* ExtensionResourceStats.swift */; };
 		34BA9126A5908F090CAC52A6 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5AF7FE9FDDCD675A8CF2918D /* SettingsView.swift */; };
+		BA0001AABBCCDD1122334401 /* AppBackup.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA0001AABBCCDD1122334402 /* AppBackup.swift */; };
+		BA0002AABBCCDD1122334403 /* BackupService.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA0002AABBCCDD1122334404 /* BackupService.swift */; };
+		BA0003AABBCCDD1122334405 /* BackupSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA0003AABBCCDD1122334406 /* BackupSheet.swift */; };
 		3912BB21FF77CDAAAFC2F866 /* TunnelBahnApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1D0773D7DA0C4899C2FB05D9 /* TunnelBahnApp.swift */; };
 		3FF08897B094FB314A2576AE /* AppRule.swift in Sources */ = {isa = PBXBuildFile; fileRef = C6AEA83BAE6A6F9B4EFA66D3 /* AppRule.swift */; };
 		40F4EA71AC35412ED35A962A /* PerAppTransferStats.swift in Sources */ = {isa = PBXBuildFile; fileRef = F463C60E2BBFEA611BE9243A /* PerAppTransferStats.swift */; };
@@ -188,6 +191,9 @@
 		B3B3A483CAA076196A178605 /* ProfileDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProfileDetailView.swift; sourceTree = "<group>"; };
 		B8E4AA7BE0C447E51BE149BC /* KeychainService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeychainService.swift; sourceTree = "<group>"; };
 		B9893ED8A6939F0FB34E45C9 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
+		BA0001AABBCCDD1122334402 /* AppBackup.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppBackup.swift; sourceTree = "<group>"; };
+		BA0002AABBCCDD1122334404 /* BackupService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BackupService.swift; sourceTree = "<group>"; };
+		BA0003AABBCCDD1122334406 /* BackupSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BackupSheet.swift; sourceTree = "<group>"; };
 		C101AA2BA46E11A0A4EC93C3 /* ProfilesView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProfilesView.swift; sourceTree = "<group>"; };
 		C4AC765CF34646BCD29959AE /* TunnelBahn.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = TunnelBahn.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		C6AEA83BAE6A6F9B4EFA66D3 /* AppRule.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppRule.swift; sourceTree = "<group>"; };
@@ -232,6 +238,7 @@
 			isa = PBXGroup;
 			children = (
 				5D12CC90B02F8E0E071FEEB3 /* AppsView.swift */,
+				BA0003AABBCCDD1122334406 /* BackupSheet.swift */,
 				8C066CA526386F398EAAD416 /* ContentView.swift */,
 					B3B3A483CAA076196A178605 /* ProfileDetailView.swift */,
 				6DF2B41F806A433B201BFFDA /* ProfileEditorSheet.swift */,
@@ -295,6 +302,8 @@
 				9C3EBCDA1A0C341A0630B092 /* AppDiscoveryService.swift */,
 				9295D880B3CBBD2AF7DF3388 /* AppRuleStore.swift */,
 				8C416906295219B27FC07EF8 /* AppSettings.swift */,
+				BA0001AABBCCDD1122334402 /* AppBackup.swift */,
+				BA0002AABBCCDD1122334404 /* BackupService.swift */,
 				C9E8D7C6B5A4938271605F0A /* DestinationCidrTextParser.swift */,
 				07BF22AABBCCDD11223344DD /* DestinationRuleStore.swift */,
 				DD0002AABBCCDD1122334404 /* DomainResolver.swift */,
@@ -553,9 +562,12 @@
 			files = (
 				950889D4805B0B825BCFC1DC /* AppDiscoveryService.swift in Sources */,
 				9218BD1308ABA5BBCDE2D1E6 /* AppGroup.swift in Sources */,
+				BA0001AABBCCDD1122334401 /* AppBackup.swift in Sources */,
 				C7AF0796BF521A0C617E7532 /* AppRule.swift in Sources */,
 				D8251767F996F7EAA35C4BEE /* AppRuleStore.swift in Sources */,
 				B6D78E25A29EC4E097CDF76C /* AppSettings.swift in Sources */,
+				BA0002AABBCCDD1122334403 /* BackupService.swift in Sources */,
+				BA0003AABBCCDD1122334405 /* BackupSheet.swift in Sources */,
 				07BF11AABBCCDD11223344AA /* DestinationCidrRule.swift in Sources */,
 				E8D7C6B5A4938271605F0CEE /* DestinationCidrBulkGroup.swift in Sources */,
 				DD0001AABBCCDD1122334401 /* DestinationDomainRule.swift in Sources */,
