@@ -49,14 +49,21 @@ final class DomainResolutionCoordinator {
     /// Call this before writing destination-routing.json on VPN connect so the file
     /// is fully populated before the proxy extension reads it.
     func resolveAllAndWait() async {
+        // Snapshot the dictionary BEFORE calling resolveAll(). A prior call to
+        // resolveAll() (e.g. from installRoutingSnapshot called just before connect)
+        // may have already enqueued tasks for every domain. Those tasks remove
+        // themselves from inFlightByID via `defer` on completion, so they can vanish
+        // before we snapshot — causing resolveAllAndWait to await zero tasks and
+        // return while DNS is still in flight. Snapshotting first captures pre-existing
+        // tasks; resolveAll() then adds any domains that weren't already in flight;
+        // snapshotting again captures the union — keyed by UUID so there are no dupes.
+        var tasksByID = inFlightByID
         resolveAll()
-        // Snapshot the tasks *after* resolveAll() so we capture any newly-enqueued ones.
-        // Tasks remove themselves from inFlightByID via defer on completion, so we must
-        // hold our own references here to avoid a race where a task finishes and removes
-        // itself before the withTaskGroup loop adds it.
-        let tasks = Array(inFlightByID.values)
+        for (id, task) in inFlightByID {
+            tasksByID[id] = task
+        }
         await withTaskGroup(of: Void.self) { group in
-            for task in tasks {
+            for task in tasksByID.values {
                 group.addTask { await task.value }
             }
         }
