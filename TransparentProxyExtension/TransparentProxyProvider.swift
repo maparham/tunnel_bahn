@@ -214,50 +214,16 @@ final class TransparentProxyProvider: NETransparentProxyProvider {
     }
     
     private func loadFromUserDefaultsOrFallback() {
-        if AppGroupStore.defaults.bool(forKey: Self.perAppRouteAllFlowsDefaultsKey) {
-            routedFiltersLock.lock()
-            routeAllIdentifiedFlows = true
-            routedSigningIdentifiers = []
-            routedFiltersLock.unlock()
-            Self.log.notice("loadFromUserDefaultsOrFallback: routeAllIdentifiedFlows from UserDefaults")
-            return
-        }
-
-        routeAllIdentifiedFlows = false
-        let persisted = (AppGroupStore.defaults.array(forKey: Self.perAppRoutedSigningIDsDefaultsKey) as? [String]) ?? []
-        Self.log.notice("loadFromUserDefaultsOrFallback: read \(persisted.count) from UserDefaults")
-        var ids = Set(
-            persisted.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-                .filter { !$0.isEmpty }
-        )
-
-        // Backward compatibility: if the host app hasn't persisted resolved NEAppRule IDs yet,
-        // fall back to AppRuleStore + curated helper mapping.
-        if ids.isEmpty {
-            Self.log.notice("loadFromUserDefaultsOrFallback: empty, falling back to AppRuleStore")
-            let rules = PerAppIdentityMap.loadActiveRules().filter { $0.action == .routeVPN }
-            for rule in rules {
-                let trimmed = rule.bundleIdentifier.trimmingCharacters(in: .whitespacesAndNewlines)
-                if !trimmed.isEmpty {
-                    ids.insert(trimmed)
-                }
-            }
-            for (signingID, displayName) in PerAppSigningCatalog.knownRollupBySigningIdentifier {
-                if rules.contains(where: { $0.displayName == displayName }) {
-                    ids.insert(signingID)
-                }
-            }
-            Self.log.notice("loadFromUserDefaultsOrFallback: fallback produced \(ids.count) IDs")
-        }
-
-        if ids.contains("com.apple.Terminal") {
-            ids.formUnion(["com.apple.curl", "com.apple.ssh"])
-        }
-
+        // UserDefaults with a suite name (kCFPreferencesAnyUser) is not accessible from inside
+        // Network Extension processes — macOS logs a CFPreferences warning and returns empty data.
+        // The shared file written by the host app is the authoritative source and is always written
+        // before the proxy starts. Treat a missing file as an empty routing set rather than
+        // attempting a UserDefaults read that will warn and return nothing useful.
+        Self.log.notice("loadFromUserDefaultsOrFallback: shared file unavailable; routing set will be empty until next proxy cycle")
         routedFiltersLock.lock()
-        routedSigningIdentifiers = ids
+        routeAllIdentifiedFlows = false
+        routedSigningIdentifiers = []
         routedFiltersLock.unlock()
-        Self.log.notice("loadFromUserDefaultsOrFallback: final count=\(ids.count, privacy: .public), ids=\(ids.sorted().joined(separator: ","), privacy: .public)")
     }
 
     /// Builds the NENetworkRules for the proxy's includedNetworkRules.

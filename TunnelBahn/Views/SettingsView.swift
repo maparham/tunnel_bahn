@@ -55,7 +55,7 @@ struct SettingsView: View {
                     HStack(spacing: 10) {
                         Button("Export") { triggerExport() }
                         Button("Import") { triggerImport() }
-                        Button("Reset…") { isResetConfirmationPresented = true }
+                        Button("Reset") { isResetConfirmationPresented = true }
                             .foregroundStyle(.red)
                     }
                 }

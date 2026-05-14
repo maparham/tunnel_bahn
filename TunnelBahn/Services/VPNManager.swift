@@ -18,6 +18,7 @@ final class VPNManager: ObservableObject {
     private var resourceMonitorCancellables = Set<AnyCancellable>()
     private let publicIPSession = URLSession(configuration: .ephemeral)
     private var statsRefreshTask: Task<Void, Never>?
+    private var publicIPRefreshTask: Task<Void, Never>?
     private var lastTransferSnapshot: TransferSnapshot?
     private var lastPerAppAggregateSnapshot: TransferSnapshot?
     private let perAppStatsProxy = PerAppStatsProxyManager()
@@ -31,6 +32,9 @@ final class VPNManager: ObservableObject {
     private var pendingConnectCompletionTask: Task<Void, Never>?
     /// True while `connect` is in-flight (used so termination does not race connect/teardown).
     private var connectRunning = false
+    /// True while `performDisconnect` is in-flight. Prevents transient NE states (.connected,
+    /// .disconnecting) from regressing stats.state back toward connected while teardown runs.
+    private var disconnectRunning = false
     /// Single shared disconnect work item so manual disconnect and termination cannot run `performDisconnect` concurrently.
     private var disconnectCoordinatorTask: Task<Void, Never>?
 
@@ -575,6 +579,7 @@ final class VPNManager: ObservableObject {
         stats.endpoint = extensionProfile.peers.first?.endpoint
         stats.perAppSplitTunnelActive = hasAppTunnelSelection && useAppTunnelNEStack
         stats.perAppStatsCollectionActive = useAppTunnelNEStack
+        stats.tunnelHasDefaultRoute = profileOkForAccounting
 
         if useAppTunnelNEStack {
             PerAppTransferStore.reset()
@@ -614,6 +619,8 @@ final class VPNManager: ObservableObject {
         }
 
         // Defer ipify / probes so bring-up is not blocked (~10–45s) while the tunnel is already usable.
+        // Skip the probe entirely for profiles without a default route (LAN-only / split-destination):
+        // all probe URLs are internet addresses not in AllowedIPs, so they'd be silently dropped by WireGuard.
         let probePhase: TunnelProbePhase = {
             guard useAppTunnelNEStack else { return .fullTunnel }
             guard hasAppTunnelSelection else { return .fullTunnel }
@@ -621,7 +628,7 @@ final class VPNManager: ObservableObject {
             return .appTunnelHostExcluded
         }()
         let profileID = profile.id
-        let runProbe = settings.runTunnelConnectivityProbe
+        let runProbe = settings.runTunnelConnectivityProbe && profileOkForAccounting
 
         startStatsRefreshIfNeeded()
         shouldAutoReconnect = true
@@ -918,6 +925,8 @@ final class VPNManager: ObservableObject {
     }
 
     private func performDisconnect(waitForTunnelStop: Bool = false) async {
+        disconnectRunning = true
+        defer { disconnectRunning = false }
         // If an app-tunnel VPN configuration remains enabled with appRules installed,
         // macOS may enforce "VPN required" for matched apps even while disconnected
         // (which looks like the app's traffic is blocked).
@@ -934,6 +943,8 @@ final class VPNManager: ObservableObject {
             }
         }
 
+        publicIPRefreshTask?.cancel()
+        publicIPRefreshTask = nil
         await perAppStatsProxy.disable()
         PerAppTransferStore.reset()
         ExtensionResourceStore.reset()
@@ -962,6 +973,7 @@ final class VPNManager: ObservableObject {
         stats.publicIPLocation = nil
         stats.perAppSplitTunnelActive = false
         stats.perAppStatsCollectionActive = false
+        stats.tunnelHasDefaultRoute = false
         stats.bytesIn = 0
         stats.bytesOut = 0
         stats.rxBytesPerSecond = 0
@@ -1164,6 +1176,13 @@ final class VPNManager: ObservableObject {
 
     private func syncStatus() {
         let status = manager.connection.status
+        // While performDisconnect owns the lifecycle, ignore any transient NE state that would
+        // regress the UI back toward connected. Only .disconnecting and .disconnected are allowed
+        // through; everything else is noise from the NE manager reconfiguration during teardown.
+        if disconnectRunning, status != .disconnecting, status != .disconnected, status != .invalid {
+            traceLog("syncStatus suppressed during disconnect: manager=\(status.rawValue)")
+            return
+        }
         switch manager.connection.status {
         case .connected: stats.state = .connected
         case .connecting: stats.state = .connecting
@@ -1181,6 +1200,7 @@ final class VPNManager: ObservableObject {
             }
             stats.publicIP = nil
             stats.publicIPLocation = nil
+            stats.tunnelHasDefaultRoute = false
         @unknown default: stats.state = .error
         }
         if stats.state == .connected, stats.connectedProfileID == nil {
@@ -1189,9 +1209,11 @@ final class VPNManager: ObservableObject {
                 stats.endpoint = runtimeProfile.peers.first?.endpoint
             }
         }
-        if stats.state == .connected, stats.publicIP == nil {
-            Task { @MainActor in
-                await refreshPublicIPAndLocation()
+        if stats.state == .connected, stats.tunnelHasDefaultRoute, stats.publicIP == nil,
+           publicIPRefreshTask == nil {
+            publicIPRefreshTask = Task { @MainActor [weak self] in
+                await self?.refreshPublicIPAndLocation()
+                self?.publicIPRefreshTask = nil
             }
         }
         if stats.state == .connected || stats.state == .reconnecting {
@@ -1361,6 +1383,7 @@ final class VPNManager: ObservableObject {
 
     private func refreshPublicIPAndLocation() async {
         guard stats.state == .connected else { return }
+        guard stats.tunnelHasDefaultRoute else { return }
         guard let url = URL(string: "https://api.ipify.org") else { return }
         var request = URLRequest(url: url)
         request.timeoutInterval = 5

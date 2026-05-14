@@ -55,6 +55,10 @@ struct ConnectionStats: Codable {
     var transparentProxyMemoryUsage: UInt64
     /// Wall-clock time of the last merged write from either extension.
     var extensionStatsUpdatedAt: Date?
+    /// True when the connected profile includes a default route (0.0.0.0/0 or ::/0) — i.e. internet
+    /// traffic flows through the tunnel. False for LAN-only / split-destination profiles where internet
+    /// requests from TunnelBahn itself will fail if the host app is in the NEAppRule list.
+    var tunnelHasDefaultRoute: Bool
 
     static let empty = ConnectionStats(
         state: .disconnected,
@@ -82,6 +86,7 @@ struct ConnectionStats: Codable {
         packetTunnelMemoryUsage: 0,
         transparentProxyCPUUsage: 0,
         transparentProxyMemoryUsage: 0,
-        extensionStatsUpdatedAt: nil
+        extensionStatsUpdatedAt: nil,
+        tunnelHasDefaultRoute: false
     )
 }

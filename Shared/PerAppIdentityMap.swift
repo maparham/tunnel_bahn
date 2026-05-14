@@ -39,7 +39,9 @@ enum PerAppIdentityMap {
     }
 
     /// Loads the active rule list from the App Group `UserDefaults` (the same storage used
-    /// by `AppRuleStore`). Safe to call from inside the extension.
+    /// by `AppRuleStore`). Inside Network Extension processes, `kCFPreferencesAnyUser` with
+    /// a container is blocked by macOS and returns nil — callers get an empty list and stats
+    /// show signing IDs instead of display names, which is acceptable degradation.
     static func loadActiveRules() -> [AppRule] {
         guard let data = AppGroupStore.defaults.data(forKey: "appRules") else {
             return []

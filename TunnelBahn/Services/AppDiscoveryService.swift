@@ -17,10 +17,29 @@ final class AppDiscoveryService: ObservableObject {
     }
 
     func refresh() {
-        var byPath: [String: DiscoveredApp] = [:]
-        mergeRunningApplications(into: &byPath)
-        apps = byPath.values.sorted { lhs, rhs in
-            lhs.displayName.localizedCaseInsensitiveCompare(rhs.displayName) == .orderedAscending
+        let snapshot = NSWorkspace.shared.runningApplications
+        Task.detached(priority: .userInitiated) {
+            var byPath: [String: DiscoveredApp] = [:]
+            for application in snapshot {
+                guard application.activationPolicy == .regular,
+                      let bundleID = application.bundleIdentifier,
+                      let url = application.bundleURL
+                else { continue }
+                let path = url.path
+                let name = application.localizedName ?? url.deletingPathExtension().lastPathComponent
+                let icon = application.icon ?? NSWorkspace.shared.icon(forFile: path)
+                byPath[path] = DiscoveredApp(
+                    displayName: name,
+                    bundleIdentifier: bundleID,
+                    appPath: path,
+                    icon: icon,
+                    bookmarkData: nil
+                )
+            }
+            let sorted = byPath.values.sorted {
+                $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending
+            }
+            await MainActor.run { self.apps = sorted }
         }
     }
 
@@ -62,27 +81,4 @@ final class AppDiscoveryService: ObservableObject {
         )
     }
 
-    // MARK: - Running apps
-
-    private func mergeRunningApplications(into discovered: inout [String: DiscoveredApp]) {
-        for application in NSWorkspace.shared.runningApplications {
-            guard application.activationPolicy == .regular,
-                  let bundleID = application.bundleIdentifier,
-                  let url = application.bundleURL
-            else { continue }
-
-            let path = url.path
-            let name = application.localizedName ?? url.deletingPathExtension().lastPathComponent
-            let icon = application.icon ?? NSWorkspace.shared.icon(forFile: path)
-            // Do not store security-scoped bookmarks here: sandboxed apps cannot mint durable scoped
-            // bookmarks for other bundles without explicit user consent (use Add App…).
-            discovered[path] = DiscoveredApp(
-                displayName: name,
-                bundleIdentifier: bundleID,
-                appPath: path,
-                icon: icon,
-                bookmarkData: nil
-            )
-        }
-    }
 }
