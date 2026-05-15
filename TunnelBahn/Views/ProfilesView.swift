@@ -13,7 +13,7 @@ struct ProfilesView: View {
     @ObservedObject var settings: AppSettings
     let appRuleStore: AppRuleStore
     let destinationRuleStore: DestinationRuleStore
-    @State private var importError: String?
+    @State private var profileActionError: String?
     @State private var isPasteSheetPresented = false
     @State private var pastedProfileName = ""
     @State private var pastedConfig = ""
@@ -24,7 +24,6 @@ struct ProfilesView: View {
     @State private var isOverwriteConfirmationPresented = false
     @State private var profileDetailTab: ProfileDetailTab = .overview
     private let parser = WireGuardConfigParser()
-    private let keychainService = KeychainService.shared
 
     var body: some View {
         HStack(spacing: 0) {
@@ -32,10 +31,10 @@ struct ProfilesView: View {
             Divider()
             detailPanel
         }
-        .alert("Import Failed", isPresented: .constant(importError != nil), actions: {
-            Button("OK") { importError = nil }
+        .alert("Error", isPresented: .constant(profileActionError != nil), actions: {
+            Button("OK") { profileActionError = nil }
         }, message: {
-            Text(importError ?? "Unknown error")
+            Text(profileActionError ?? "Unknown error")
         })
         .sheet(item: $editingProfile) { profile in
             ProfileEditorSheet(
@@ -285,6 +284,9 @@ struct ProfilesView: View {
                             var updated = selectedProfile
                             updated.name = newName
                             profileStore.update(updated)
+                        },
+                        onExport: {
+                            exportProfileAsConf(selectedProfile)
                         }
                     )
                 case .apps:
@@ -344,6 +346,12 @@ struct ProfilesView: View {
         menu.addItem(makeMenuItem(title: "Copy", symbolName: "doc.on.doc") {
             copyProfileConfigToClipboard(profile)
             showCopiedToast()
+        })
+        menu.addItem(makeMenuItem(title: "Export…", symbolName: "square.and.arrow.up") {
+            exportProfileAsConf(profile)
+        })
+        menu.addItem(makeMenuItem(title: "Show QR Code", symbolName: "qrcode") {
+            showQRCodePanel(for: profile)
         })
         menu.addItem(.separator())
         let deleteItem = makeMenuItem(title: "Delete", symbolName: "trash") {
@@ -411,7 +419,7 @@ struct ProfilesView: View {
             let profile = try parser.parse(fileURL: url)
             addProfileWithOverwriteCheck(profile)
         } catch {
-            importError = error.localizedDescription
+            profileActionError = error.localizedDescription
         }
     }
 
@@ -425,7 +433,7 @@ struct ProfilesView: View {
             resetPasteState()
             isPasteSheetPresented = false
         } catch {
-            importError = error.localizedDescription
+            profileActionError = error.localizedDescription
         }
     }
 
@@ -475,46 +483,74 @@ struct ProfilesView: View {
             NSPasteboard.general.clearContents()
             NSPasteboard.general.setString(config, forType: .string)
         } catch {
-            importError = error.localizedDescription
+            profileActionError = error.localizedDescription
         }
     }
 
     private func renderFullConfig(profile: WireGuardProfile) throws -> String {
-        let privateKey = try keychainService.read(account: profile.interface.privateKeyRef)
-
-        var lines: [String] = [
-            "[Interface]",
-            "PrivateKey = \(privateKey)",
-        ]
-
-        if !profile.interface.addresses.isEmpty {
-            lines.append("Address = \(profile.interface.addresses.joined(separator: ", "))")
-        }
-        if !profile.interface.dnsServers.isEmpty {
-            lines.append("DNS = \(profile.interface.dnsServers.joined(separator: ", "))")
-        }
-        if let mtu = profile.interface.mtu {
-            lines.append("MTU = \(mtu)")
-        }
-
-        for peer in profile.peers {
-            lines.append("")
-            lines.append("[Peer]")
-            lines.append("PublicKey = \(peer.publicKey)")
-            if let presharedKeyRef = peer.presharedKeyRef {
-                let psk = try keychainService.read(account: presharedKeyRef)
-                lines.append("PresharedKey = \(psk)")
-            }
-            lines.append("AllowedIPs = \(peer.allowedIPs.joined(separator: ", "))")
-            lines.append("Endpoint = \(peer.endpoint)")
-            if let keepalive = peer.persistentKeepalive {
-                lines.append("PersistentKeepalive = \(keepalive)")
-            }
-        }
-
-        return lines.joined(separator: "\n") + "\n"
+        try WireGuardConfigRenderer().renderFullConfigString(profile: profile)
     }
-    
+
+    private func exportProfileAsConf(_ profile: WireGuardProfile) {
+        do {
+            let config = try WireGuardConfigRenderer().renderFullConfigString(profile: profile)
+            let panel = NSSavePanel()
+            panel.allowedContentTypes = [UTType(filenameExtension: "conf") ?? .plainText]
+            panel.nameFieldStringValue = "\(profile.name).conf"
+            panel.title = "Export WireGuard Profile"
+            guard panel.runModal() == .OK, let url = panel.url else { return }
+            try config.write(to: url, atomically: true, encoding: .utf8)
+        } catch {
+            profileActionError = error.localizedDescription
+        }
+    }
+
+    private func showQRCodePanel(for profile: WireGuardProfile) {
+        let content: AnyView
+        do {
+            let config = try WireGuardConfigRenderer().renderFullConfigString(profile: profile)
+            if let qrImage = WireGuardConfigRenderer.makeQRCodeImage(from: config) {
+                content = AnyView(
+                    VStack(spacing: 8) {
+                        Text(profile.name).font(.headline)
+                        Image(nsImage: qrImage)
+                            .interpolation(.none)
+                            .resizable()
+                            .scaledToFit()
+                            .frame(width: 240, height: 240)
+                    }
+                    .padding(16)
+                )
+            } else {
+                content = AnyView(
+                    Text("Config is too large to encode as a QR code.")
+                        .foregroundStyle(.secondary)
+                        .padding(32)
+                )
+            }
+        } catch {
+            content = AnyView(
+                Text("Could not read profile: \(error.localizedDescription)")
+                    .foregroundStyle(.red)
+                    .padding(32)
+            )
+        }
+
+        let hosting = NSHostingView(rootView: content)
+        hosting.sizingOptions = .preferredContentSize
+        let panel = NSPanel(
+            contentRect: NSRect(x: 0, y: 0, width: 272, height: 300),
+            styleMask: [.titled, .closable, .nonactivatingPanel],
+            backing: .buffered,
+            defer: false
+        )
+        panel.title = "QR Code — \(profile.name)"
+        panel.contentView = hosting
+        panel.level = .floating
+        panel.center()
+        panel.makeKeyAndOrderFront(nil)
+    }
+
     private func addProfileWithOverwriteCheck(_ profile: WireGuardProfile) {
         // Check if a profile with the same name already exists
         if let existing = profileStore.profiles.first(where: { $0.name == profile.name && $0.id != profile.id }) {

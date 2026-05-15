@@ -1,4 +1,4 @@
-import Foundation
+import AppKit
 
 struct RenderedWireGuardConfig {
     let fileURL: URL
@@ -54,6 +54,55 @@ final class WireGuardConfigRenderer {
             "render config finished path=\(fileURL.path) peers=\(profile.peers.count) addresses=\(profile.interface.addresses.count)"
         )
         return RenderedWireGuardConfig(fileURL: fileURL, contents: rendered)
+    }
+
+    func renderFullConfigString(profile: WireGuardProfile) throws -> String {
+        let privateKey = try keychainService.read(account: profile.interface.privateKeyRef)
+
+        var lines: [String] = ["[Interface]", "PrivateKey = \(privateKey)"]
+
+        if !profile.interface.addresses.isEmpty {
+            lines.append("Address = \(profile.interface.addresses.joined(separator: ", "))")
+        }
+        if !profile.interface.dnsServers.isEmpty {
+            lines.append("DNS = \(profile.interface.dnsServers.joined(separator: ", "))")
+        }
+        if let mtu = profile.interface.mtu {
+            lines.append("MTU = \(mtu)")
+        }
+
+        for peer in profile.peers {
+            lines.append("")
+            lines.append("[Peer]")
+            lines.append("PublicKey = \(peer.publicKey)")
+            if let presharedKeyRef = peer.presharedKeyRef {
+                let psk = try keychainService.read(account: presharedKeyRef)
+                lines.append("PresharedKey = \(psk)")
+            }
+            lines.append("AllowedIPs = \(peer.allowedIPs.joined(separator: ", "))")
+            lines.append("Endpoint = \(peer.endpoint)")
+            if let keepalive = peer.persistentKeepalive {
+                lines.append("PersistentKeepalive = \(keepalive)")
+            }
+        }
+
+        return lines.joined(separator: "\n") + "\n"
+    }
+
+    static func makeQRCodeImage(from configString: String, scale: CGFloat = 10) -> NSImage? {
+        guard let data = configString.data(using: .utf8),
+              let filter = CIFilter(name: "CIQRCodeGenerator") else { return nil }
+
+        filter.setValue(data, forKey: "inputMessage")
+        filter.setValue("L", forKey: "inputCorrectionLevel")
+
+        guard let output = filter.outputImage else { return nil }
+
+        let scaled = output.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
+        let rep = NSCIImageRep(ciImage: scaled)
+        let image = NSImage(size: rep.size)
+        image.addRepresentation(rep)
+        return image
     }
 
     private func debugLog(_ message: String) {

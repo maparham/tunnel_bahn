@@ -5,7 +5,6 @@ struct ProfileEditorSheet: View {
     private let original: WireGuardProfile
     let onSave: (WireGuardProfile) -> Void
     let onCancel: () -> Void
-    private let keychainService = KeychainService.shared
 
     @State private var name: String
     @State private var addressesCSV: String
@@ -243,39 +242,7 @@ struct ProfileEditorSheet: View {
     }
 
     private func renderFullConfig(profile: WireGuardProfile) throws -> String {
-        let privateKey = try keychainService.read(account: profile.interface.privateKeyRef)
-
-        var lines: [String] = [
-            "[Interface]",
-            "PrivateKey = \(privateKey)",
-        ]
-
-        if !profile.interface.addresses.isEmpty {
-            lines.append("Address = \(profile.interface.addresses.joined(separator: ", "))")
-        }
-        if !profile.interface.dnsServers.isEmpty {
-            lines.append("DNS = \(profile.interface.dnsServers.joined(separator: ", "))")
-        }
-        if let mtu = profile.interface.mtu {
-            lines.append("MTU = \(mtu)")
-        }
-
-        for peer in profile.peers {
-            lines.append("")
-            lines.append("[Peer]")
-            lines.append("PublicKey = \(peer.publicKey)")
-            if let presharedKeyRef = peer.presharedKeyRef {
-                let psk = try keychainService.read(account: presharedKeyRef)
-                lines.append("PresharedKey = \(psk)")
-            }
-            lines.append("AllowedIPs = \(peer.allowedIPs.joined(separator: ", "))")
-            lines.append("Endpoint = \(peer.endpoint)")
-            if let keepalive = peer.persistentKeepalive {
-                lines.append("PersistentKeepalive = \(keepalive)")
-            }
-        }
-
-        return lines.joined(separator: "\n") + "\n"
+        try WireGuardConfigRenderer().renderFullConfigString(profile: profile)
     }
 
     private static func isValidWireGuardKeyBase64(_ value: String) -> Bool {

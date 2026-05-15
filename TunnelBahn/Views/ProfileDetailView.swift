@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 
 struct ProfileDetailView: View {
     let profile: WireGuardProfile
@@ -15,10 +16,14 @@ struct ProfileDetailView: View {
     let onToggleTunnel: () -> Void
     let onEdit: () -> Void
     let onRename: (String) -> Void
+    let onExport: () -> Void
 
     @FocusState private var nameFieldFocused: Bool
     @State private var editingName = false
     @State private var nameDraft = ""
+    @State private var showQRPopover = false
+    @State private var qrImage: NSImage? = nil
+    @State private var qrError: String? = nil
 
     private static let byteFormatter: ByteCountFormatter = {
         let formatter = ByteCountFormatter()
@@ -203,6 +208,28 @@ struct ProfileDetailView: View {
                 }
 
                 Spacer()
+                Button(action: onExport) {
+                    Image(systemName: "square.and.arrow.up")
+                        .font(.system(size: 22))
+                        .foregroundStyle(Color.primary)
+                }
+                .buttonStyle(.plain)
+                .instantTooltip("Export as .conf")
+
+                Button {
+                    generateQRImage()
+                    showQRPopover = true
+                } label: {
+                    Image(systemName: "qrcode")
+                        .font(.system(size: 22))
+                        .foregroundStyle(Color.primary)
+                }
+                .buttonStyle(.plain)
+                .instantTooltip("Show QR code")
+                .popover(isPresented: $showQRPopover, arrowEdge: .bottom) {
+                    qrPopoverContent
+                }
+
                 Button(action: onEdit) {
                     Image(systemName: "pencil.circle")
                         .font(.system(size: 22))
@@ -226,7 +253,41 @@ struct ProfileDetailView: View {
             }
             .onChange(of: profile.id) {
                 cancelNameEdit()
+                qrImage = nil
+                qrError = nil
+                showQRPopover = false
             }
+        }
+    }
+
+    private var qrPopoverContent: some View {
+        Group {
+            if let image = qrImage {
+                Image(nsImage: image)
+                    .interpolation(.none)
+                    .resizable()
+                    .scaledToFit()
+                    .frame(width: 220, height: 220)
+                    .padding(16)
+            } else {
+                Text(qrError ?? "Generating…")
+                    .foregroundStyle(.secondary)
+                    .padding(32)
+            }
+        }
+    }
+
+    private func generateQRImage() {
+        do {
+            let config = try WireGuardConfigRenderer().renderFullConfigString(profile: profile)
+            if let img = WireGuardConfigRenderer.makeQRCodeImage(from: config) {
+                qrImage = img
+                qrError = nil
+            } else {
+                qrError = "Config too large for QR code"
+            }
+        } catch {
+            qrError = error.localizedDescription
         }
     }
 
