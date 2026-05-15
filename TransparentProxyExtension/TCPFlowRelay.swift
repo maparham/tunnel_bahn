@@ -10,11 +10,18 @@ import os.log
 /// Lifecycle:
 /// - `start()` opens the proxy flow and the outbound `NWConnection` in parallel.
 /// - When the connection is `.ready`, both relay loops are started.
-/// - On any IO error, `cleanup()` is called once and forwards an `onClose` notification.
+/// - On success (e.g. TCP FIN from peer), closes the app flow with `nil` (clean EOF).
+/// - On relay failure, closes with a non-nil error so teardown is not mistaken for a graceful handoff.
 final class TCPFlowRelay {
     private static let log = Logger(
         subsystem: "com.tunnelbahn.mac.transparentproxy",
         category: "TCPRelay"
+    )
+
+    private static let relayFailureError = NSError(
+        domain: "com.tunnelbahn.mac.transparentproxy",
+        code: 1,
+        userInfo: [NSLocalizedDescriptionKey: "Relay to destination failed"]
     )
 
     private let flow: NEAppProxyTCPFlow
@@ -48,7 +55,7 @@ final class TCPFlowRelay {
               let endpoint = EndpointBridge.modernize(hostEndpoint)
         else {
             Self.log.error("TCP flow has unsupported remoteEndpoint; dropping")
-            cleanup()
+            finishDueToFailure()
             return
         }
 
@@ -64,9 +71,9 @@ final class TCPFlowRelay {
                 self.openProxyFlowAndStartRelay()
             case let .failed(error):
                 Self.log.error("TCP NWConnection failed: \(error.localizedDescription, privacy: .public)")
-                self.cleanup()
+                self.finishDueToFailure(underlying: error)
             case .cancelled:
-                self.cleanup()
+                self.finishDueToFailure()
             case .waiting(let error):
                 Self.log.notice("TCP NWConnection waiting: \(error.localizedDescription, privacy: .public)")
             default:
@@ -81,7 +88,7 @@ final class TCPFlowRelay {
             guard let self else { return }
             if let error {
                 Self.log.error("flow.open failed: \(error.localizedDescription, privacy: .public)")
-                self.cleanup()
+                self.finishDueToFailure(underlying: error)
                 return
             }
             Self.log.notice("TCP flow.open succeeded signingID=\(self.signingID, privacy: .public)")
@@ -97,7 +104,7 @@ final class TCPFlowRelay {
             guard let self else { return }
             if let error {
                 Self.log.debug("flow.readData error: \(error.localizedDescription, privacy: .public)")
-                self.cleanup()
+                self.finishDueToFailure(underlying: error)
                 return
             }
             guard let data, !data.isEmpty else {
@@ -112,7 +119,7 @@ final class TCPFlowRelay {
                     guard let self else { return }
                     if let sendError {
                         Self.log.debug("NWConnection.send error: \(sendError.localizedDescription, privacy: .public)")
-                        self.cleanup()
+                        self.finishDueToFailure(underlying: sendError)
                         return
                     }
                     self.relayAppToRemote()
@@ -127,7 +134,7 @@ final class TCPFlowRelay {
             guard let self else { return }
             if let error {
                 Self.log.debug("NWConnection.receive error: \(error.localizedDescription, privacy: .public)")
-                self.cleanup()
+                self.finishDueToFailure(underlying: error)
                 return
             }
             if let data, !data.isEmpty {
@@ -136,7 +143,7 @@ final class TCPFlowRelay {
                     guard let self else { return }
                     if let writeError {
                         Self.log.debug("flow.write error: \(writeError.localizedDescription, privacy: .public)")
-                        self.cleanup()
+                        self.finishDueToFailure(underlying: writeError)
                         return
                     }
                     self.relayRemoteToApp()
@@ -145,22 +152,43 @@ final class TCPFlowRelay {
             }
             if isComplete {
                 Self.log.debug("NWConnection.receive complete signingID=\(self.signingID, privacy: .public)")
-                self.flow.closeReadWithError(nil)
-                self.cleanup()
+                self.finishSuccessfully()
             }
         }
     }
 
-    private func cleanup() {
-        // Idempotent — multiple error paths can race here.
-        let shouldFire: Bool = {
-            if didCloseOnce { return false }
-            didCloseOnce = true
-            return true
-        }()
-        guard shouldFire else { return }
+    private func failureNSError(underlying: Error?) -> NSError {
+        guard let underlying else { return Self.relayFailureError }
+        return NSError(
+            domain: (Self.relayFailureError as NSError).domain,
+            code: (Self.relayFailureError as NSError).code,
+            userInfo: [
+                NSLocalizedDescriptionKey: (Self.relayFailureError as NSError).localizedDescription,
+                NSUnderlyingErrorKey: underlying,
+            ]
+        )
+    }
+
+    /// Idempotent — multiple error paths can race here.
+    private func takeFinishToken() -> Bool {
+        if didCloseOnce { return false }
+        didCloseOnce = true
+        return true
+    }
+
+    private func finishSuccessfully() {
+        guard takeFinishToken() else { return }
         flow.closeReadWithError(nil)
         flow.closeWriteWithError(nil)
+        connection?.cancel()
+        onClose()
+    }
+
+    private func finishDueToFailure(underlying: Error? = nil) {
+        guard takeFinishToken() else { return }
+        let err = failureNSError(underlying: underlying)
+        flow.closeReadWithError(err)
+        flow.closeWriteWithError(err)
         connection?.cancel()
         onClose()
     }

@@ -1,5 +1,11 @@
 import Foundation
 
+enum ConnectivityProbeResult: Equatable {
+    case unknown
+    case ok
+    case failed(String)
+}
+
 enum VPNConnectionState: String, Codable {
     case disconnected
     case connecting
@@ -59,6 +65,20 @@ struct ConnectionStats: Codable {
     /// traffic flows through the tunnel. False for LAN-only / split-destination profiles where internet
     /// requests from TunnelBahn itself will fail if the host app is in the NEAppRule list.
     var tunnelHasDefaultRoute: Bool
+    /// Result of the post-connect connectivity probe. Not persisted (excluded from Codable).
+    var connectivityProbeResult: ConnectivityProbeResult = .unknown
+
+    // Exclude connectivityProbeResult from Codable synthesis.
+    private enum CodingKeys: String, CodingKey {
+        case state, connectedAt, lastInboundAt, lastError, bytesIn, bytesOut
+        case rxBytesPerSecond, txBytesPerSecond, connectedProfileID, endpoint
+        case publicIP, publicIPLocation, perAppSplitTunnelActive, perAppStatsCollectionActive
+        case perAppAggregateRxBytesPerSecond, perAppAggregateTxBytesPerSecond
+        case perAppStats, perDestinationStats, perAppStatsUpdatedAt
+        case appCPUUsage, appMemoryUsage, packetTunnelCPUUsage, packetTunnelMemoryUsage
+        case transparentProxyCPUUsage, transparentProxyMemoryUsage, extensionStatsUpdatedAt
+        case tunnelHasDefaultRoute
+    }
 
     static let empty = ConnectionStats(
         state: .disconnected,

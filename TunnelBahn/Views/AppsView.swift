@@ -105,14 +105,14 @@ struct AppsView: View {
                 .foregroundStyle(.secondary)
             }
 
-            if rulesLocked {
-                Text("Disconnect the VPN to edit app routing rules.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-
             if AppConstants.isPerAppSplitTunnelEnabled {
                 let isAppTunnel = appState.settings.routingMode == .appTunnel
+                VStack(alignment: .leading, spacing: 8) {
+                if rulesLocked {
+                    Label("Disconnect the VPN to edit app routing rules.", systemImage: "lock.fill")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
                 HStack(alignment: .top, spacing: 16) {
                     VStack(alignment: .leading, spacing: 10) {
                         GroupBox("Running Apps") {
@@ -203,6 +203,9 @@ struct AppsView: View {
                     }
                     .frame(maxWidth: .infinity)
                 }
+                .disabled(rulesLocked)
+                .opacity(rulesLocked ? 0.45 : 1)
+                } // VStack
             }
             Spacer(minLength: 0)
         }

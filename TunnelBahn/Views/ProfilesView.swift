@@ -197,27 +197,60 @@ struct ProfilesView: View {
 
                     Spacer(minLength: 0)
 
-                    if isSelectedProfileActive && !splitTunnelWarnings.isEmpty {
+                    if vpnManager.stats.state == .connected {
+                        if !vpnManager.stats.tunnelHasDefaultRoute {
+                            Image(systemName: "wifi.exclamationmark")
+                                .foregroundStyle(.secondary)
+                                .instantTooltip("Internet may not be reachable")
+                                .accessibilityLabel("Internet may not be reachable")
+                        } else {
+                            switch vpnManager.stats.connectivityProbeResult {
+                            case .ok:
+                                Image(systemName: "wifi")
+                                    .foregroundStyle(.green)
+                                    .instantTooltip("Internet reachable via tunnel")
+                                    .accessibilityLabel("Internet reachable via tunnel")
+                            case .failed(let message):
+                                Image(systemName: "wifi.slash")
+                                    .foregroundStyle(.orange)
+                                    .instantTooltip(message)
+                                    .accessibilityLabel("No internet via tunnel: \(message)")
+                            case .unknown:
+                                EmptyView()
+                            }
+                        }
+                    }
+
+                    if let connectedAt = vpnManager.stats.connectedAt {
+                        TimelineView(.periodic(from: connectedAt, by: 1)) { _ in
+                            Text(formatDuration(since: connectedAt))
+                                .font(.callout.weight(.medium))
+                                .monospacedDigit()
+                        }
+                    }
+
+                    StatusBadge(
+                        title: connectionStatusTitle(
+                            isActive: vpnManager.stats.state != .disconnected && vpnManager.stats.state != .error,
+                            state: vpnManager.stats.state,
+                            probeResult: vpnManager.stats.connectivityProbeResult
+                        ),
+                        color: connectionStatusColor(
+                            isActive: vpnManager.stats.state != .disconnected && vpnManager.stats.state != .error,
+                            state: vpnManager.stats.state,
+                            probeResult: vpnManager.stats.connectivityProbeResult
+                        )
+                    )
+                    .instantTooltip(
+                        vpnManager.stats.connectedProfileID
+                            .flatMap { id in profileStore.profiles.first { $0.id == id } }?.name
+                            ?? "No tunnel is active"
+                    )
+
+                    if vpnManager.stats.state == .connected && !splitTunnelWarnings.isEmpty {
                         SplitTunnelWarningIcon(warnings: splitTunnelWarnings)
                     }
 
-                    Button {
-                        if isSelectedProfileActive {
-                            vpnManager.disconnect()
-                        } else {
-                            Task { await connectSelectedProfile() }
-                        }
-                    } label: {
-                        if vpnManager.isBusy {
-                            ProgressView()
-                                .controlSize(.small)
-                        } else {
-                            Text(isSelectedProfileActive ? "Deactivate" : "Activate")
-                        }
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.large)
-                    .disabled(vpnManager.isBusy)
                 }
                 .padding(.horizontal, 20)
                 .padding(.vertical, 10)
@@ -238,6 +271,13 @@ struct ProfilesView: View {
                         txBytesPerSecond: vpnManager.stats.txBytesPerSecond,
                         lastError: vpnManager.stats.lastError,
                         splitTunnelWarnings: splitTunnelWarnings,
+                        onToggleTunnel: {
+                            if isSelectedProfileActive {
+                                vpnManager.disconnect()
+                            } else {
+                                Task { await appState.connectProfile(selectedProfile) }
+                            }
+                        },
                         onEdit: {
                             editingProfile = profileStore.selectedProfile
                         },
@@ -272,8 +312,7 @@ struct ProfilesView: View {
                 if vpnManager.stats.connectedProfileID == profile.id {
                     vpnManager.disconnect()
                 } else {
-                    profileStore.select(id: profile.id)
-                    Task { await appState.connectSelectedProfile() }
+                    Task { await appState.connectProfile(profile) }
                 }
             })
                 .padding(.horizontal, 12)
@@ -295,8 +334,7 @@ struct ProfilesView: View {
             if isConnected {
                 vpnManager.disconnect()
             } else {
-                profileStore.select(id: profile.id)
-                Task { await appState.connectSelectedProfile() }
+                Task { await appState.connectProfile(profile) }
             }
         })
         menu.addItem(.separator())
@@ -431,10 +469,6 @@ struct ProfilesView: View {
         return profile.id == connectedProfileID
     }
 
-    private func connectSelectedProfile() async {
-        await appState.connectSelectedProfile()
-    }
-
     private func copyProfileConfigToClipboard(_ profile: WireGuardProfile) {
         do {
             let config = try renderFullConfig(profile: profile)
@@ -488,6 +522,36 @@ struct ProfilesView: View {
             isOverwriteConfirmationPresented = true
         } else {
             profileStore.add(profile)
+        }
+    }
+
+    private func formatDuration(since start: Date) -> String {
+        let seconds = max(0, Int(Date().timeIntervalSince(start).rounded()))
+        return Duration.seconds(seconds).formatted(.time(pattern: .hourMinuteSecond))
+    }
+
+    private func connectionStatusTitle(isActive: Bool, state: VPNConnectionState, probeResult: ConnectivityProbeResult) -> String {
+        guard isActive else { return "Inactive" }
+        switch state {
+        case .connected:
+            if case .failed = probeResult { return "No Internet" }
+            return "Active"
+        case .connecting, .reconnecting: return "Connecting"
+        case .disconnecting: return "Disconnecting"
+        case .error: return "Error"
+        case .disconnected: return "Inactive"
+        }
+    }
+
+    private func connectionStatusColor(isActive: Bool, state: VPNConnectionState, probeResult: ConnectivityProbeResult) -> Color {
+        guard isActive else { return .gray }
+        switch state {
+        case .connected:
+            if case .failed = probeResult { return .orange }
+            return .green
+        case .connecting, .disconnecting, .reconnecting: return .orange
+        case .error: return .red
+        case .disconnected: return .gray
         }
     }
 

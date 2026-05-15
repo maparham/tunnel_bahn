@@ -9,10 +9,18 @@ import os.log
 /// We open one outbound `NWConnection` per unique remote endpoint observed and route
 /// inbound datagrams back to the proxy flow tagged with the originating endpoint, which
 /// is what `NEAppProxyUDPFlow.writeDatagrams(_:sentBy:)` expects.
+///
+/// Clean teardown uses `nil` on the flow; relay failures use a non-nil error on close.
 final class UDPFlowRelay {
     private static let log = Logger(
         subsystem: "com.tunnelbahn.mac.transparentproxy",
         category: "UDPRelay"
+    )
+
+    private static let relayFailureError = NSError(
+        domain: "com.tunnelbahn.mac.transparentproxy",
+        code: 1,
+        userInfo: [NSLocalizedDescriptionKey: "Relay to destination failed"]
     )
 
     private let flow: NEAppProxyUDPFlow
@@ -51,7 +59,7 @@ final class UDPFlowRelay {
             guard let self else { return }
             if let error {
                 Self.log.error("UDP flow.open failed: \(error.localizedDescription, privacy: .public)")
-                self.cleanup()
+                self.finishDueToFailure(underlying: error)
                 return
             }
             Self.log.notice("UDP flow.open succeeded signingID=\(self.signingID, privacy: .public)")
@@ -66,12 +74,12 @@ final class UDPFlowRelay {
             guard let self else { return }
             if let error {
                 Self.log.debug("UDP readDatagrams error: \(error.localizedDescription, privacy: .public)")
-                self.cleanup()
+                self.finishDueToFailure(underlying: error)
                 return
             }
             guard let datagrams, let endpoints, !datagrams.isEmpty else {
                 Self.log.debug("UDP readDatagrams empty (EOF?) signingID=\(self.signingID, privacy: .public)")
-                self.cleanup()
+                self.finishSuccessfully()
                 return
             }
             for (datagram, legacyEndpoint) in zip(datagrams, endpoints) {
@@ -105,9 +113,10 @@ final class UDPFlowRelay {
         onTx(UInt64(datagram.count))
         conn.send(
             content: datagram,
-            completion: .contentProcessed { error in
+            completion: .contentProcessed { [weak self] error in
                 if let error {
                     Self.log.debug("UDP send error: \(error.localizedDescription, privacy: .public)")
+                    self?.finishDueToFailure(underlying: error)
                 }
             }
         )
@@ -131,9 +140,11 @@ final class UDPFlowRelay {
             guard let self else { return }
             if let data, !data.isEmpty, let legacy = self.legacyEndpoints[key] {
                 self.onRx(UInt64(data.count))
-                self.flow.writeDatagrams([data], sentBy: [legacy]) { writeError in
+                self.flow.writeDatagrams([data], sentBy: [legacy]) { [weak self] writeError in
+                    guard let self else { return }
                     if let writeError {
                         Self.log.debug("UDP writeDatagrams error: \(writeError.localizedDescription, privacy: .public)")
+                        self.finishDueToFailure(underlying: writeError)
                     }
                 }
             }
@@ -159,16 +170,41 @@ final class UDPFlowRelay {
         }
     }
 
-    private func cleanup() {
-        let shouldFire: Bool = {
-            if didCloseOnce { return false }
-            didCloseOnce = true
-            return true
-        }()
-        guard shouldFire else { return }
+    private func failureNSError(underlying: Error?) -> NSError {
+        guard let underlying else { return Self.relayFailureError }
+        return NSError(
+            domain: (Self.relayFailureError as NSError).domain,
+            code: (Self.relayFailureError as NSError).code,
+            userInfo: [
+                NSLocalizedDescriptionKey: (Self.relayFailureError as NSError).localizedDescription,
+                NSUnderlyingErrorKey: underlying,
+            ]
+        )
+    }
 
+    private func takeFinishToken() -> Bool {
+        if didCloseOnce { return false }
+        didCloseOnce = true
+        return true
+    }
+
+    private func finishSuccessfully() {
+        guard takeFinishToken() else { return }
         flow.closeReadWithError(nil)
         flow.closeWriteWithError(nil)
+        for (_, conn) in connections {
+            conn.cancel()
+        }
+        connections.removeAll(keepingCapacity: false)
+        legacyEndpoints.removeAll(keepingCapacity: false)
+        onClose()
+    }
+
+    private func finishDueToFailure(underlying: Error? = nil) {
+        guard takeFinishToken() else { return }
+        let err = failureNSError(underlying: underlying)
+        flow.closeReadWithError(err)
+        flow.closeWriteWithError(err)
         for (_, conn) in connections {
             conn.cancel()
         }

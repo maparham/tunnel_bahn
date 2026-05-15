@@ -8,9 +8,21 @@ import OSLog
 final class VPNManager: ObservableObject {
     private static let osLog = Logger(subsystem: "com.tunnelbahn.mac", category: "VPN")
 
+    /// Per-process env: `TUNNELBAHN_VPN_TRACE_VERBOSE=1` enables per-rule NEAppRule dumps and full manager config logging.
+    #if DEBUG
+    private static var vpnTraceVerbose: Bool {
+        ProcessInfo.processInfo.environment["TUNNELBAHN_VPN_TRACE_VERBOSE"] == "1"
+    }
+    #else
+    private static var vpnTraceVerbose: Bool { false }
+    #endif
+
     @Published private(set) var stats: ConnectionStats = .empty
     @Published private(set) var isBusy = false
     @Published private(set) var shouldAutoReconnect = false
+
+    /// Ref-count so nested teardown inside a user connect sequence does not clear UI busy early.
+    private var operationBusyDepth = 0
 
     private var manager = NETunnelProviderManager()
     private let settings: AppSettings
@@ -18,6 +30,7 @@ final class VPNManager: ObservableObject {
     private var resourceMonitorCancellables = Set<AnyCancellable>()
     private let publicIPSession = URLSession(configuration: .ephemeral)
     private var statsRefreshTask: Task<Void, Never>?
+    private var periodicProbeTask: Task<Void, Never>?
     private var publicIPRefreshTask: Task<Void, Never>?
     private var lastTransferSnapshot: TransferSnapshot?
     private var lastPerAppAggregateSnapshot: TransferSnapshot?
@@ -28,8 +41,6 @@ final class VPNManager: ObservableObject {
 
     /// Set by `disconnect()` to make in-flight `connect` exit waits and tear down.
     private var connectCancelled = false
-    /// Finishes proxy/probe/stats when the tunnel connects after the initial NEVPN wait window.
-    private var pendingConnectCompletionTask: Task<Void, Never>?
     /// True while `connect` is in-flight (used so termination does not race connect/teardown).
     private var connectRunning = false
     /// True while `performDisconnect` is in-flight. Prevents transient NE states (.connected,
@@ -37,6 +48,9 @@ final class VPNManager: ObservableObject {
     private var disconnectRunning = false
     /// Single shared disconnect work item so manual disconnect and termination cannot run `performDisconnect` concurrently.
     private var disconnectCoordinatorTask: Task<Void, Never>?
+    private var lastNEStatusNotificationRaw: Int?
+    private var lastLoggedSyncStatusKey: String?
+    private var lastLoggedDisconnectSuppressRaw: Int?
 
     init(settings: AppSettings, resourceMonitor: ResourceMonitor?) {
         self.settings = settings
@@ -57,10 +71,34 @@ final class VPNManager: ObservableObject {
             queue: .main
         ) { [weak self] _ in
             Task { @MainActor [weak self] in
-                self?.traceLog("received NEVPNStatusDidChange")
-                self?.syncStatus()
+                guard let self else { return }
+                let raw = self.manager.connection.status.rawValue
+                if self.lastNEStatusNotificationRaw != raw {
+                    self.lastNEStatusNotificationRaw = raw
+                    self.traceLog("NEVPNStatusDidChange manager=\(raw)")
+                }
+                self.syncStatus()
             }
         }
+    }
+
+    private func enterOperationBusy() {
+        operationBusyDepth += 1
+        if operationBusyDepth == 1 {
+            isBusy = true
+        }
+    }
+
+    private func leaveOperationBusy() {
+        operationBusyDepth = max(0, operationBusyDepth - 1)
+        isBusy = operationBusyDepth > 0
+    }
+
+    /// Keeps `isBusy` true for the full disconnect → resolve → connect pipeline (linear UI: idle → busy → connected).
+    func runUserConnectSequence(_ work: () async -> Void) async {
+        enterOperationBusy()
+        defer { leaveOperationBusy() }
+        await work()
     }
 
     func load() async {
@@ -81,7 +119,7 @@ final class VPNManager: ObservableObject {
     }
 
     func connect(profile: WireGuardProfile, rules: [AppRule], destinationCidrStrings: [String]) async {
-        if isBusy {
+        if connectRunning || disconnectRunning {
             emitConnectSummaryLine(
                 outcome: "ignored",
                 profileName: profile.name,
@@ -92,19 +130,17 @@ final class VPNManager: ObservableObject {
                 onDemand: nil,
                 managerAppRuleCount: nil
             )
-            traceLog("connect ignored because manager is busy")
+            traceLog("connect ignored because connect or disconnect is in flight")
             return
         }
         traceLog("connect requested profile=\(profile.name) rules=\(rules.count)")
         connectCancelled = false
-        pendingConnectCompletionTask?.cancel()
-        pendingConnectCompletionTask = nil
-        isBusy = true
-        defer { isBusy = false }
         connectRunning = true
         defer { connectRunning = false }
         stats.state = .connecting
         stats.lastError = nil
+        stats.connectivityProbeResult = .unknown
+        stopPeriodicProbe()
         // Snapshot who was connected (or last runtime on disk) *before* we assign the new
         // profile ID — otherwise switch detection always sees `profile.id` and skips the stop.
         let priorConnectedProfileID = stats.connectedProfileID ?? loadPersistedRuntimeProfile()?.id
@@ -201,7 +237,9 @@ final class VPNManager: ObservableObject {
                     }
                 }
             }
-            var requestedAppRules = appTunnelModeSelected ? NEAppRuleBuilder.build(from: rules, log: traceLog) : []
+            var requestedAppRules = appTunnelModeSelected
+                ? NEAppRuleBuilder.build(from: rules, log: traceLog, verbose: Self.vpnTraceVerbose)
+                : []
             if !appTunnelModeSelected, !rules.isEmpty {
                 traceLog("routing mode is full-tunnel; ignoring \(rules.count) app rules")
             }
@@ -209,12 +247,17 @@ final class VPNManager: ObservableObject {
             if AppConstants.isPerAppSplitTunnelEnabled, appTunnelModeSelected {
                 let fromHardcodedPaths = NEAppRuleBuilder.buildFromAlwaysIncludedPaths(
                     AppConstants.perAppAlwaysIncludeAppPaths,
-                    log: traceLog
+                    log: traceLog,
+                    verbose: Self.vpnTraceVerbose
                 )
                 if !fromHardcodedPaths.isEmpty {
                     traceLog("perAppAlwaysIncludeAppPaths: added \(fromHardcodedPaths.count) NEAppRule(s) before merge")
                 }
-                requestedAppRules = NEAppRuleBuilder.dedupe(requestedAppRules + fromHardcodedPaths, log: traceLog)
+                requestedAppRules = NEAppRuleBuilder.dedupe(
+                    requestedAppRules + fromHardcodedPaths,
+                    log: traceLog,
+                    verbose: Self.vpnTraceVerbose
+                )
             } else if !requestedAppRules.isEmpty {
                 traceLog("App-tunnel split is disabled; ignoring \(requestedAppRules.count) built NEAppRule(s), using full tunnel")
                 requestedAppRules = []
@@ -286,7 +329,11 @@ final class VPNManager: ObservableObject {
 
             var rulesForVPNManager = requestedAppRules
             if useAppTunnelNEStack, settings.includeHostAppInPerAppRulesForProbe, let hostRule = makeHostAppNEAppRule() {
-                rulesForVPNManager = NEAppRuleBuilder.dedupe(rulesForVPNManager + [hostRule], log: traceLog)
+                rulesForVPNManager = NEAppRuleBuilder.dedupe(
+                    rulesForVPNManager + [hostRule],
+                    log: traceLog,
+                    verbose: Self.vpnTraceVerbose
+                )
                 traceLog(
                     "tunnel probe: merged host app NEAppRule signingID=\(hostRule.matchSigningIdentifier) totalRules=\(rulesForVPNManager.count)"
                 )
@@ -300,7 +347,11 @@ final class VPNManager: ObservableObject {
                 let proxyRule = PerAppStatsProxyManager.extensionAppRule()
                 finalAppRules = [proxyRule]
                 if settings.includeHostAppInPerAppRulesForProbe, let hostRule = makeHostAppNEAppRule() {
-                    finalAppRules = NEAppRuleBuilder.dedupe(finalAppRules + [hostRule], log: traceLog)
+                    finalAppRules = NEAppRuleBuilder.dedupe(
+                        finalAppRules + [hostRule],
+                        log: traceLog,
+                        verbose: Self.vpnTraceVerbose
+                    )
                 }
                 traceLog("app-tunnel: tunnel NEAppRules count=\(finalAppRules.count)")
             }
@@ -359,12 +410,13 @@ final class VPNManager: ObservableObject {
                 )
                 return
             case .stillStarting:
-                Self.osLog.notice("[connect] NEVPN stillStarting — deferring proxy/stats start")
-                traceLog("connect: NEVPN still starting after initial wait; deferring completion")
+                Self.osLog.notice("[connect] NEVPN stillStarting — awaiting deferred completion inline")
+                traceLog("connect: NEVPN still starting after initial wait; awaiting completion")
                 stats.state = .connecting
                 stats.connectedProfileID = profile.id
                 stats.lastError = nil
-                scheduleDeferredConnectCompletion(
+                await finishConnectAfterDeferredTunnelWait(
+                    expectedProfileID: profile.id,
                     profile: profile,
                     extensionProfile: extensionProfile,
                     hasAppTunnelSelection: hasAppTunnelSelection,
@@ -372,7 +424,6 @@ final class VPNManager: ObservableObject {
                     profileOkForAccounting: profileOkForAccounting,
                     rulesForVPNManagerCount: rulesForVPNManager.count
                 )
-                return
             case .connected:
                 await applySuccessfulConnectPostTunnel(
                     profile: profile,
@@ -460,30 +511,6 @@ final class VPNManager: ObservableObject {
         }
     }
 
-    private func scheduleDeferredConnectCompletion(
-        profile: WireGuardProfile,
-        extensionProfile: WireGuardProfile,
-        hasAppTunnelSelection: Bool,
-        useAppTunnelNEStack: Bool,
-        profileOkForAccounting: Bool,
-        rulesForVPNManagerCount: Int
-    ) {
-        let expectedID = profile.id
-        pendingConnectCompletionTask?.cancel()
-        pendingConnectCompletionTask = Task { @MainActor [weak self] in
-            guard let self else { return }
-            await self.finishConnectAfterDeferredTunnelWait(
-                expectedProfileID: expectedID,
-                profile: profile,
-                extensionProfile: extensionProfile,
-                hasAppTunnelSelection: hasAppTunnelSelection,
-                useAppTunnelNEStack: useAppTunnelNEStack,
-                profileOkForAccounting: profileOkForAccounting,
-                rulesForVPNManagerCount: rulesForVPNManagerCount
-            )
-        }
-    }
-
     private func finishConnectAfterDeferredTunnelWait(
         expectedProfileID: UUID,
         profile: WireGuardProfile,
@@ -495,7 +522,7 @@ final class VPNManager: ObservableObject {
     ) async {
         let deadline = Date().addingTimeInterval(120)
         while Date() < deadline {
-            if Task.isCancelled || connectCancelled {
+            if connectCancelled {
                 return
             }
             if stats.connectedProfileID != expectedProfileID {
@@ -533,7 +560,7 @@ final class VPNManager: ObservableObject {
             try? await Task.sleep(for: .milliseconds(250))
         }
 
-        if Task.isCancelled || connectCancelled {
+        if connectCancelled {
             return
         }
         if manager.connection.status == .connected {
@@ -651,11 +678,13 @@ final class VPNManager: ObservableObject {
                 self.traceLog(
                     "[APPSPLIT_PROBE] nevpn_wait outcome=connected status=\(self.manager.connection.status.rawValue)"
                 )
-            }
-            await self.refreshPublicIPAndLocation()
-            guard self.stats.connectedProfileID == profileID, self.stats.state == .connected else { return }
-            if runProbe {
-                await TunnelConnectivityProbe.run(phase: probePhase, comparePublicIP: self.stats.publicIP)
+                Task { [weak self] in await self?.refreshPublicIPAndLocation() }
+                let result = await TunnelConnectivityProbe.warmup(phase: probePhase, comparePublicIP: nil)
+                guard self.stats.connectedProfileID == profileID, self.stats.state == .connected else { return }
+                self.stats.connectivityProbeResult = result
+                self.startPeriodicProbeIfNeeded(phase: probePhase, profileID: profileID)
+            } else {
+                await self.refreshPublicIPAndLocation()
             }
         }
     }
@@ -681,8 +710,6 @@ final class VPNManager: ObservableObject {
 
     func disconnect() {
         connectCancelled = true
-        pendingConnectCompletionTask?.cancel()
-        pendingConnectCompletionTask = nil
         shouldAutoReconnect = false
         manager.connection.stopVPNTunnel()
 
@@ -698,9 +725,10 @@ final class VPNManager: ObservableObject {
             return
         }
         traceLog("disconnect requested")
-        isBusy = true
+        enterOperationBusy()
         stats.state = .disconnecting
         Task {
+            defer { leaveOperationBusy() }
             await coordinatedDisconnect(waitForTunnelStop: false)
         }
     }
@@ -710,25 +738,32 @@ final class VPNManager: ObservableObject {
         !isTunnelFullyStopped()
     }
 
+    func disconnectAndWait() async {
+        guard stats.state != .disconnected || !isTunnelFullyStopped() else { return }
+        shouldAutoReconnect = false
+        connectCancelled = true
+        manager.connection.stopVPNTunnel()
+        await waitForConnectToFinishIfNeeded(timeoutSeconds: 15)
+        stats.state = .disconnecting
+        await coordinatedDisconnect(waitForTunnelStop: true)
+    }
+
     func disconnectForTermination() async {
         shouldAutoReconnect = false
         connectCancelled = true
-        pendingConnectCompletionTask?.cancel()
-        pendingConnectCompletionTask = nil
         manager.connection.stopVPNTunnel()
         await waitForConnectToFinishIfNeeded(timeoutSeconds: 45)
 
         if stats.state == .disconnected, isTunnelFullyStopped() {
             traceLog("termination cleanup skipped: already fully stopped")
-            isBusy = false
             return
         }
 
         traceLog("termination cleanup requested")
-        isBusy = true
+        enterOperationBusy()
+        defer { leaveOperationBusy() }
         stats.state = .disconnecting
         await coordinatedDisconnect(waitForTunnelStop: true)
-        isBusy = false
     }
 
     private func connectionStatusString(_ status: NEVPNStatus) -> String {
@@ -744,25 +779,29 @@ final class VPNManager: ObservableObject {
     }
 
     private func logManagerConfiguration() {
-        traceLog("=== MANAGER CONFIGURATION DUMP ===")
-        traceLog("routingMethod: \(manager.routingMethod.rawValue) (1=destinationIP, 2=sourceApplication)")
-        traceLog("isEnabled: \(manager.isEnabled)")
-        traceLog("isOnDemandEnabled: \(manager.isOnDemandEnabled)")
-        traceLog("localizedDescription: \(manager.localizedDescription ?? "nil")")
-        
         let appRules = manager.appRules
-        traceLog("appRules count: \(appRules.count)")
-        for (index, rule) in appRules.enumerated() {
-            traceLog("  appRule[\(index)]: signingID=\(rule.matchSigningIdentifier) domainCount=\(rule.matchDomains?.count ?? 0)")
+        if Self.vpnTraceVerbose {
+            traceLog("=== MANAGER CONFIGURATION DUMP ===")
+            traceLog("routingMethod: \(manager.routingMethod.rawValue) (1=destinationIP, 2=sourceApplication)")
+            traceLog("isEnabled: \(manager.isEnabled)")
+            traceLog("isOnDemandEnabled: \(manager.isOnDemandEnabled)")
+            traceLog("localizedDescription: \(manager.localizedDescription ?? "nil")")
+            traceLog("appRules count: \(appRules.count)")
+            for (index, rule) in appRules.enumerated() {
+                traceLog("  appRule[\(index)]: signingID=\(rule.matchSigningIdentifier) domainCount=\(rule.matchDomains?.count ?? 0)")
+            }
+            if let proto = manager.protocolConfiguration as? NETunnelProviderProtocol {
+                traceLog("protocol serverAddress: \(proto.serverAddress ?? "nil")")
+                traceLog("protocol bundleID: \(proto.providerBundleIdentifier ?? "nil")")
+            }
+            traceLog("connection status: \(manager.connection.status.rawValue)")
+            traceLog("=== END CONFIGURATION DUMP ===")
+        } else {
+            traceLog(
+                "manager config: routing=\(manager.routingMethod.rawValue) enabled=\(manager.isEnabled) " +
+                "onDemand=\(manager.isOnDemandEnabled) appRules=\(appRules.count) conn=\(manager.connection.status.rawValue)"
+            )
         }
-        
-        if let proto = manager.protocolConfiguration as? NETunnelProviderProtocol {
-            traceLog("protocol serverAddress: \(proto.serverAddress ?? "nil")")
-            traceLog("protocol bundleID: \(proto.providerBundleIdentifier ?? "nil")")
-        }
-        
-        traceLog("connection status: \(manager.connection.status.rawValue)")
-        traceLog("=== END CONFIGURATION DUMP ===")
     }
     
     private func configureManager(appRules: [NEAppRule], runtimeStateData: Data, useAppTunnelNEStack: Bool) async throws {
@@ -815,8 +854,12 @@ final class VPNManager: ObservableObject {
         let managers = try await NETunnelProviderManager.loadAllFromPreferences()
         traceLog("loadOrCreateTunnelManagerOnAppLaunch: found \(managers.count) managers")
 
-        for (index, mgr) in managers.enumerated() {
-            traceLog("  manager[\(index)]: desc=\(mgr.localizedDescription ?? "nil") routing=\(mgr.routingMethod.rawValue) enabled=\(mgr.isEnabled)")
+        if Self.vpnTraceVerbose {
+            for (index, mgr) in managers.enumerated() {
+                traceLog(
+                    "  manager[\(index)]: desc=\(mgr.localizedDescription ?? "nil") routing=\(mgr.routingMethod.rawValue) enabled=\(mgr.isEnabled)"
+                )
+            }
         }
 
         let matching = managers.filter { $0.localizedDescription == AppConstants.vpnManagerDescription }
@@ -926,7 +969,10 @@ final class VPNManager: ObservableObject {
 
     private func performDisconnect(waitForTunnelStop: Bool = false) async {
         disconnectRunning = true
-        defer { disconnectRunning = false }
+        defer {
+            disconnectRunning = false
+            lastLoggedDisconnectSuppressRaw = nil
+        }
         // If an app-tunnel VPN configuration remains enabled with appRules installed,
         // macOS may enforce "VPN required" for matched apps even while disconnected
         // (which looks like the app's traffic is blocked).
@@ -983,10 +1029,11 @@ final class VPNManager: ObservableObject {
         stats.perAppStats = [:]
         stats.perDestinationStats = []
         stats.perAppStatsUpdatedAt = nil
+        stats.connectivityProbeResult = .unknown
         stopStatsRefresh()
+        stopPeriodicProbe()
         syncExtensionResourceStats()
         shouldAutoReconnect = false
-        isBusy = false
         connectCancelled = false
         traceLog("disconnect completed")
     }
@@ -1180,7 +1227,11 @@ final class VPNManager: ObservableObject {
         // regress the UI back toward connected. Only .disconnecting and .disconnected are allowed
         // through; everything else is noise from the NE manager reconfiguration during teardown.
         if disconnectRunning, status != .disconnecting, status != .disconnected, status != .invalid {
-            traceLog("syncStatus suppressed during disconnect: manager=\(status.rawValue)")
+            let r = status.rawValue
+            if lastLoggedDisconnectSuppressRaw != r {
+                lastLoggedDisconnectSuppressRaw = r
+                traceLog("syncStatus suppressed during disconnect: manager=\(r)")
+            }
             return
         }
         switch manager.connection.status {
@@ -1189,18 +1240,17 @@ final class VPNManager: ObservableObject {
         case .disconnecting: stats.state = .disconnecting
         case .reasserting: stats.state = .reconnecting
         case .invalid, .disconnected:
-            // NE briefly reports disconnected/invalid during manager reconfiguration mid-connect.
-            // Suppress the regression while a connect task owns the tunnel lifecycle.
-            // Exception: if connectRunning is somehow stuck and the tunnel is genuinely gone,
-            // clear it so the UI does not permanently show a stale connected state.
-            if !connectRunning || isTunnelFullyStopped() {
-                connectRunning = false
+            // NE reports disconnected/invalid while preferences are rewritten and again before
+            // `startVPNTunnel` promotes status — during that gap the tunnel is fully stopped but
+            // `connect()` still owns the lifecycle. Only mirror NE→disconnected when not connecting.
+            if !connectRunning {
                 stats.state = .disconnected
                 stats.connectedProfileID = nil
+                stats.publicIP = nil
+                stats.publicIPLocation = nil
+                stats.tunnelHasDefaultRoute = false
+                stats.connectivityProbeResult = .unknown
             }
-            stats.publicIP = nil
-            stats.publicIPLocation = nil
-            stats.tunnelHasDefaultRoute = false
         @unknown default: stats.state = .error
         }
         if stats.state == .connected, stats.connectedProfileID == nil {
@@ -1232,7 +1282,11 @@ final class VPNManager: ObservableObject {
         }
         syncResourceStatsFromMonitor()
         syncExtensionResourceStats()
-        traceLog("syncStatus manager=\(status.rawValue) appState=\(stats.state.rawValue)")
+        let syncKey = "\(status.rawValue)|\(stats.state.rawValue)"
+        if lastLoggedSyncStatusKey != syncKey {
+            lastLoggedSyncStatusKey = syncKey
+            traceLog("syncStatus manager=\(status.rawValue) appState=\(stats.state.rawValue)")
+        }
     }
 
     private func syncExtensionResourceStats() {
@@ -1288,6 +1342,31 @@ final class VPNManager: ObservableObject {
         statsRefreshTask = nil
         lastTransferSnapshot = nil
         lastPerAppAggregateSnapshot = nil
+    }
+
+    private func startPeriodicProbeIfNeeded(phase: TunnelProbePhase, profileID: UUID) {
+        guard periodicProbeTask == nil else { return }
+        periodicProbeTask = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                // Recheck quickly while no internet detected, slowly once confirmed ok.
+                let interval: Duration = self?.stats.connectivityProbeResult == .ok ? .seconds(60) : .seconds(5)
+                try? await Task.sleep(for: interval)
+                guard !Task.isCancelled else { break }
+                guard let self,
+                      self.stats.connectedProfileID == profileID,
+                      self.stats.state == .connected else { break }
+                let result = await TunnelConnectivityProbe.recheck(phase: phase)
+                guard !Task.isCancelled,
+                      self.stats.connectedProfileID == profileID,
+                      self.stats.state == .connected else { break }
+                self.stats.connectivityProbeResult = result
+            }
+        }
+    }
+
+    private func stopPeriodicProbe() {
+        periodicProbeTask?.cancel()
+        periodicProbeTask = nil
     }
 
     private func refreshWireGuardStats() async {
@@ -1422,16 +1501,10 @@ final class VPNManager: ObservableObject {
     }
 
     private func traceLog(_ message: String) {
-        #if DEBUG
-        print("[DEBUG][VPN] \(message)")
-        #endif
         Self.osLog.debug("\(message, privacy: .public)")
     }
 
     private func connectSummaryLog(_ message: String) {
-        #if DEBUG
-        print("[DEBUG][VPN] \(message)")
-        #endif
         Self.osLog.info("\(message, privacy: .public)")
     }
 
@@ -1460,17 +1533,21 @@ final class VPNManager: ObservableObject {
         traceLog("mode=\(label)")
         if selectedRules.isEmpty {
             traceLog("selectedRules detail: none")
-        } else {
+        } else if Self.vpnTraceVerbose {
             for rule in selectedRules {
                 traceLog("selectedRule displayName=\(rule.displayName) action=\(rule.action.rawValue) appPath=\(rule.appPath)")
             }
+        } else {
+            traceLog("selectedRules: \(selectedRules.count) (set TUNNELBAHN_VPN_TRACE_VERBOSE=1 for per-rule detail)")
         }
         if requestedAppRules.isEmpty {
             traceLog("effective NEAppRule signing identifiers: none")
-        } else {
+        } else if Self.vpnTraceVerbose {
             for appRule in requestedAppRules {
                 traceLog("effective NEAppRule signingIdentifier=\(appRule.matchSigningIdentifier)")
             }
+        } else {
+            traceLog("effective NEAppRules: \(requestedAppRules.count) (verbose env for signing IDs)")
         }
         traceLog("original profile summary: \(profileSummary(originalProfile))")
         traceLog("extension profile summary: \(profileSummary(extensionProfile))")
@@ -1478,15 +1555,19 @@ final class VPNManager: ObservableObject {
     }
 
     private func logEffectiveExtensionProfile(_ profile: WireGuardProfile) {
-        traceLog("=== EFFECTIVE PROFILE FOR EXTENSION ===")
-        traceLog(profileSummary(profile))
-        for (index, peer) in profile.peers.enumerated() {
-            traceLog(
-                "peer[\(index)] endpoint=\(peer.endpoint) allowedIPs=\(peer.allowedIPs.joined(separator: ", ")) " +
-                "keepalive=\(peer.persistentKeepalive.map(String.init) ?? "nil")"
-            )
+        if Self.vpnTraceVerbose {
+            traceLog("=== EFFECTIVE PROFILE FOR EXTENSION ===")
+            traceLog(profileSummary(profile))
+            for (index, peer) in profile.peers.enumerated() {
+                traceLog(
+                    "peer[\(index)] endpoint=\(peer.endpoint) allowedIPs=\(peer.allowedIPs.joined(separator: ", ")) " +
+                    "keepalive=\(peer.persistentKeepalive.map(String.init) ?? "nil")"
+                )
+            }
+            traceLog("=== END EFFECTIVE PROFILE FOR EXTENSION ===")
+        } else {
+            traceLog("effective extension profile: \(profileSummary(profile))")
         }
-        traceLog("=== END EFFECTIVE PROFILE FOR EXTENSION ===")
     }
 
     /// Single-line summary for log triage. Run: `/usr/bin/log stream ... | grep APPSPLIT_CONNECT_SUMMARY`

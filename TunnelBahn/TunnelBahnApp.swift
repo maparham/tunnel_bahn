@@ -143,11 +143,11 @@ struct TunnelBahnApp: App {
     }
 
     private func quickConnect() async {
-        guard let selectedProfileID = appState.profileStore.selectedProfileID else {
+        guard let profile = appState.profileStore.selectedProfile else {
             traceLog("quickConnect aborted: no selected profile")
             return
         }
-        await connect(profileID: selectedProfileID)
+        await connect(profile: profile)
     }
 
     private func connect(profileID: UUID) async {
@@ -155,19 +155,12 @@ struct TunnelBahnApp: App {
             traceLog("connect aborted: missing profile id=\(profileID.uuidString)")
             return
         }
-        appState.profileStore.select(id: profileID)
-        appState.prepareLiveRoutingForConnect(profileID: profile.id)
+        await connect(profile: profile)
+    }
+
+    private func connect(profile: WireGuardProfile) async {
         traceLog("connect using profile=\(profile.name)")
-        await appState.domainResolutionCoordinator.resolveAllAndWait()
-        await appState.vpnManager.connect(
-            profile: profile,
-            rules: appState.appRuleStore.rules,
-            destinationCidrStrings: appState.destinationRuleStore.enabledFlattenedCidrs(
-                customRangesEnabled: appState.settings.destinationCustomRangesEnabled,
-                bulkListsEnabled: appState.settings.destinationBulkListsEnabled,
-                domainNamesEnabled: appState.settings.destinationDomainNamesEnabled
-            )
-        )
+        await appState.connectProfile(profile)
     }
 
     private func refreshMenuBar() {
@@ -222,9 +215,6 @@ struct TunnelBahnApp: App {
     }
 
     private func traceLog(_ message: String) {
-        #if DEBUG
-        print("[DEBUG][App] \(message)")
-        #endif
         Self.osLog.debug("\(message, privacy: .public)")
     }
 }
@@ -249,6 +239,8 @@ private func makeDockIcon() -> NSImage? {
 
 @MainActor
 final class AppLifecycleDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
+    private static let lifecycleLog = Logger(subsystem: "com.tunnelbahn.mac", category: "AppLifecycle")
+
     weak var vpnManager: VPNManager?
     private var terminateReplySent = false
     private var isHandlingTermination = false
@@ -288,15 +280,15 @@ final class AppLifecycleDelegate: NSObject, NSApplicationDelegate, NSWindowDeleg
 
     func applicationShouldTerminate(_: NSApplication) -> NSApplication.TerminateReply {
         guard let vpnManager else {
-            print("[DEBUG][AppLifecycle] no VPN manager; terminating immediately")
+            Self.lifecycleLog.debug("no VPN manager; terminating immediately")
             return .terminateNow
         }
         if !vpnManager.shouldDeferTerminationForVPN() {
-            print("[DEBUG][AppLifecycle] Network Extension inactive (tunnel stopped); terminating immediately")
+            Self.lifecycleLog.debug("Network Extension inactive (tunnel stopped); terminating immediately")
             return .terminateNow
         }
         if isHandlingTermination {
-            print("[DEBUG][AppLifecycle] termination already in progress; waiting")
+            Self.lifecycleLog.debug("termination already in progress; waiting")
             return .terminateLater
         }
 
@@ -310,15 +302,15 @@ final class AppLifecycleDelegate: NSObject, NSApplicationDelegate, NSWindowDeleg
         alert.addButton(withTitle: "Yes")
         alert.addButton(withTitle: "Cancel")
         if alert.runModal() == .alertSecondButtonReturn {
-            print("[DEBUG][AppLifecycle] user cancelled quit while VPN active")
+            Self.lifecycleLog.debug("user cancelled quit while VPN active")
             return .terminateCancel
         }
 
-        print("[DEBUG][AppLifecycle] VPN active (state=\(vpnManager.stats.state.rawValue)); initiating disconnect before termination")
+        Self.lifecycleLog.debug("VPN active (state=\(vpnManager.stats.state.rawValue)); initiating disconnect before termination")
         isHandlingTermination = true
         Task { @MainActor in
             await vpnManager.disconnectForTermination()
-            print("[DEBUG][AppLifecycle] VPN disconnect completed; allowing app to terminate")
+            Self.lifecycleLog.debug("VPN disconnect completed; allowing app to terminate")
             if !terminateReplySent {
                 terminateReplySent = true
                 NSApp.reply(toApplicationShouldTerminate: true)
@@ -330,12 +322,11 @@ final class AppLifecycleDelegate: NSObject, NSApplicationDelegate, NSWindowDeleg
     func applicationWillTerminate(_: Notification) {
         // Cleanup belongs in `applicationShouldTerminate`; async work started here often won't finish before exit.
         if let vpnManager {
-            print(
-                "[DEBUG][AppLifecycle] applicationWillTerminate stats=\(vpnManager.stats.state.rawValue) " +
-                "deferVPNQuit=\(vpnManager.shouldDeferTerminationForVPN())"
+            Self.lifecycleLog.debug(
+                "applicationWillTerminate stats=\(vpnManager.stats.state.rawValue) deferVPNQuit=\(vpnManager.shouldDeferTerminationForVPN())"
             )
         } else {
-            print("[DEBUG][AppLifecycle] applicationWillTerminate (no vpnManager)")
+            Self.lifecycleLog.debug("applicationWillTerminate (no vpnManager)")
         }
     }
 }

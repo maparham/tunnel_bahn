@@ -70,12 +70,9 @@ final class ProfileStore: ObservableObject {
     }
 
     func select(id: UUID?) {
-        print(
-            "[DEBUG][ProfileStore] select id=\(id?.uuidString ?? "nil") current=\(selectedProfileID?.uuidString ?? "nil")"
-        )
+        guard id != selectedProfileID else { return }
         selectedProfileID = id
         save()
-        print("[DEBUG][ProfileStore] selected updated to \(selectedProfileID?.uuidString ?? "nil")")
     }
 
     var selectedProfile: WireGuardProfile? {

@@ -12,6 +12,7 @@ struct ProfileDetailView: View {
     let txBytesPerSecond: Double
     let lastError: String?
     let splitTunnelWarnings: [String]
+    let onToggleTunnel: () -> Void
     let onEdit: () -> Void
     let onRename: (String) -> Void
 
@@ -179,7 +180,7 @@ struct ProfileDetailView: View {
                 } else {
                     Text(profile.name)
                         .font(.title2.bold())
-                        .help("Double-click to rename")
+                        .instantTooltip("Double-click to rename")
                         .onTapGesture(count: 2) { beginNameEdit() }
 
                     Button(action: beginNameEdit) {
@@ -188,7 +189,7 @@ struct ProfileDetailView: View {
                             .foregroundStyle(.secondary)
                     }
                     .buttonStyle(.plain)
-                    .help("Rename profile")
+                    .instantTooltip("Rename profile")
 
                     Text(tunnelModeLabel)
                         .font(.caption)
@@ -202,14 +203,26 @@ struct ProfileDetailView: View {
                 }
 
                 Spacer()
-                StatusBadge(
-                    title: statusTitle,
-                    color: statusColor
-                )
-
-                Button("Edit", action: onEdit)
-                    .buttonStyle(.bordered)
-                    .disabled(isBusy || isActive)
+                Button(action: onEdit) {
+                    Image(systemName: "pencil.circle")
+                        .font(.system(size: 22))
+                        .foregroundStyle(Color.primary)
+                }
+                .buttonStyle(.plain)
+                .instantTooltip("Edit profile")
+                .disabled(isBusy || isActive)
+                Button(action: onToggleTunnel) {
+                    if isBusy {
+                        ProgressView().controlSize(.small)
+                    } else {
+                        Image(systemName: isActive ? "power.circle.fill" : "power.circle")
+                            .font(.system(size: 22))
+                            .foregroundStyle(isActive ? Color.green : Color.primary)
+                    }
+                }
+                .buttonStyle(.plain)
+                .instantTooltip(isActive ? "Disconnect \"\(profile.name)\"" : "Connect \"\(profile.name)\"")
+                .disabled(isBusy)
             }
             .onChange(of: profile.id) {
                 cancelNameEdit()
@@ -238,36 +251,6 @@ struct ProfileDetailView: View {
         onRename(trimmed)
         editingName = false
         nameFieldFocused = false
-    }
-
-    private var statusTitle: String {
-        guard isActive else { return "Inactive" }
-        switch connectionState {
-        case .connected:
-            return "Active"
-        case .connecting, .reconnecting:
-            return "Connecting"
-        case .disconnecting:
-            return "Disconnecting"
-        case .error:
-            return "Error"
-        case .disconnected:
-            return "Inactive"
-        }
-    }
-
-    private var statusColor: Color {
-        guard isActive else { return .gray }
-        switch connectionState {
-        case .connected:
-            return .green
-        case .connecting, .disconnecting, .reconnecting:
-            return .orange
-        case .error:
-            return .red
-        case .disconnected:
-            return .gray
-        }
     }
 
     private func formatBytes(_ value: UInt64) -> String {
@@ -301,7 +284,7 @@ struct ProfileDetailView: View {
     }
 }
 
-private struct StatusBadge: View {
+struct StatusBadge: View {
     let title: String
     let color: Color
 

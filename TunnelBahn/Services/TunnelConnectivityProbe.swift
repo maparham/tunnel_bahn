@@ -14,24 +14,46 @@ enum TunnelProbePhase: String {
 
 enum TunnelConnectivityProbe {
     private static let log = Logger(subsystem: "com.tunnelbahn.mac", category: "TunnelProbe")
+    /// Initial probe after connect: slow handshakes / routing convergence often need >2s.
+    private static let warmupProbeTimeout: TimeInterval = 8
+    private static let warmupAttempts = 8
+    /// Periodic recheck: shorter so a dead tunnel surfaces within a reasonable window.
+    private static let recheckProbeTimeout: TimeInterval = 5
 
-    /// Lightweight HTTPS checks after the tunnel is up. Logs one line per step prefixed with `[APPSPLIT_PROBE]`.
-    static func run(phase: TunnelProbePhase, comparePublicIP: String?) async {
+    /// Up to `warmupAttempts` google204 checks with `warmupProbeTimeout` each. Returns `.ok` on the first
+    /// success (fast path for tunnels that need a moment for the WireGuard handshake). Returns `.failed`
+    /// only if all attempts time out or error. Fires ipify + DNS diagnostics once after the final outcome.
+    static func warmup(phase: TunnelProbePhase, comparePublicIP: String?) async -> ConnectivityProbeResult {
         Self.log.notice(
-            "[APPSPLIT_PROBE] begin phase=\(phase.rawValue, privacy: .public) comparePublicIP=\(comparePublicIP ?? "nil", privacy: .public)"
+            "[APPSPLIT_PROBE] warmup begin phase=\(phase.rawValue, privacy: .public)"
         )
-
-        await probeGoogle204(phase: phase)
-        await probeIpify(phase: phase, comparePublicIP: comparePublicIP)
-        await logDNSResolution(phase: phase, host: "www.google.com")
+        for attempt in 1...warmupAttempts {
+            let reachable = await probeGoogle204(phase: phase, timeoutInterval: warmupProbeTimeout)
+            if reachable {
+                Self.log.notice("[APPSPLIT_PROBE] warmup ok attempt=\(attempt, privacy: .public)")
+                Task.detached(priority: .utility) { await logDNSResolution(phase: phase, host: "www.google.com") }
+                Task.detached(priority: .utility) { await probeIpify(phase: phase, comparePublicIP: comparePublicIP) }
+                return .ok
+            }
+        }
+        Self.log.notice("[APPSPLIT_PROBE] warmup failed all attempts phase=\(phase.rawValue, privacy: .public)")
+        Task.detached(priority: .utility) { await logDNSResolution(phase: phase, host: "www.google.com") }
+        Task.detached(priority: .utility) { await probeIpify(phase: phase, comparePublicIP: comparePublicIP) }
+        return .failed("No internet response via tunnel (endpoint may be unreachable)")
     }
 
-    private static func probeGoogle204(phase: TunnelProbePhase) async {
-        guard let url = URL(string: "https://www.google.com/generate_204") else { return }
+    /// Single google204 check used by the periodic re-probe loop. No ipify/DNS side-probes.
+    static func recheck(phase: TunnelProbePhase) async -> ConnectivityProbeResult {
+        let reachable = await probeGoogle204(phase: phase, timeoutInterval: recheckProbeTimeout)
+        return reachable ? .ok : .failed("No internet response via tunnel (endpoint may be unreachable)")
+    }
+
+    private static func probeGoogle204(phase: TunnelProbePhase, timeoutInterval: TimeInterval) async -> Bool {
+        guard let url = URL(string: "https://www.google.com/generate_204") else { return false }
         let t0 = Date()
         do {
             var request = URLRequest(url: url)
-            request.timeoutInterval = 15
+            request.timeoutInterval = timeoutInterval
             request.httpMethod = "GET"
             let (_, response) = try await URLSession.shared.data(for: request)
             let elapsedMs = max(0, Int(Date().timeIntervalSince(t0) * 1000))
@@ -39,10 +61,12 @@ enum TunnelConnectivityProbe {
             let line =
                 "[APPSPLIT_PROBE] step=google204 phase=\(phase.rawValue) outcome=ok http=\(code) ms=\(elapsedMs)"
             Self.log.notice("\(line, privacy: .public)")
+            return true
         } catch {
             let line =
                 "[APPSPLIT_PROBE] step=google204 phase=\(phase.rawValue) outcome=fail error=\(error.localizedDescription)"
             Self.log.error("\(line, privacy: .public)")
+            return false
         }
     }
 
@@ -51,7 +75,7 @@ enum TunnelConnectivityProbe {
         let t0 = Date()
         do {
             var request = URLRequest(url: url)
-            request.timeoutInterval = 15
+            request.timeoutInterval = 10
             let (data, _) = try await URLSession.shared.data(for: request)
             let elapsedMs = max(0, Int(Date().timeIntervalSince(t0) * 1000))
             let ip = String(data: data, encoding: .utf8)?

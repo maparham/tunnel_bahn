@@ -1,9 +1,11 @@
 import AppKit
 import Combine
+import OSLog
 import SwiftUI
 
 @MainActor
 final class MenuBarController: NSObject, ObservableObject, NSMenuDelegate {
+    private static let menuBarLog = Logger(subsystem: "com.tunnelbahn.mac", category: "MenuBar")
     private enum RoutingModeMenuTag: Int {
         case fullTunnel = 40_001
         case appTunnel = 40_002
@@ -420,7 +422,7 @@ final class MenuBarController: NSObject, ObservableObject, NSMenuDelegate {
     }
 
     private func debugLog(_ message: String) {
-        print("[DEBUG][MenuBar] \(message)")
+        Self.menuBarLog.debug("\(message, privacy: .public)")
     }
 
     func menuWillOpen(_: NSMenu) {

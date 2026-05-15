@@ -1,54 +1,4 @@
 import SwiftUI
-#if os(macOS)
-import AppKit
-#endif
-
-#if os(macOS)
-/// Uses AppKit tool tips (`NSView.toolTip`). SwiftUI `.help` frequently does nothing on decorative `Image` views in grouped headers.
-private struct TooltipHelpGlyph: NSViewRepresentable {
-    let toolTipText: String
-
-    func makeCoordinator() -> Coordinator { Coordinator() }
-
-    func makeNSView(context: Context) -> NSButton {
-        let button = NSButton(frame: CGRect(x: 0, y: 0, width: 22, height: 22))
-        button.isBordered = false
-        button.title = ""
-        button.imagePosition = .imageOnly
-        button.imageScaling = .scaleProportionallyDown
-        button.setButtonType(.momentaryChange)
-        button.toolTip = toolTipText
-        button.target = context.coordinator
-        button.action = #selector(Coordinator.noop(_:))
-        Coordinator.applySymbol(to: button)
-        TooltipHelpGlyph.applyAccessibility(to: button, toolTipText: toolTipText)
-        return button
-    }
-
-    func updateNSView(_ button: NSButton, context: Context) {
-        button.toolTip = toolTipText
-        TooltipHelpGlyph.applyAccessibility(to: button, toolTipText: toolTipText)
-    }
-
-    private static func applyAccessibility(to button: NSButton, toolTipText: String) {
-        button.setAccessibilityElement(true)
-        button.setAccessibilityRole(.button)
-        button.setAccessibilityLabel("How listed traffic addresses are interpreted")
-        button.setAccessibilityHelp(toolTipText)
-    }
-
-    final class Coordinator: NSObject {
-        @objc func noop(_ sender: Any?) {}
-
-        static func applySymbol(to button: NSButton) {
-            guard let base = NSImage(systemSymbolName: "questionmark.circle", accessibilityDescription: "Help") else { return }
-            let config = NSImage.SymbolConfiguration(pointSize: 14, weight: .medium)
-            button.image = base.withSymbolConfiguration(config)
-            button.contentTintColor = .secondaryLabelColor
-        }
-    }
-}
-#endif
 
 private struct SystemResourceTableRow: Identifiable {
     let id: String
@@ -126,8 +76,14 @@ struct StatusView: View {
                     infoRow("State", appState.vpnManager.stats.state.rawValue.capitalized)
                     infoRow("Tunnel Mode", tunnelModeLabel)
                     infoRow("Endpoint", appState.vpnManager.stats.endpoint ?? "Not connected")
-                    infoRow("Connected At", formatDate(appState.vpnManager.stats.connectedAt))
-                    infoRow("Last Inbound", formatRelativeDate(appState.vpnManager.stats.lastInboundAt))
+                    if let connectedAt = appState.vpnManager.stats.connectedAt {
+                        TimelineView(.periodic(from: connectedAt, by: 1)) { _ in
+                            infoRow("Duration", formatDuration(since: connectedAt))
+                        }
+                    } else {
+                        infoRow("Duration", "n/a")
+                    }
+                    infoRow("Last Receive", formatRelativeDate(appState.vpnManager.stats.lastInboundAt))
                     infoRow("Tunnel In", "\(formatRate(appState.vpnManager.stats.rxBytesPerSecond)) (Total \(formatBytes(appState.vpnManager.stats.bytesIn)))")
                     infoRow("Tunnel Out", "\(formatRate(appState.vpnManager.stats.txBytesPerSecond)) (Total \(formatBytes(appState.vpnManager.stats.bytesOut)))")
                     if appState.vpnManager.stats.perAppSplitTunnelActive {
@@ -179,16 +135,12 @@ struct StatusView: View {
         MonitoringGroupBox(
             title: "Tunnel Monitor",
             titleAccessory: {
-#if os(macOS)
-                TooltipHelpGlyph(toolTipText: Self.tunnelTrafficMonitorHelpText)
-                .fixedSize()
-#else
                 Image(systemName: "questionmark.circle")
                     .font(.callout.weight(.medium))
                     .foregroundStyle(.secondary)
-                    .help(Self.tunnelTrafficMonitorHelpText)
+                    .instantTooltip(Self.tunnelTrafficMonitorHelpText)
                     .accessibilityLabel("How listed traffic addresses are interpreted")
-#endif
+                    .accessibilityHint(Self.tunnelTrafficMonitorHelpText)
             },
             trailingAccessory: {
                 let stats = appState.vpnManager.stats
@@ -518,12 +470,28 @@ struct StatusView: View {
     }
 
     private var statusBadge: some View {
-        Text(appState.vpnManager.stats.state.rawValue.uppercased())
-            .font(.caption.bold())
-            .padding(.horizontal, 12)
-            .padding(.vertical, 6)
-            .background(appState.vpnManager.stats.state == .connected ? .green.opacity(0.2) : .secondary.opacity(0.2))
-            .clipShape(Capsule())
+        let stats = appState.vpnManager.stats
+        let probeFailMessage: String? = {
+            guard stats.state == .connected, case .failed(let msg) = stats.connectivityProbeResult else { return nil }
+            return msg
+        }()
+        let badgeColor: Color = stats.state == .connected
+            ? (probeFailMessage != nil ? .orange : .green)
+            : .secondary
+        return HStack(spacing: 4) {
+            Text(stats.state.rawValue.uppercased())
+                .font(.caption.bold())
+            if let msg = probeFailMessage {
+                Image(systemName: "questionmark.circle")
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(.secondary)
+                    .instantTooltip(msg)
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+        .background(badgeColor.opacity(0.2))
+        .clipShape(Capsule())
     }
 
     private var tunnelModeLabel: String {
@@ -574,9 +542,9 @@ struct StatusView: View {
         }
     }
 
-    private func formatDate(_ date: Date?) -> String {
-        guard let date else { return "n/a" }
-        return date.formatted(date: .abbreviated, time: .standard)
+    private func formatDuration(since start: Date) -> String {
+        let seconds = max(0, Int(Date().timeIntervalSince(start).rounded()))
+        return Duration.seconds(seconds).formatted(.time(pattern: .hourMinuteSecond))
     }
 
     private func formatRelativeDate(_ date: Date?) -> String {

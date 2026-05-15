@@ -4,7 +4,11 @@ import Security
 
 /// Builds and deduplicates `NEAppRule` values from user selections and fixed paths (host app scan).
 enum NEAppRuleBuilder {
-    static func buildFromAlwaysIncludedPaths(_ paths: [String], log: (String) -> Void) -> [NEAppRule] {
+    static func buildFromAlwaysIncludedPaths(
+        _ paths: [String],
+        log: (String) -> Void,
+        verbose: Bool = false
+    ) -> [NEAppRule] {
         var appRules: [NEAppRule] = []
         for raw in paths {
             let path = (raw as NSString).expandingTildeInPath
@@ -12,7 +16,9 @@ enum NEAppRuleBuilder {
                 log("buildAppRulesFromAlwaysIncludedPaths: no bundle at \(path)")
                 continue
             }
-            log("buildAppRulesFromAlwaysIncludedPaths: expanding \(path)")
+            if verbose {
+                log("buildAppRulesFromAlwaysIncludedPaths: expanding \(path)")
+            }
             let bundleIDsAndPaths = bundleIdentifiersAndPathsForNetworkingProcesses(appPath: path)
             if bundleIDsAndPaths.isEmpty {
                 log("WARNING: no bundle IDs for always-included path \(path)")
@@ -27,17 +33,17 @@ enum NEAppRuleBuilder {
                 }
                 appRules.append(NEAppRule(signingIdentifier: bundleID, designatedRequirement: requirement))
             }
-            appendWebKitNetworkingFallbackIfSafariApp(at: path, into: &appRules, log: log)
+            appendWebKitNetworkingFallbackIfSafariApp(at: path, into: &appRules, log: log, verbose: verbose)
             if path.hasSuffix("Google Chrome.app") || path.contains("/Google Chrome.app/") {
-                appendGoogleChromeCatalogRules(into: &appRules, log: log)
+                appendGoogleChromeCatalogRules(into: &appRules, log: log, verbose: verbose)
             }
         }
-        let deduped = dedupe(appRules, log: log)
+        let deduped = dedupe(appRules, log: log, verbose: verbose)
         log("buildAppRulesFromAlwaysIncludedPaths: raw=\(appRules.count) deduped=\(deduped.count)")
         return deduped
     }
 
-    static func build(from rules: [AppRule], log: (String) -> Void) -> [NEAppRule] {
+    static func build(from rules: [AppRule], log: (String) -> Void, verbose: Bool = false) -> [NEAppRule] {
         let includedRules = rules.filter { $0.action == .routeVPN }
         log(
             "buildAppRules: allow-list totalRules=\(rules.count) routeVPNRules=\(includedRules.count)"
@@ -49,7 +55,9 @@ enum NEAppRuleBuilder {
         var appRules: [NEAppRule] = []
         appRules.reserveCapacity(includedRules.count)
         for rule in includedRules {
-            log("buildAppRules: expanding appPath=\(rule.appPath) displayName=\(rule.displayName)")
+            if verbose {
+                log("buildAppRules: expanding appPath=\(rule.appPath) displayName=\(rule.displayName)")
+            }
             let bundleIDsAndPaths = bundleIdentifiersAndPathsForNetworkingProcesses(appPath: rule.appPath)
             if bundleIDsAndPaths.isEmpty {
                 log("WARNING: buildAppRules discovered no bundle identifiers for appPath=\(rule.appPath)")
@@ -57,7 +65,7 @@ enum NEAppRuleBuilder {
             let pairList = bundleIDsAndPaths
                 .map { "\($0.bundleID) @ \($0.path)" }
                 .joined(separator: " | ")
-            if !pairList.isEmpty {
+            if verbose, !pairList.isEmpty {
                 log("buildAppRules: discovered identifiers -> \(pairList)")
             }
             for (bundleID, path) in bundleIDsAndPaths {
@@ -70,42 +78,53 @@ enum NEAppRuleBuilder {
                 }
                 appRules.append(NEAppRule(signingIdentifier: bundleID, designatedRequirement: requirement))
             }
-            appendWebKitNetworkingFallbackIfSafariApp(at: rule.appPath, into: &appRules, log: log)
+            appendWebKitNetworkingFallbackIfSafariApp(at: rule.appPath, into: &appRules, log: log, verbose: verbose)
 
             if let mainBundleID = Bundle(url: URL(fileURLWithPath: rule.appPath))?.bundleIdentifier,
                mainBundleID == "com.google.Chrome" || mainBundleID.hasPrefix("com.google.Chrome.app.")
             {
-                appendGoogleChromeCatalogRules(into: &appRules, log: log)
+                appendGoogleChromeCatalogRules(into: &appRules, log: log, verbose: verbose)
             }
         }
-        let deduped = dedupe(appRules, log: log)
+        let deduped = dedupe(appRules, log: log, verbose: verbose)
         log("buildAppRules: generated=\(appRules.count) deduped=\(deduped.count)")
         return deduped
     }
 
-    static func dedupe(_ rules: [NEAppRule], log: (String) -> Void) -> [NEAppRule] {
+    static func dedupe(_ rules: [NEAppRule], log: (String) -> Void, verbose: Bool = false) -> [NEAppRule] {
         var seen = Set<String>()
         var output: [NEAppRule] = []
         output.reserveCapacity(rules.count)
         for rule in rules {
             if seen.insert(rule.matchSigningIdentifier).inserted {
                 output.append(rule)
-            } else {
+            } else if verbose {
                 log("dedupeAppRules: dropped duplicate signing identifier \(rule.matchSigningIdentifier)")
             }
         }
         return output
     }
 
-    private static func appendGoogleChromeCatalogRules(into appRules: inout [NEAppRule], log: (String) -> Void) {
+    private static func appendGoogleChromeCatalogRules(
+        into appRules: inout [NEAppRule],
+        log: (String) -> Void,
+        verbose: Bool
+    ) {
         for bid in PerAppSigningCatalog.googleChromePerAppExtraSigningIdentifiers {
             let requirement = #"anchor apple generic and identifier "\#(bid)""#
             appRules.append(NEAppRule(signingIdentifier: bid, designatedRequirement: requirement))
-            log("appendGoogleChromeCatalogRules: signingIdentifier=\(bid)")
+            if verbose {
+                log("appendGoogleChromeCatalogRules: signingIdentifier=\(bid)")
+            }
         }
     }
 
-    private static func appendWebKitNetworkingFallbackIfSafariApp(at appPath: String, into appRules: inout [NEAppRule], log: (String) -> Void) {
+    private static func appendWebKitNetworkingFallbackIfSafariApp(
+        at appPath: String,
+        into appRules: inout [NEAppRule],
+        log: (String) -> Void,
+        verbose: Bool
+    ) {
         guard let bundle = Bundle(url: URL(fileURLWithPath: appPath)),
               bundle.bundleIdentifier == "com.apple.Safari"
         else {
@@ -114,7 +133,9 @@ enum NEAppRuleBuilder {
         for extraID in PerAppSigningCatalog.safariPerAppNetworkingSigningIdentifiers {
             let requirement = #"anchor apple generic and identifier "\#(extraID)""#
             appRules.append(NEAppRule(signingIdentifier: extraID, designatedRequirement: requirement))
-            log("appendWebKitNetworkingFallbackIfSafariApp: signingIdentifier=\(extraID)")
+            if verbose {
+                log("appendWebKitNetworkingFallbackIfSafariApp: signingIdentifier=\(extraID)")
+            }
         }
     }
 
@@ -153,7 +174,7 @@ enum NEAppRuleBuilder {
         }
 
         var seen = Set<String>()
-        var output: [(String, String)] = []
+        var output: [(bundleID: String, path: String)] = []
         for (bid, path) in pairs {
             let trimmed = bid.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !trimmed.isEmpty else { continue }

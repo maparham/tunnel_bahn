@@ -223,19 +223,27 @@ final class AppState: ObservableObject {
     /// Resolves all enabled domain rules before connecting so the routing file is fully
     /// populated when the proxy extension reads it. A second pass fires automatically
     /// after the tunnel comes up (via the connected-state observer in bindChildStores).
+    func connectProfile(_ profile: WireGuardProfile) async {
+        await vpnManager.runUserConnectSequence {
+            await vpnManager.disconnectAndWait()
+            profileStore.select(id: profile.id)
+            prepareLiveRoutingForConnect(profileID: profile.id)
+            await domainResolutionCoordinator.resolveAllAndWait()
+            await vpnManager.connect(
+                profile: profile,
+                rules: appRuleStore.rules,
+                destinationCidrStrings: destinationRuleStore.enabledFlattenedCidrs(
+                    customRangesEnabled: settings.destinationCustomRangesEnabled,
+                    bulkListsEnabled: settings.destinationBulkListsEnabled,
+                    domainNamesEnabled: settings.destinationDomainNamesEnabled
+                )
+            )
+        }
+    }
+
     func connectSelectedProfile() async {
         guard let profile = profileStore.selectedProfile else { return }
-        prepareLiveRoutingForConnect(profileID: profile.id)
-        await domainResolutionCoordinator.resolveAllAndWait()
-        await vpnManager.connect(
-            profile: profile,
-            rules: appRuleStore.rules,
-            destinationCidrStrings: destinationRuleStore.enabledFlattenedCidrs(
-                customRangesEnabled: settings.destinationCustomRangesEnabled,
-                bulkListsEnabled: settings.destinationBulkListsEnabled,
-                domainNamesEnabled: settings.destinationDomainNamesEnabled
-            )
-        )
+        await connectProfile(profile)
     }
 
     /// Deletes all profiles, app rules, destination rules, routing snapshots, and resets
