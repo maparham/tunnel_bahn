@@ -37,6 +37,14 @@ final class DomainResolutionCoordinator {
         inFlightByID.removeAll()
     }
 
+    /// Cancel any in-flight resolution tasks without stopping the background poll loop.
+    /// Used before a VPN connect so resolveAllAndWait() does not inherit tasks that were
+    /// started by the wrong trigger (e.g. the disconnect observer firing with stale state).
+    func cancelInFlight() {
+        for task in inFlightByID.values { task.cancel() }
+        inFlightByID.removeAll()
+    }
+
     /// Re-resolve every enabled domain immediately (e.g. on VPN connect or profile switch).
     func resolveAll() {
         guard let ruleStore else { return }

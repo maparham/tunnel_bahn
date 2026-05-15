@@ -228,6 +228,7 @@ final class AppState: ObservableObject {
             await vpnManager.disconnectAndWait()
             profileStore.select(id: profile.id)
             prepareLiveRoutingForConnect(profileID: profile.id)
+            domainResolutionCoordinator.cancelInFlight()
             await domainResolutionCoordinator.resolveAllAndWait()
             await vpnManager.connect(
                 profile: profile,
