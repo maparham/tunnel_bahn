@@ -12,6 +12,7 @@ struct ProfileDetailView: View {
     let rxBytesPerSecond: Double
     let txBytesPerSecond: Double
     let lastError: String?
+    let competingProxySigningIDs: [String]
     let splitTunnelWarnings: [String]
     let onToggleTunnel: () -> Void
     let onEdit: () -> Void
@@ -258,6 +259,13 @@ struct ProfileDetailView: View {
                 qrError = nil
                 showQRPopover = false
             }
+
+            if !competingProxySigningIDs.isEmpty, connectionState != .disconnected {
+                Text(competingProxyWarningText(for: competingProxySigningIDs))
+                    .font(.caption)
+                    .foregroundStyle(.red)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
     }
 
@@ -313,6 +321,39 @@ struct ProfileDetailView: View {
         onRename(trimmed)
         editingName = false
         nameFieldFocused = false
+    }
+
+    private func competingProxyWarningText(for ids: [String]) -> String {
+        let names = ids.map(displayNameForSigningID(_:))
+        let label: String
+        switch names.count {
+        case 1:
+            label = names[0]
+        case 2:
+            label = "\(names[0]) and \(names[1])"
+        default:
+            label = names.prefix(2).joined(separator: ", ") + ", and others"
+        }
+        return "Selected apps may not be using the VPN. Another proxy extension (\(label)) may be intercepting traffic. Quit it to fix."
+    }
+
+    /// Best-effort human-readable name from a signing identifier. Drops common reverse-DNS
+    /// prefixes and proxy-extension suffixes, then title-cases the remaining slug.
+    /// Example: "com.tunnelbahn.netmeter.proxy" → "Netmeter".
+    private func displayNameForSigningID(_ id: String) -> String {
+        let parts = id.split(separator: ".").map(String.init)
+        let suffixesToDrop: Set<String> = [
+            "proxy", "transparentproxy", "appproxy", "networkextension", "appex", "extension", "helper",
+        ]
+        var meaningful = parts.filter { !suffixesToDrop.contains($0.lowercased()) }
+        // Drop obvious reverse-DNS prefixes ("com", "net", "org", "io"...) and vendor tokens that
+        // tend to repeat ("apple", "google"). Keep the most-specific token, which is usually last.
+        let genericPrefixes: Set<String> = ["com", "net", "org", "io", "co", "app"]
+        while let first = meaningful.first, genericPrefixes.contains(first.lowercased()), meaningful.count > 1 {
+            meaningful.removeFirst()
+        }
+        guard let raw = meaningful.last, !raw.isEmpty else { return id }
+        return raw.prefix(1).uppercased() + raw.dropFirst()
     }
 
     private func formatBytes(_ value: UInt64) -> String {

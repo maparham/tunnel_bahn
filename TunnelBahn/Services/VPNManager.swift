@@ -1030,6 +1030,7 @@ final class VPNManager: ObservableObject {
         stats.perDestinationStats = []
         stats.perAppStatsUpdatedAt = nil
         stats.connectivityProbeResult = .unknown
+        stats.competingProxySigningIDs = []
         stopStatsRefresh()
         stopPeriodicProbe()
         syncExtensionResourceStats()
@@ -1371,6 +1372,10 @@ final class VPNManager: ObservableObject {
 
     private func refreshWireGuardStats() async {
         guard stats.state == .connected || stats.state == .reconnecting else { return }
+        // Read the competing-proxy file unconditionally — it lives in the App Group filesystem and
+        // is independent of the WireGuard IPC channel below. An IPC timeout must not leave the
+        // warning stale.
+        refreshCompetingProxyWarningFromExtensionFile()
         guard let runtimeConfiguration = await loadRuntimeConfiguration() else { return }
         let totals = Self.parseTransferTotals(from: runtimeConfiguration)
         let now = Date()
@@ -1418,6 +1423,34 @@ final class VPNManager: ObservableObject {
         }
         syncResourceStatsFromMonitor()
         syncExtensionResourceStats()
+    }
+
+    /// Reads the proxy extension's observed-foreign-proxy file and updates
+    /// `stats.competingProxySigningIDs`. The extension writes on change when `handleNewFlow` sees
+    /// a proxy-like signing ID on a flow it declines (`!routed`).
+    ///
+    /// In route-all-identified-flows mode every identifiable flow is routed, so that path stays
+    /// cold and the file stays empty. Competing-proxy hints are only aimed at explicit per-app
+    /// routing, where another extension shadowing breaks user expectations.
+    private func refreshCompetingProxyWarningFromExtensionFile() {
+        guard let url = SharedPaths.observedForeignProxySigningIDsFileURL() else {
+            if !stats.competingProxySigningIDs.isEmpty { stats.competingProxySigningIDs = [] }
+            return
+        }
+        guard let data = try? Data(contentsOf: url),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let ids = obj["signingIdentifiers"] as? [String]
+        else {
+            if !stats.competingProxySigningIDs.isEmpty { stats.competingProxySigningIDs = [] }
+            return
+        }
+        let cleaned = ids
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+            .sorted()
+        if cleaned != stats.competingProxySigningIDs {
+            stats.competingProxySigningIDs = cleaned
+        }
     }
 
     private func loadRuntimeConfiguration() async -> String? {
