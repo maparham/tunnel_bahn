@@ -72,7 +72,6 @@ struct StatusView: View {
         VStack(alignment: .leading, spacing: 20) {
             MonitoringGroupBox(title: "Connection Status", trailingAccessory: { statusBadge }) {
                 VStack(alignment: .leading, spacing: 8) {
-                    infoRow("Backend", backendLabel)
                     infoRow("State", appState.vpnManager.stats.state.rawValue.capitalized)
                     infoRow("Tunnel Mode", tunnelModeLabel)
                     infoRow("Endpoint", appState.vpnManager.stats.endpoint ?? "Not connected")
@@ -617,10 +616,6 @@ struct StatusView: View {
         .buttonStyle(.borderless)
         .help("Copy Other traffic line")
         .accessibilityLabel("Copy Other traffic")
-    }
-
-    private var backendLabel: String {
-        "Network Extension"
     }
 }
 

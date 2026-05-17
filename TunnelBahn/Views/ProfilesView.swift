@@ -23,6 +23,8 @@ struct ProfilesView: View {
     @State private var overwriteConfirmation: (existing: WireGuardProfile, new: WireGuardProfile)?
     @State private var isOverwriteConfirmationPresented = false
     @State private var profileDetailTab: ProfileDetailTab = .overview
+    @State private var confirmDisconnectActiveTunnel = false
+    @State private var pendingToggleProfileID: UUID?
     private let parser = WireGuardConfigParser()
 
     var body: some View {
@@ -54,6 +56,7 @@ struct ProfilesView: View {
 
                 TextField("Profile name (optional)", text: $pastedProfileName)
                     .textFieldStyle(.roundedBorder)
+                    .maxLength($pastedProfileName, WireGuardProfile.maxNameLength)
 
                 TextEditor(text: $pastedConfig)
                     .font(.system(.body, design: .monospaced))
@@ -107,6 +110,9 @@ struct ProfilesView: View {
             let name = overwriteConfirmation?.existing.name ?? "a profile"
             Text("A profile named \"\(name)\" already exists. Replacing it will permanently delete the existing profile and its configuration.")
         }
+        .onChange(of: vpnManager.isBusy) { _, busy in
+            if !busy { pendingToggleProfileID = nil }
+        }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
@@ -143,6 +149,7 @@ struct ProfilesView: View {
                     profiles: profileStore.profiles,
                     selectedProfileID: profileStore.selectedProfileID,
                     connectedProfileID: vpnManager.stats.connectedProfileID,
+                    isBusy: vpnManager.isBusy,
                     onSelect: { profileStore.select(id: $0) },
                     onMove: profileStore.move,
                     rowContent: { profile in
@@ -250,6 +257,28 @@ struct ProfilesView: View {
                         SplitTunnelWarningIcon(warnings: splitTunnelWarnings)
                     }
 
+                    if vpnManager.isBusy || (vpnManager.stats.state != .disconnected && vpnManager.stats.state != .error) {
+                        let activeName = vpnManager.stats.connectedProfileID
+                            .flatMap { id in profileStore.profiles.first { $0.id == id } }?.name
+                        Button {
+                            confirmDisconnectActiveTunnel = true
+                        } label: {
+                            Image(systemName: "power")
+                                .foregroundStyle(.red)
+                        }
+                        .buttonStyle(.bordered)
+                        .tint(.red)
+                        .instantTooltip("Disconnect \"\(activeName ?? "tunnel")\"")
+                        .confirmationDialog(
+                            "Disconnect \"\(activeName ?? "tunnel")\"?",
+                            isPresented: $confirmDisconnectActiveTunnel
+                        ) {
+                            Button("Disconnect", role: .destructive) {
+                                vpnManager.disconnect()
+                            }
+                        }
+                    }
+
                 }
                 .padding(.horizontal, 20)
                 .padding(.vertical, 10)
@@ -264,11 +293,11 @@ struct ProfilesView: View {
                         isBusy: vpnManager.isBusy,
                         connectionState: vpnManager.stats.state,
                         tunnelModeLabel: modeLabel,
-                        bytesIn: vpnManager.stats.bytesIn,
-                        bytesOut: vpnManager.stats.bytesOut,
-                        rxBytesPerSecond: vpnManager.stats.rxBytesPerSecond,
-                        txBytesPerSecond: vpnManager.stats.txBytesPerSecond,
-                        lastError: vpnManager.stats.lastError,
+                        bytesIn: isSelectedProfileActive ? vpnManager.stats.bytesIn : 0,
+                        bytesOut: isSelectedProfileActive ? vpnManager.stats.bytesOut : 0,
+                        rxBytesPerSecond: isSelectedProfileActive ? vpnManager.stats.rxBytesPerSecond : 0,
+                        txBytesPerSecond: isSelectedProfileActive ? vpnManager.stats.txBytesPerSecond : 0,
+                        lastError: isSelectedProfileActive ? vpnManager.stats.lastError : nil,
                         splitTunnelWarnings: splitTunnelWarnings,
                         onToggleTunnel: {
                             if isSelectedProfileActive {
@@ -309,8 +338,12 @@ struct ProfilesView: View {
 
     private func profileRowNSView(_ profile: WireGuardProfile, connectedProfileID: UUID?) -> NSView {
         let isConnected = profile.id == connectedProfileID
+        // Show spinner on the row the user clicked, or on the connected row (covers tray-triggered disconnects).
+        let isPendingToggle = pendingToggleProfileID == profile.id
+        let isBusyForThisProfile = vpnManager.isBusy && (isPendingToggle || isConnected)
         let view = NSHostingView(rootView:
-            profileRow(profile, isConnected: isConnected, onToggle: {
+            profileRow(profile, isConnected: isConnected, isBusy: isBusyForThisProfile, onToggle: {
+                pendingToggleProfileID = profile.id
                 if vpnManager.stats.connectedProfileID == profile.id {
                     vpnManager.disconnect()
                 } else {
@@ -378,7 +411,7 @@ struct ProfilesView: View {
         return item
     }
 
-    private func profileRow(_ profile: WireGuardProfile, isConnected: Bool, onToggle: @escaping () -> Void) -> some View {
+    private func profileRow(_ profile: WireGuardProfile, isConnected: Bool, isBusy: Bool, onToggle: @escaping () -> Void) -> some View {
         HStack(alignment: .center, spacing: 8) {
             Circle()
                 .fill(isConnected ? Color.green : Color.gray.opacity(0.35))
@@ -397,12 +430,16 @@ struct ProfilesView: View {
             Spacer(minLength: 0)
 
             Button(action: onToggle) {
-                Image(systemName: isConnected ? "power.circle.fill" : "power.circle")
-                    .font(.system(size: 18))
-                    .foregroundStyle(isConnected ? Color.green : Color.primary.opacity(0.5))
+                if isBusy {
+                    ProgressView().controlSize(.small)
+                } else {
+                    Image(systemName: isConnected ? "power.circle.fill" : "power.circle")
+                        .font(.system(size: 18))
+                        .foregroundStyle(isConnected ? Color.green : Color.primary.opacity(0.5))
+                }
             }
             .buttonStyle(.plain)
-            .help(isConnected ? "Turn off" : "Turn on")
+            .instantTooltip(isConnected ? "Turn off" : "Turn on")
         }
     }
 
@@ -479,7 +516,7 @@ struct ProfilesView: View {
 
     private func copyProfileConfigToClipboard(_ profile: WireGuardProfile) {
         do {
-            let config = try renderFullConfig(profile: profile)
+            let config = try WireGuardConfigRenderer.renderFullConfigString(profile: profile)
             NSPasteboard.general.clearContents()
             NSPasteboard.general.setString(config, forType: .string)
         } catch {
@@ -487,13 +524,9 @@ struct ProfilesView: View {
         }
     }
 
-    private func renderFullConfig(profile: WireGuardProfile) throws -> String {
-        try WireGuardConfigRenderer().renderFullConfigString(profile: profile)
-    }
-
     private func exportProfileAsConf(_ profile: WireGuardProfile) {
         do {
-            let config = try WireGuardConfigRenderer().renderFullConfigString(profile: profile)
+            let config = try WireGuardConfigRenderer.renderFullConfigString(profile: profile)
             let panel = NSSavePanel()
             panel.allowedContentTypes = [UTType(filenameExtension: "conf") ?? .plainText]
             panel.nameFieldStringValue = "\(profile.name).conf"
@@ -508,7 +541,7 @@ struct ProfilesView: View {
     private func showQRCodePanel(for profile: WireGuardProfile) {
         let content: AnyView
         do {
-            let config = try WireGuardConfigRenderer().renderFullConfigString(profile: profile)
+            let config = try WireGuardConfigRenderer.renderFullConfigString(profile: profile)
             if let qrImage = WireGuardConfigRenderer.makeQRCodeImage(from: config) {
                 content = AnyView(
                     VStack(spacing: 8) {

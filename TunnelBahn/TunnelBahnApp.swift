@@ -67,6 +67,7 @@ struct TunnelBahnApp: App {
                 .task {
                     traceLog("app startup task started")
                     appDelegate.vpnManager = appState.vpnManager
+                    appDelegate.appState = appState
                     // Wire window delegate now that the SwiftUI window definitely exists.
                     if let window = NSApp.windows.first {
                         window.delegate = appDelegate
@@ -242,6 +243,7 @@ final class AppLifecycleDelegate: NSObject, NSApplicationDelegate, NSWindowDeleg
     private static let lifecycleLog = Logger(subsystem: "com.tunnelbahn.mac", category: "AppLifecycle")
 
     weak var vpnManager: VPNManager?
+    weak var appState: AppState?
     private var terminateReplySent = false
     private var isHandlingTermination = false
 
@@ -279,6 +281,15 @@ final class AppLifecycleDelegate: NSObject, NSApplicationDelegate, NSWindowDeleg
     }
 
     func applicationShouldTerminate(_: NSApplication) -> NSApplication.TerminateReply {
+        // Flush any in-flight debounced edits to the routing snapshot synchronously,
+        // before the run loop spins down. `applicationWillTerminate` is too late —
+        // it fires close to process exit and main-queue async hops can be skipped.
+        // Safe to call on the cancel path too: persisting current state is idempotent
+        // with what the 500 ms debounce would have written anyway.
+        if !isHandlingTermination {
+            appState?.saveCurrentSnapshot()
+        }
+
         guard let vpnManager else {
             Self.lifecycleLog.debug("no VPN manager; terminating immediately")
             return .terminateNow

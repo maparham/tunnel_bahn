@@ -89,6 +89,11 @@ final class WireGuardConfigRenderer {
         return lines.joined(separator: "\n") + "\n"
     }
 
+    /// Convenience for callers that just need a one-shot render with the default keychain.
+    static func renderFullConfigString(profile: WireGuardProfile) throws -> String {
+        try WireGuardConfigRenderer().renderFullConfigString(profile: profile)
+    }
+
     static func makeQRCodeImage(from configString: String, scale: CGFloat = 10) -> NSImage? {
         guard let data = configString.data(using: .utf8),
               let filter = CIFilter(name: "CIQRCodeGenerator") else { return nil }

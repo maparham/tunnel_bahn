@@ -5,12 +5,7 @@ struct AppsView: View {
     @EnvironmentObject private var appState: AppState
 
     private var rulesLocked: Bool {
-        switch appState.vpnManager.stats.state {
-        case .connected, .connecting, .reconnecting, .disconnecting:
-            return true
-        case .disconnected, .error:
-            return false
-        }
+        appState.isViewingConnectedProfile
     }
 
     private var selectedAppRules: [AppRule] {

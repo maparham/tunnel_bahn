@@ -30,6 +30,15 @@ extension View {
     func instantTooltip(_ text: AttributedString, maxWidth: CGFloat = 240) -> some View {
         self.modifier(InstantTooltipModifier(label: Text(text), maxWidth: maxWidth))
     }
+
+    /// Clamps a `String` binding to `limit` Characters (grapheme clusters) on change.
+    /// Use on text inputs that drive persisted names so over-long entries are truncated
+    /// at the source rather than stored and re-truncated everywhere they're displayed.
+    func maxLength(_ binding: Binding<String>, _ limit: Int) -> some View {
+        self.onChange(of: binding.wrappedValue) { _, new in
+            if new.count > limit { binding.wrappedValue = String(new.prefix(limit)) }
+        }
+    }
 }
 
 private struct InstantTooltipModifier: ViewModifier {

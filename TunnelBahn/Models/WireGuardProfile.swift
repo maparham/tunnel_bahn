@@ -33,6 +33,10 @@ struct WireGuardInterface: Codable, Hashable {
 }
 
 struct WireGuardProfile: Codable, Identifiable, Hashable {
+    /// Maximum displayed length of a profile name. Enforced at the input layer (UI clamps on
+    /// edit); the model itself doesn't validate so legacy data with longer names still loads.
+    static let maxNameLength = 50
+
     var id: UUID
     var name: String
     var interface: WireGuardInterface

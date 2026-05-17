@@ -44,6 +44,10 @@ final class TransparentProxyProvider: NETransparentProxyProvider {
     private var enforceDestinationFiltering = false
     private var destinationRawCIDRs: [String] = []
 
+    // Last-logged snapshot of the flushOnce summary line — used to suppress
+    // repeated identical heartbeats so only real changes get logged.
+    private var lastLoggedFlushSummary: (rules: Int, rolledUp: Int, destinations: Int)?
+
     private static let flushInterval: DispatchTimeInterval = .milliseconds(1500)
     private static let perAppRoutedSigningIDsDefaultsKey = "perAppRoutedSigningIdentifiers"
     private static let perAppRouteAllFlowsDefaultsKey = "perAppRouteAllIdentifiedFlows"
@@ -162,20 +166,16 @@ final class TransparentProxyProvider: NETransparentProxyProvider {
     private func refreshRoutedSigningIdentifiers() {
         // Prefer the shared file written by the host app; CFPreferences-backed app-group defaults
         // can fail inside extensions on some macOS configurations.
-        Self.log.notice("refreshRoutedSigningIdentifiers called")
-        
         guard let fileURL = SharedPaths.perAppRoutedSigningIdentifiersFileURL() else {
             Self.log.notice("refreshRoutedSigningIdentifiers: fileURL is nil")
             return loadFromUserDefaultsOrFallback()
         }
-        Self.log.notice("refreshRoutedSigningIdentifiers: fileURL=\(fileURL.path, privacy: .public)")
-        
+
         guard let data = try? Data(contentsOf: fileURL) else {
             Self.log.notice("refreshRoutedSigningIdentifiers: failed to read file")
             return loadFromUserDefaultsOrFallback()
         }
-        Self.log.notice("refreshRoutedSigningIdentifiers: read \(data.count) bytes")
-        
+
         guard let obj = try? JSONSerialization.jsonObject(with: data),
               let dict = obj as? [String: Any] else {
             Self.log.notice("refreshRoutedSigningIdentifiers: JSON parse failed or empty")
@@ -184,14 +184,16 @@ final class TransparentProxyProvider: NETransparentProxyProvider {
 
         if dict["routeAllIdentifiedFlows"] as? Bool == true {
             routedFiltersLock.lock()
+            let wasAll = routeAllIdentifiedFlows
             routeAllIdentifiedFlows = true
             routedSigningIdentifiers = []
             routedFiltersLock.unlock()
-            Self.log.notice("refreshRoutedSigningIdentifiers: routeAllIdentifiedFlows=true (full-traffic accounting)")
+            if !wasAll {
+                Self.log.notice("refreshRoutedSigningIdentifiers: routeAllIdentifiedFlows=true (full-traffic accounting)")
+            }
             return
         }
 
-        routeAllIdentifiedFlows = false
         guard let fromFile = dict["signingIdentifiers"] as? [String],
               !fromFile.isEmpty else {
             Self.log.notice("refreshRoutedSigningIdentifiers: signingIdentifiers missing or empty")
@@ -208,9 +210,14 @@ final class TransparentProxyProvider: NETransparentProxyProvider {
             ids.formUnion(["com.apple.curl", "com.apple.ssh"])
         }
         routedFiltersLock.lock()
+        let previousIDs = routedSigningIdentifiers
+        let wasRouteAll = routeAllIdentifiedFlows
+        routeAllIdentifiedFlows = false
         routedSigningIdentifiers = ids
         routedFiltersLock.unlock()
-        Self.log.notice("refreshRoutedSigningIdentifiers: loaded \(ids.count, privacy: .public) IDs from shared file: \(ids.sorted().joined(separator: ","), privacy: .public)")
+        if wasRouteAll || ids != previousIDs {
+            Self.log.notice("refreshRoutedSigningIdentifiers: loaded \(ids.count, privacy: .public) IDs from shared file: \(ids.sorted().joined(separator: ","), privacy: .public)")
+        }
     }
     
     private func loadFromUserDefaultsOrFallback() {
@@ -293,7 +300,6 @@ final class TransparentProxyProvider: NETransparentProxyProvider {
     }
 
     private func refreshDestinationConfig() {
-        Self.log.notice("refreshDestinationConfig called")
         guard let fileURL = SharedPaths.destinationRangesFileURL() else {
             Self.log.notice("refreshDestinationConfig fileURL nil")
             applyDestinationPayload(enforce: false, rawCIDRs: [])
@@ -306,9 +312,6 @@ final class TransparentProxyProvider: NETransparentProxyProvider {
         }
         do {
             let payload = try JSONDecoder().decode(DestinationRoutingFilePayload.self, from: data)
-            Self.log.notice(
-                "refreshDestinationConfig: enforce=\(payload.enforceDestinationFiltering, privacy: .public) ranges=\(payload.ranges.count, privacy: .public)"
-            )
             applyDestinationPayload(enforce: payload.enforceDestinationFiltering, rawCIDRs: payload.ranges)
         } catch {
             Self.log.notice(
@@ -326,6 +329,9 @@ final class TransparentProxyProvider: NETransparentProxyProvider {
         destinationLock.unlock()
 
         guard changed else { return }
+        Self.log.notice(
+            "applyDestinationPayload: enforce=\(enforce, privacy: .public) ranges=\(rawCIDRs.count, privacy: .public)"
+        )
         let settings = NETransparentProxyNetworkSettings(tunnelRemoteAddress: "127.0.0.1")
         settings.includedNetworkRules = buildIncludedNetworkRules()
         setTunnelNetworkSettings(settings) { error in
@@ -351,9 +357,13 @@ final class TransparentProxyProvider: NETransparentProxyProvider {
         let rules = PerAppIdentityMap.loadActiveRules()
         let rolledUp = aggregator.rollup(rules: rules)
         let perDestination = destinationAggregator.rollupToRows(rules: rules)
-        Self.log.notice(
-            "flushOnce: rules=\(rules.count, privacy: .public) rolledUp=\(rolledUp.count, privacy: .public) destinations=\(perDestination.count, privacy: .public)"
-        )
+        let summary = (rules: rules.count, rolledUp: rolledUp.count, destinations: perDestination.count)
+        if lastLoggedFlushSummary.map({ $0 != summary }) ?? true {
+            lastLoggedFlushSummary = summary
+            Self.log.notice(
+                "flushOnce: rules=\(summary.rules, privacy: .public) rolledUp=\(summary.rolledUp, privacy: .public) destinations=\(summary.destinations, privacy: .public)"
+            )
+        }
         let stats = PerAppTransferStats(
             schemaVersion: PerAppTransferStats.currentSchemaVersion,
             apps: rolledUp,

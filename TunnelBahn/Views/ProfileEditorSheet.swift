@@ -46,6 +46,7 @@ struct ProfileEditorSheet: View {
                     GroupBox("General") {
                         TextField("Display name", text: $name)
                             .textFieldStyle(.roundedBorder)
+                            .maxLength($name, WireGuardProfile.maxNameLength)
                     }
 
                     GroupBox("Interface") {
@@ -122,7 +123,7 @@ struct ProfileEditorSheet: View {
                 Button("Copy") {
                     guard let built = buildProfile() else { return }
                     do {
-                        let config = try renderFullConfig(profile: built)
+                        let config = try WireGuardConfigRenderer.renderFullConfigString(profile: built)
                         NSPasteboard.general.clearContents()
                         NSPasteboard.general.setString(config, forType: .string)
                         validationMessage = nil
@@ -239,10 +240,6 @@ struct ProfileEditorSheet: View {
             .split(separator: ",")
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty }
-    }
-
-    private func renderFullConfig(profile: WireGuardProfile) throws -> String {
-        try WireGuardConfigRenderer().renderFullConfigString(profile: profile)
     }
 
     private static func isValidWireGuardKeyBase64(_ value: String) -> Bool {

@@ -47,14 +47,11 @@ struct RoutingView: View {
         "Enter domain names (e.g. x.com). Their IP addresses are resolved at connect time and treated as destination CIDRs. Re-resolved every 30 seconds."
 
 
-    /// Destination routing is snapshotted to the extension; avoid mid-session edits (reconnect to apply changes).
+    /// Destination routing is snapshotted to the extension at connect time. Editing is locked
+    /// only while viewing the currently-connected profile; edits to a non-active profile go to
+    /// its own on-disk snapshot and take effect on its next connect.
     private var destinationRoutingEditingLocked: Bool {
-        switch appState.vpnManager.stats.state {
-        case .disconnected, .error:
-            false
-        case .connecting, .connected, .disconnecting, .reconnecting:
-            true
-        }
+        appState.isViewingConnectedProfile
     }
 
     /// True when at least one destination entry exists, is enabled, and its section is turned on.
@@ -69,11 +66,6 @@ struct RoutingView: View {
         appState.destinationRuleStore.customRules.contains(where: \.isEnabled)
             || appState.destinationRuleStore.bulkGroups.contains(where: \.isEnabled)
             || appState.destinationRuleStore.domainRules.contains(where: \.isEnabled)
-    }
-
-    /// Controls in the bulk lists and custom ranges sections are disabled when the VPN is connected.
-    private var controlsDisabled: Bool {
-        destinationRoutingEditingLocked
     }
 
     var body: some View {
@@ -92,7 +84,7 @@ struct RoutingView: View {
                         Image(systemName: "exclamationmark.triangle.fill")
                             .foregroundStyle(.orange)
                             .font(.body)
-                        Text("If an IP does not match any rule here, it will **bypass the VPN tunnel**.")
+                        Text("IPs not matching any list here will **bypass the tunnel**.")
                             .foregroundStyle(.primary)
                             .font(.footnote)
                     }
@@ -219,15 +211,15 @@ struct RoutingView: View {
                     Button("Import…") {
                         importCidrFromFile()
                     }
-                    .disabled(controlsDisabled || !bulkListsEnabled)
+                    .disabled(destinationRoutingEditingLocked || !bulkListsEnabled)
                     Button("Paste List") {
                         importCidrFromPasteboard()
                     }
-                    .disabled(controlsDisabled || !bulkListsEnabled)
+                    .disabled(destinationRoutingEditingLocked || !bulkListsEnabled)
                     Toggle("", isOn: bulkListsEnabledBinding)
                         .toggleStyle(.switch)
                         .labelsHidden()
-                        .disabled(controlsDisabled)
+                        .disabled(destinationRoutingEditingLocked)
                 }
 
                 VStack(alignment: .leading, spacing: 8) {
@@ -238,7 +230,7 @@ struct RoutingView: View {
                         ForEach(appState.destinationRuleStore.bulkGroups) { group in
                             DestinationCidrBulkGroupRow(
                                 groupID: group.id,
-                                controlsDisabled: controlsDisabled || !bulkListsEnabled,
+                                controlsDisabled: destinationRoutingEditingLocked || !bulkListsEnabled,
                                 onBrowse: {
                                     bulkPrefixBrowse = BulkPrefixBrowsePayload(
                                         id: group.id,
@@ -286,7 +278,7 @@ struct RoutingView: View {
                         Toggle("", isOn: customRangesEnabledBinding)
                             .toggleStyle(.switch)
                             .labelsHidden()
-                            .disabled(controlsDisabled)
+                            .disabled(destinationRoutingEditingLocked)
                     }
 
                     Group {
@@ -297,7 +289,7 @@ struct RoutingView: View {
                             ForEach(appState.destinationRuleStore.customRules) { rule in
                                 DestinationCidrRuleRow(
                                     ruleID: rule.id,
-                                    controlsDisabled: controlsDisabled || !customRangesEnabled
+                                    controlsDisabled: destinationRoutingEditingLocked || !customRangesEnabled
                                 )
                                 .environmentObject(appState)
                             }
@@ -324,7 +316,7 @@ struct RoutingView: View {
     }
 
     private func addRow(sectionEnabled: Bool = true) -> some View {
-        let disabled = controlsDisabled || !sectionEnabled
+        let disabled = destinationRoutingEditingLocked || !sectionEnabled
         return VStack(alignment: .leading, spacing: 4) {
             HStack {
                 TextField("", text: $newCidrDraft)
@@ -430,12 +422,12 @@ struct RoutingView: View {
                             }
                             .buttonStyle(.borderless)
                             .instantTooltip("Remove all domains")
-                            .disabled(controlsDisabled || !domainNamesEnabled)
+                            .disabled(destinationRoutingEditingLocked || !domainNamesEnabled)
                         }
                         Toggle("", isOn: domainNamesEnabledBinding)
                             .toggleStyle(.switch)
                             .labelsHidden()
-                            .disabled(controlsDisabled)
+                            .disabled(destinationRoutingEditingLocked)
                     }
                     .confirmationDialog("Remove all domains?", isPresented: $confirmDeleteAllDomains) {
                         Button("Remove All", role: .destructive) {
@@ -449,7 +441,7 @@ struct RoutingView: View {
                                 .foregroundStyle(.secondary)
                         } else {
                             ForEach(appState.destinationRuleStore.domainRules) { rule in
-                                DestinationDomainRuleRow(ruleID: rule.id, controlsDisabled: controlsDisabled || !domainNamesEnabled) {
+                                DestinationDomainRuleRow(ruleID: rule.id, controlsDisabled: destinationRoutingEditingLocked || !domainNamesEnabled) {
                                     bulkPrefixBrowse = BulkPrefixBrowsePayload(
                                         id: rule.id,
                                         title: rule.domain,
@@ -476,7 +468,7 @@ struct RoutingView: View {
     }
 
     private func domainAddRow(sectionEnabled: Bool = true) -> some View {
-        let disabled = controlsDisabled || !sectionEnabled
+        let disabled = destinationRoutingEditingLocked || !sectionEnabled
         return VStack(alignment: .leading, spacing: 4) {
             HStack {
                 TextField("e.g. x.com", text: $newDomainDraft)

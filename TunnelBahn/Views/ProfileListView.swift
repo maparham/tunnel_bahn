@@ -90,6 +90,7 @@ struct ProfileListView: NSViewRepresentable {
     let profiles: [WireGuardProfile]
     let selectedProfileID: UUID?
     let connectedProfileID: UUID?
+    let isBusy: Bool
     let onSelect: (UUID) -> Void
     let onMove: (IndexSet, Int) -> Void
     let rowContent: (WireGuardProfile) -> NSView
@@ -141,10 +142,12 @@ struct ProfileListView: NSViewRepresentable {
 
         if context.coordinator.profileIDs != newIDs
             || context.coordinator.profileNames != newNames
-            || context.coordinator.connectedProfileID != connectedProfileID {
+            || context.coordinator.connectedProfileID != connectedProfileID
+            || context.coordinator.isBusy != isBusy {
             context.coordinator.profileIDs = newIDs
             context.coordinator.profileNames = newNames
             context.coordinator.connectedProfileID = connectedProfileID
+            context.coordinator.isBusy = isBusy
             context.coordinator.cachedViews = profiles.map { rowContent($0) }
             tableView.reloadData()
         }
@@ -167,6 +170,7 @@ struct ProfileListView: NSViewRepresentable {
         var profileIDs: [UUID] = []
         var profileNames: [String] = []
         var connectedProfileID: UUID? = nil
+        var isBusy: Bool = false
 
         init(_ parent: ProfileListView) {
             self.parent = parent

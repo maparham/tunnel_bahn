@@ -169,6 +169,7 @@ struct ProfileDetailView: View {
                         .accessibilityLabel("Profile name")
                         .onSubmit { commitNameEdit() }
                         .onExitCommand { cancelNameEdit() }
+                        .maxLength($nameDraft, WireGuardProfile.maxNameLength)
                         .onChange(of: nameFieldFocused) { _, focused in
                             if editingName, !focused { commitNameEdit() }
                         }
@@ -279,7 +280,7 @@ struct ProfileDetailView: View {
 
     private func generateQRImage() {
         do {
-            let config = try WireGuardConfigRenderer().renderFullConfigString(profile: profile)
+            let config = try WireGuardConfigRenderer.renderFullConfigString(profile: profile)
             if let img = WireGuardConfigRenderer.makeQRCodeImage(from: config) {
                 qrImage = img
                 qrError = nil
