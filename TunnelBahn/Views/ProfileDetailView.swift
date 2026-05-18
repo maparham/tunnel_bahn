@@ -25,6 +25,9 @@ struct ProfileDetailView: View {
     @State private var showQRPopover = false
     @State private var qrImage: NSImage? = nil
     @State private var qrError: String? = nil
+    @State private var leakRiskDismissed: Bool = false
+
+    private var leakRiskDefaultsKey: String { "leakRiskAcknowledged_\(profile.id)" }
 
     private static let byteFormatter: ByteCountFormatter = {
         let formatter = ByteCountFormatter()
@@ -116,35 +119,59 @@ struct ProfileDetailView: View {
                     }
                 }
 
-                if !splitTunnelWarnings.isEmpty {
+                if !splitTunnelWarnings.isEmpty && !leakRiskDismissed {
                     splitTunnelWarningBanner
                 }
             }
             .padding(20)
         }
+        .onAppear {
+            leakRiskDismissed = UserDefaults.standard.bool(forKey: leakRiskDefaultsKey)
+        }
     }
 
     private var splitTunnelWarningBanner: some View {
-        HStack(alignment: .top, spacing: 10) {
-            Image(systemName: "exclamationmark.triangle.fill")
-                .foregroundStyle(.orange)
-                .font(.title3)
-                .accessibilityHidden(true)
-            VStack(alignment: .leading, spacing: 6) {
-                Text("Privacy & IP Leak Risk")
-                    .font(.headline)
-                    .foregroundStyle(.primary)
-                ForEach(splitTunnelWarnings, id: \.self) { warning in
-                    HStack(alignment: .top, spacing: 6) {
-                        Text("•")
-                            .foregroundStyle(.secondary)
-                        Text(warning)
-                            .foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .top, spacing: 10) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .foregroundStyle(.orange)
+                    .font(.title3)
+                    .accessibilityHidden(true)
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Privacy & IP Leak Risk")
+                        .font(.headline)
+                        .foregroundStyle(.primary)
+                    ForEach(splitTunnelWarnings, id: \.self) { warning in
+                        HStack(alignment: .top, spacing: 6) {
+                            Text("•")
+                                .foregroundStyle(.secondary)
+                            Text(warning)
+                                .foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        .font(.callout)
                     }
-                    .font(.callout)
                 }
             }
+            Button {
+                UserDefaults.standard.set(true, forKey: leakRiskDefaultsKey)
+                withAnimation(.easeOut(duration: 0.2)) {
+                    leakRiskDismissed = true
+                }
+            } label: {
+                Text("Don't show again")
+                    .font(.callout.weight(.medium))
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 5)
+                    .background(Color.orange.opacity(0.2))
+                    .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 6, style: .continuous)
+                            .strokeBorder(Color.orange.opacity(0.5), lineWidth: 1)
+                    )
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(.orange)
         }
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -258,6 +285,7 @@ struct ProfileDetailView: View {
                 qrImage = nil
                 qrError = nil
                 showQRPopover = false
+                leakRiskDismissed = UserDefaults.standard.bool(forKey: leakRiskDefaultsKey)
             }
 
             if !competingProxySigningIDs.isEmpty, connectionState != .disconnected {

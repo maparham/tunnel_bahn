@@ -1,4 +1,5 @@
 import AppKit
+import OSLog
 
 struct RenderedWireGuardConfig {
     let fileURL: URL
@@ -6,6 +7,7 @@ struct RenderedWireGuardConfig {
 }
 
 final class WireGuardConfigRenderer {
+    private static let log = Logger(subsystem: "com.tunnelbahn.mac", category: "WGConfigRenderer")
     private let keychainService: KeychainService
     private let fileManager: FileManager
 
@@ -111,6 +113,6 @@ final class WireGuardConfigRenderer {
     }
 
     private func debugLog(_ message: String) {
-        print("[DEBUG][WGConfigRenderer] \(message)")
+        Self.log.debug("\(message, privacy: .public)")
     }
 }

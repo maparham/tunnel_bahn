@@ -104,14 +104,6 @@ struct StatusView: View {
                 }
             }
 
-            HStack {
-                Button("Disconnect") {
-                    appState.vpnManager.disconnect()
-                }
-                .buttonStyle(.bordered)
-                .disabled(appState.vpnManager.isBusy)
-            }
-
             MonitoringGroupBox(title: "Resource Monitor") {
                 systemResourcesInsetList
             }

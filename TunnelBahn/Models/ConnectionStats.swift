@@ -68,7 +68,14 @@ struct ConnectionStats: Codable {
     /// Result of the post-connect connectivity probe. Not persisted (excluded from Codable).
     var connectivityProbeResult: ConnectivityProbeResult = .unknown
 
-    // Exclude connectivityProbeResult from Codable synthesis.
+    /// Signing IDs of competing transparent-proxy extensions observed by our proxy during the
+    /// current session. When non-empty, those extensions are intercepting flows before ours and
+    /// app-tunnel routing for user-selected apps may silently fail. Detection only runs while
+    /// routing is narrowed to explicit app rules (never in route-all-identified-flows /
+    /// full-traffic-accounting mode, where hints are intentionally unused). Not persisted.
+    var competingProxySigningIDs: [String] = []
+
+    // Exclude connectivityProbeResult and competingProxySigningIDs from Codable synthesis.
     private enum CodingKeys: String, CodingKey {
         case state, connectedAt, lastInboundAt, lastError, bytesIn, bytesOut
         case rxBytesPerSecond, txBytesPerSecond, connectedProfileID, endpoint

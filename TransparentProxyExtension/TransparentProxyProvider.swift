@@ -48,6 +48,13 @@ final class TransparentProxyProvider: NETransparentProxyProvider {
     // repeated identical heartbeats so only real changes get logged.
     private var lastLoggedFlushSummary: (rules: Int, rolledUp: Int, destinations: Int)?
 
+    /// Signing IDs that look like other transparent-proxy extensions whose flows have reached us.
+    /// When non-empty, macOS is delivering some flows to a competing proxy before ours — and that
+    /// proxy's outbound NWConnections (which we then see) reveal its identity. Persisted on change
+    /// so the host app can warn the user.
+    private let foreignProxyLock = NSLock()
+    private var observedForeignProxySigningIDs: Set<String> = []
+
     private static let flushInterval: DispatchTimeInterval = .milliseconds(1500)
     private static let perAppRoutedSigningIDsDefaultsKey = "perAppRoutedSigningIdentifiers"
     private static let perAppRouteAllFlowsDefaultsKey = "perAppRouteAllIdentifiedFlows"
@@ -56,6 +63,12 @@ final class TransparentProxyProvider: NETransparentProxyProvider {
         Self.log.notice("startProxy invoked")
         refreshRoutedSigningIdentifiers()
         refreshDestinationConfig()
+        // Reset the observed-competitor list on a fresh start. If the user removed the competing
+        // proxy between connects, this prevents a stale warning from persisting forever.
+        foreignProxyLock.lock()
+        observedForeignProxySigningIDs.removeAll()
+        foreignProxyLock.unlock()
+        persistObservedForeignProxySigningIDs([])
 
         let settings = NETransparentProxyNetworkSettings(tunnelRemoteAddress: "127.0.0.1")
         settings.includedNetworkRules = buildIncludedNetworkRules()
@@ -91,7 +104,14 @@ final class TransparentProxyProvider: NETransparentProxyProvider {
         
         let routed = isRouted(signingID)
         Self.log.notice("handleNewFlow: signingID=\(signingID, privacy: .public) isRouted=\(routed, privacy: .public) flowType=\(String(describing: type(of: flow)), privacy: .public)")
-        
+
+        // Competing-proxy hints only consult flows we decline (`!routed`). In full-traffic /
+        // `routeAllIdentifiedFlows` mode every identified flow is routed, so this path stays cold by
+        // design — warnings are aimed at explicit per-app selection, where shadowing hurts.
+        if !routed {
+            noteForeignProxyIfApplicable(signingID)
+        }
+
         guard routed else {
             return false
         }
@@ -152,6 +172,48 @@ final class TransparentProxyProvider: NETransparentProxyProvider {
 
         Self.log.error("handleNewFlow: routed but unsupported flow type=\(String(describing: type(of: flow)), privacy: .public)")
         return false
+    }
+
+    /// Records `signingID` as a competing transparent proxy if it matches a known proxy-extension
+    /// signature pattern AND is not one of our own bundles. Persists the cumulative set on change.
+    private func noteForeignProxyIfApplicable(_ signingID: String) {
+        guard looksLikeTransparentProxyExtension(signingID) else { return }
+        foreignProxyLock.lock()
+        let inserted = observedForeignProxySigningIDs.insert(signingID).inserted
+        let snapshot = observedForeignProxySigningIDs
+        foreignProxyLock.unlock()
+        guard inserted else { return }
+        Self.log.notice(
+            "noted foreign transparent proxy signingID=\(signingID, privacy: .public) totalObserved=\(snapshot.count, privacy: .public)"
+        )
+        persistObservedForeignProxySigningIDs(snapshot)
+    }
+
+    private func looksLikeTransparentProxyExtension(_ signingID: String) -> Bool {
+        let lower = signingID.lowercased()
+        // Ignore our own family — both the host app and our extensions can show up here.
+        if lower.hasPrefix("com.tunnelbahn.mac") { return false }
+        // Heuristic: NE proxy/filter extensions ship with bundle IDs ending in one of these tokens.
+        return lower.hasSuffix(".proxy")
+            || lower.hasSuffix(".transparentproxy")
+            || lower.hasSuffix(".appproxy")
+            || lower.hasSuffix(".networkextension")
+            || lower.contains(".transparentproxy.")
+            || lower.contains(".appproxy.")
+    }
+
+    private func persistObservedForeignProxySigningIDs(_ ids: Set<String>) {
+        guard let url = SharedPaths.observedForeignProxySigningIDsFileURL() else { return }
+        let payload: [String: Any] = [
+            "schemaVersion": 1,
+            "signingIdentifiers": Array(ids).sorted(),
+        ]
+        do {
+            let data = try JSONSerialization.data(withJSONObject: payload, options: [.prettyPrinted, .sortedKeys])
+            try data.write(to: url, options: .atomic)
+        } catch {
+            Self.log.error("persistObservedForeignProxySigningIDs failed: \(error.localizedDescription, privacy: .public)")
+        }
     }
 
     private func isRouted(_ signingID: String) -> Bool {

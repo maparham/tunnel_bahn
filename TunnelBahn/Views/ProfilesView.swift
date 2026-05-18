@@ -235,23 +235,21 @@ struct ProfilesView: View {
                         }
                     }
 
-                    StatusBadge(
-                        title: connectionStatusTitle(
-                            isActive: vpnManager.stats.state != .disconnected && vpnManager.stats.state != .error,
-                            state: vpnManager.stats.state,
-                            probeResult: vpnManager.stats.connectivityProbeResult
-                        ),
-                        color: connectionStatusColor(
-                            isActive: vpnManager.stats.state != .disconnected && vpnManager.stats.state != .error,
-                            state: vpnManager.stats.state,
-                            probeResult: vpnManager.stats.connectivityProbeResult
+                    if vpnManager.stats.state == .disconnected || vpnManager.stats.state == .error {
+                        StatusBadge(
+                            title: connectionStatusTitle(
+                                isActive: false,
+                                state: vpnManager.stats.state,
+                                probeResult: vpnManager.stats.connectivityProbeResult
+                            ),
+                            color: connectionStatusColor(
+                                isActive: false,
+                                state: vpnManager.stats.state,
+                                probeResult: vpnManager.stats.connectivityProbeResult
+                            )
                         )
-                    )
-                    .instantTooltip(
-                        vpnManager.stats.connectedProfileID
-                            .flatMap { id in profileStore.profiles.first { $0.id == id } }?.name
-                            ?? "No tunnel is active"
-                    )
+                        .instantTooltip("No tunnel is active")
+                    }
 
                     if vpnManager.stats.state == .connected && !splitTunnelWarnings.isEmpty {
                         SplitTunnelWarningIcon(warnings: splitTunnelWarnings)
@@ -298,6 +296,7 @@ struct ProfilesView: View {
                         rxBytesPerSecond: isSelectedProfileActive ? vpnManager.stats.rxBytesPerSecond : 0,
                         txBytesPerSecond: isSelectedProfileActive ? vpnManager.stats.txBytesPerSecond : 0,
                         lastError: isSelectedProfileActive ? vpnManager.stats.lastError : nil,
+                        competingProxySigningIDs: isSelectedProfileActive ? vpnManager.stats.competingProxySigningIDs : [],
                         splitTunnelWarnings: splitTunnelWarnings,
                         onToggleTunnel: {
                             if isSelectedProfileActive {

@@ -363,7 +363,8 @@ final class VPNManager: ObservableObject {
             try await configureManager(
                 appRules: appRules,
                 runtimeStateData: runtimeStateData,
-                useAppTunnelNEStack: useAppTunnelNEStack
+                useAppTunnelNEStack: useAppTunnelNEStack,
+                hasDefaultRoute: profileHasDefaultRoute(profile: extensionProfile)
             )
 
             if connectCancelled {
@@ -804,8 +805,8 @@ final class VPNManager: ObservableObject {
         }
     }
     
-    private func configureManager(appRules: [NEAppRule], runtimeStateData: Data, useAppTunnelNEStack: Bool) async throws {
-        traceLog("configureManager started useAppTunnelNEStack=\(useAppTunnelNEStack) appRules=\(appRules.count)")
+    private func configureManager(appRules: [NEAppRule], runtimeStateData: Data, useAppTunnelNEStack: Bool, hasDefaultRoute: Bool = false) async throws {
+        traceLog("configureManager started useAppTunnelNEStack=\(useAppTunnelNEStack) appRules=\(appRules.count) hasDefaultRoute=\(hasDefaultRoute)")
         try await loadOrCreateTunnelManager(useAppTunnelNEStack: useAppTunnelNEStack)
 
         let proto = NETunnelProviderProtocol()
@@ -816,6 +817,12 @@ final class VPNManager: ObservableObject {
             "profile": "active",
             "runtimeStateB64": runtimeStateB64,
         ]
+        if hasDefaultRoute {
+            proto.includeAllNetworks = true
+            proto.excludeLocalNetworks = true
+        } else {
+            proto.enforceRoutes = true
+        }
         manager.localizedDescription = AppConstants.vpnManagerDescription
         manager.protocolConfiguration = proto
 

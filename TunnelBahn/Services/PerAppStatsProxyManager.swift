@@ -106,7 +106,6 @@ final class PerAppStatsProxyManager {
     }
 
     private func debugLog(_ message: String) {
-        print("[DEBUG][PerAppProxy] \(message)")
-        Self.osLog.notice("\(message, privacy: .public)")
+        Self.osLog.debug("\(message, privacy: .public)")
     }
 }
