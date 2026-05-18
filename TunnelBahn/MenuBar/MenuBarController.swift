@@ -41,6 +41,7 @@ final class MenuBarController: NSObject, ObservableObject, NSMenuDelegate {
     private var isBusy = false
     private var routingMode: AppSettings.RoutingMode = .fullTunnel
     private var canEnableAppTunnelRouting = false
+    private var enforceDestinationFiltering = false
     private var vpnShowsAsOn = false
     private var destinationFilterSummary: String?
     private var showTrafficRates = true
@@ -97,6 +98,7 @@ final class MenuBarController: NSObject, ObservableObject, NSMenuDelegate {
         tunnelModeLabel: String,
         routingMode: AppSettings.RoutingMode,
         canEnableAppTunnelRouting: Bool,
+        enforceDestinationFiltering: Bool = false,
         destinationFilterSummary: String? = nil,
         showTrafficRates: Bool = true
     ) {
@@ -110,6 +112,7 @@ final class MenuBarController: NSObject, ObservableObject, NSMenuDelegate {
         currentTunnelModeLabel = tunnelModeLabel
         self.routingMode = routingMode
         self.canEnableAppTunnelRouting = canEnableAppTunnelRouting
+        self.enforceDestinationFiltering = enforceDestinationFiltering
         self.destinationFilterSummary = destinationFilterSummary
         self.showTrafficRates = showTrafficRates
         vpnShowsAsOn = Self.vpnIsActive(connectionState)
@@ -213,8 +216,14 @@ final class MenuBarController: NSObject, ObservableObject, NSMenuDelegate {
         item.isEnabled = enabled
     }
 
+    private var isPartialTunnel: Bool {
+        routingMode == .appTunnel || enforceDestinationFiltering
+    }
+
     private func vpnToolTipText() -> String {
-        vpnShowsAsOn ? "TunnelBahn — VPN on" : "TunnelBahn — VPN off"
+        guard vpnShowsAsOn else { return "TunnelBahn off" }
+        let modeLabel = isPartialTunnel ? "partial tunnel" : "full tunnel"
+        return "TunnelBahn on (\(modeLabel))"
     }
 
     private func vpnAccessibilityDescription() -> String {
@@ -482,6 +491,29 @@ final class MenuBarController: NSObject, ObservableObject, NSMenuDelegate {
         return "\(formatRate(currentTxRate)) ↑\n\(formatRate(currentRxRate)) ↓"
     }
 
+    /// Draws a "!" glyph in the top-right corner of `iconRect` to indicate partial-coverage mode.
+    private static func drawPartialTunnelBadge(in iconRect: NSRect) {
+        let font = NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .bold)
+        let attrs: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: NSColor.labelColor]
+        let glyph = "!" as NSString
+        let glyphSize = glyph.size(withAttributes: attrs)
+        let glyphRect = CGRect(
+            x: iconRect.maxX - glyphSize.width - 0.5,
+            y: iconRect.maxY - glyphSize.height,
+            width: glyphSize.width,
+            height: glyphSize.height
+        )
+        guard let ctx = NSGraphicsContext.current?.cgContext else { return }
+        ctx.saveGState()
+        // Punch a clear halo so the glyph stands out against the icon artwork.
+        ctx.setBlendMode(.copy)
+        ctx.setFillColor(NSColor.clear.cgColor)
+        ctx.fill(glyphRect.insetBy(dx: -1, dy: -1))
+        ctx.setBlendMode(.normal)
+        glyph.draw(in: glyphRect, withAttributes: attrs)
+        ctx.restoreGState()
+    }
+
     /// Same tunnel artwork for on/off; inactive is the same pixels at lower opacity (option 1 — no tint fill).
     private static func drawMenuBarTunnelIcon(in iconRect: NSRect, active: Bool) {
         guard let base = menuBarTunnelBaseImage else { return }
@@ -519,6 +551,7 @@ final class MenuBarController: NSObject, ObservableObject, NSMenuDelegate {
         let barHeight: CGFloat = max(22, iconSide + 2)
         let size = NSSize(width: max(iconAreaWidth, dynamicWidth), height: barHeight)
         let showsVPNOn = vpnShowsAsOn
+        let showsPartialTunnel = isPartialTunnel
         let image = NSImage(size: size, flipped: false) { rect in
             if let ctx = NSGraphicsContext.current?.cgContext {
                 ctx.saveGState()
@@ -528,6 +561,9 @@ final class MenuBarController: NSObject, ObservableObject, NSMenuDelegate {
             }
             let iconRect = NSRect(x: iconLeading, y: (rect.height - iconSide) / 2, width: iconSide, height: iconSide)
             Self.drawMenuBarTunnelIcon(in: iconRect, active: showsVPNOn)
+            if showsVPNOn && showsPartialTunnel {
+                Self.drawPartialTunnelBadge(in: iconRect)
+            }
 
             guard !text.isEmpty else { return true }
             

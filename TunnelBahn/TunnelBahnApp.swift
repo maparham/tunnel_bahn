@@ -195,6 +195,7 @@ struct TunnelBahnApp: App {
             tunnelModeLabel: modeLabel,
             routingMode: appState.settings.routingMode,
             canEnableAppTunnelRouting: canEnableAppTunnelRouting,
+            enforceDestinationFiltering: appState.settings.enforceDestinationFiltering,
             destinationFilterSummary: menuInputs.destinationFilterMenuSummary,
             showTrafficRates: appState.settings.showTrafficRates
         )
