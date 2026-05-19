@@ -588,7 +588,7 @@ struct StatusView: View {
                 .animation(.easeInOut(duration: 0.15), value: isCopied)
         }
         .buttonStyle(.borderless)
-        .help(isCopied ? "Copied!" : "Copy IP list")
+        .instantTooltip(isCopied ? "Copied!" : "Copy IP list")
         .accessibilityLabel(isCopied ? "Copied" : "Copy IP list for \(app)")
     }
 
@@ -606,7 +606,7 @@ struct StatusView: View {
                 .foregroundStyle(.secondary)
         }
         .buttonStyle(.borderless)
-        .help("Copy Other traffic line")
+        .instantTooltip("Copy Other traffic line")
         .accessibilityLabel("Copy Other traffic")
     }
 }

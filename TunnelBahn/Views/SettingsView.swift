@@ -38,17 +38,23 @@ struct SettingsView: View {
                         .pickerStyle(.menu)
                         .fixedSize()
                     }
-                    Toggle(
-                        "Run connectivity check after connect",
-                        isOn: $appState.settings.runTunnelConnectivityProbe
-                    )
-                    .help("After the VPN connects, automatically checks that the tunnel is working by verifying your public IP and making a test HTTPS/DNS request.")
-                    Toggle(
-                        "Route this app through the VPN during the check",
-                        isOn: $appState.settings.includeHostAppInPerAppRulesForProbe
-                    )
+                    Toggle(isOn: $appState.settings.runTunnelConnectivityProbe) {
+                        HStack(spacing: 6) {
+                            Text("Run connectivity check after connect")
+                            Image(systemName: "questionmark.circle")
+                                .foregroundStyle(.secondary)
+                                .instantTooltip("After the VPN connects, automatically checks that the tunnel is working by verifying your public IP and making a test HTTPS/DNS request.")
+                        }
+                    }
+                    Toggle(isOn: $appState.settings.includeHostAppInPerAppRulesForProbe) {
+                        HStack(spacing: 6) {
+                            Text("Route this app through the VPN during the check")
+                            Image(systemName: "questionmark.circle")
+                                .foregroundStyle(.secondary)
+                                .instantTooltip("When using per-app VPN rules, TunnelBahn itself is normally excluded from the tunnel. Turn this on to route TunnelBahn through the VPN while the connectivity check runs, so the check tests the tunnel directly.")
+                        }
+                    }
                     .disabled(!AppConstants.isPerAppSplitTunnelEnabled)
-                    .help("When using per-app VPN rules, TunnelBahn itself is normally excluded from the tunnel. Turn this on to route TunnelBahn through the VPN while the connectivity check runs, so the check tests the tunnel directly.")
                 }
 
                 settingsSection("Backup & Restore") {

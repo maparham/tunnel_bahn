@@ -69,7 +69,7 @@ struct AppsView: View {
                             label: "Tunnel all apps",
                             disabled: rulesLocked
                         ) { routingModeBinding.wrappedValue = .fullTunnel }
-                        Image(systemName: "info.circle")
+                        Image(systemName: "questionmark.circle")
                             .foregroundStyle(.secondary)
                             .instantTooltip(Self.tunnelAllAppsTooltip)
                     }
@@ -79,7 +79,7 @@ struct AppsView: View {
                             label: "Tunnel selected apps",
                             disabled: rulesLocked || !canEnableAppTunnelMode
                         ) { routingModeBinding.wrappedValue = .appTunnel }
-                        Image(systemName: "info.circle")
+                        Image(systemName: "questionmark.circle")
                             .foregroundStyle(.secondary)
                             .instantTooltip(Self.tunnelSelectedAppsTooltip)
                     }
@@ -87,9 +87,10 @@ struct AppsView: View {
 
                 Spacer()
 
-                Button("Refresh App List") {
+                Button(appState.appDiscovery.isRefreshing ? "Refreshing…" : "Refresh App List") {
                     appState.appDiscovery.refresh()
                 }
+                .disabled(appState.appDiscovery.isRefreshing)
             }
 
             if !AppConstants.isPerAppSplitTunnelEnabled {
@@ -110,33 +111,15 @@ struct AppsView: View {
                 }
                 HStack(alignment: .top, spacing: 16) {
                     VStack(alignment: .leading, spacing: 10) {
-                        GroupBox("Running Apps") {
+                        GroupBox("Installed Apps") {
                             VStack(alignment: .leading, spacing: 10) {
                                 TextField("Search applications", text: $appState.appDiscovery.searchText)
                                     .textFieldStyle(.roundedBorder)
 
                                 List(discoverableAppsExcludingSelected) { app in
-                                    HStack(spacing: 12) {
-                                        Image(nsImage: app.icon)
-                                            .resizable()
-                                            .frame(width: 24, height: 24)
-                                        VStack(alignment: .leading) {
-                                            Text(app.displayName)
-                                                .font(.headline)
-                                            Text(app.bundleIdentifier)
-                                                .foregroundStyle(.secondary)
-                                                .font(.caption)
-                                        }
-                                        Spacer()
-                                        Button {
-                                            addSelectedApp(app)
-                                        } label: {
-                                            Image(systemName: "plus.circle")
-                                        }
-                                        .buttonStyle(.plain)
-                                        .disabled(rulesLocked)
+                                    InstalledAppRow(app: app, rulesLocked: rulesLocked) {
+                                        addSelectedApp(app)
                                     }
-                                    .padding(.vertical, 4)
                                 }
                                 .frame(minHeight: 180)
 
@@ -156,7 +139,7 @@ struct AppsView: View {
                     VStack(alignment: .leading, spacing: 10) {
                         GroupBox {
                             if selectedAppRules.isEmpty {
-                                Label("Add at least one app to enable this mode.", systemImage: "info.circle.fill")
+                                Label("Add at least one app to enable this mode.", systemImage: "questionmark.circle.fill")
                                     .font(.caption)
                                     .foregroundStyle(.blue)
                                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -219,6 +202,9 @@ struct AppsView: View {
                 autoSwitchToFullTunnelIfNoSelection()
             }
         }
+        .onChange(of: appState.profileStore.selectedProfileID) { _, _ in
+            appState.appDiscovery.searchText = ""
+        }
     }
 
     private func isSelected(_ app: DiscoveredApp) -> Bool {
@@ -247,6 +233,42 @@ struct AppsView: View {
 
         if selectedCount == 0 {
             appState.settings.routingMode = .fullTunnel
+        }
+    }
+}
+
+// MARK: - Lazy-icon row
+
+private struct InstalledAppRow: View {
+    let app: DiscoveredApp
+    let rulesLocked: Bool
+    let onAdd: () -> Void
+
+    @State private var icon: NSImage?
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(nsImage: icon ?? NSImage(named: NSImage.applicationIconName)!)
+                .resizable()
+                .frame(width: 24, height: 24)
+            VStack(alignment: .leading) {
+                Text(app.displayName)
+                    .font(.headline)
+                Text(app.bundleIdentifier)
+                    .foregroundStyle(.secondary)
+                    .font(.caption)
+            }
+            Spacer()
+            Button(action: onAdd) {
+                Image(systemName: "plus.circle")
+            }
+            .buttonStyle(.plain)
+            .disabled(rulesLocked)
+        }
+        .padding(.vertical, 4)
+        .onAppear {
+            guard icon == nil else { return }
+            icon = NSWorkspace.shared.icon(forFile: app.appPath)
         }
     }
 }

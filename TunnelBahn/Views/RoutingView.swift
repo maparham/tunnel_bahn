@@ -140,38 +140,38 @@ struct RoutingView: View {
     private func restrictProxySection() -> some View {
         GroupBox {
             VStack(alignment: .leading, spacing: 10) {
-                VStack(alignment: .leading, spacing: 4) {
-                    HStack(spacing: 16) {
-                        HStack(spacing: 6) {
-                            RadioButton(
-                                isOn: !appState.settings.enforceDestinationFiltering,
-                                label: "Tunnel all destinations",
-                                disabled: destinationRoutingEditingLocked
-                            ) { destinationFilteringBinding.wrappedValue = false }
-                            Image(systemName: "info.circle")
-                                .foregroundStyle(.secondary)
-                                .instantTooltip(Self.allDestinationsTooltip)
-                        }
+                HStack(alignment: .top, spacing: 16) {
+                    HStack(spacing: 6) {
+                        RadioButton(
+                            isOn: !appState.settings.enforceDestinationFiltering,
+                            label: "Tunnel all destinations",
+                            disabled: destinationRoutingEditingLocked
+                        ) { destinationFilteringBinding.wrappedValue = false }
+                        Image(systemName: "questionmark.circle")
+                            .foregroundStyle(.secondary)
+                            .instantTooltip(Self.allDestinationsTooltip)
+                    }
+                    VStack(alignment: .leading, spacing: 4) {
                         HStack(spacing: 6) {
                             RadioButton(
                                 isOn: appState.settings.enforceDestinationFiltering,
                                 label: "Tunnel selected destinations",
                                 disabled: destinationRoutingEditingLocked || !hasAnyDestinations
                             ) { destinationFilteringBinding.wrappedValue = true }
-                            Image(systemName: "info.circle")
+                            Image(systemName: "questionmark.circle")
                                 .foregroundStyle(.secondary)
                                 .instantTooltip(Self.selectedDestinationsTooltip)
                         }
-                    }
-                    if !hasAnyDestinations {
-                        Label(
-                            hasAnyRulesIgnoringSectionToggles
-                                ? "Enable a section below to activate destination filtering."
-                                : "Add destination IPs or CIDRs below to enable.",
-                            systemImage: "info.circle.fill"
-                        )
-                        .font(.footnote)
-                        .foregroundStyle(.blue)
+                        if !hasAnyDestinations {
+                            Label(
+                                hasAnyRulesIgnoringSectionToggles
+                                    ? "Enable a section below to activate destination filtering."
+                                    : "Add destination IPs or CIDRs below to enable.",
+                                systemImage: "questionmark.circle.fill"
+                            )
+                            .font(.footnote)
+                            .foregroundStyle(.blue)
+                        }
                     }
                 }
 
@@ -192,7 +192,7 @@ struct RoutingView: View {
     }
 
     private func bulkListsFormatInfoIcon() -> some View {
-        Image(systemName: "info.circle")
+        Image(systemName: "questionmark.circle")
             .font(.body)
             .imageScale(.small)
             .foregroundStyle(.secondary)
@@ -227,11 +227,13 @@ struct RoutingView: View {
                     if appState.destinationRuleStore.bulkGroups.isEmpty {
                         Text("No bulk lists. Import a country/zone file or paste many lines at once.")
                             .foregroundStyle(.secondary)
+                            .opacity(bulkListsEnabled ? 1 : 0.4)
                     } else {
                         ForEach(appState.destinationRuleStore.bulkGroups) { group in
                             DestinationCidrBulkGroupRow(
                                 groupID: group.id,
                                 controlsDisabled: destinationRoutingEditingLocked || !bulkListsEnabled,
+                                editingLocked: destinationRoutingEditingLocked,
                                 onBrowse: {
                                     bulkPrefixBrowse = BulkPrefixBrowsePayload(
                                         id: group.id,
@@ -249,10 +251,10 @@ struct RoutingView: View {
                             .font(.footnote)
                             .foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
+                            .opacity(bulkListsEnabled ? 1 : 0.4)
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .opacity(bulkListsEnabled ? 1 : 0.4)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.vertical, 4)
@@ -270,7 +272,7 @@ struct RoutingView: View {
                     HStack(alignment: .firstTextBaseline, spacing: 6) {
                         Text("Custom ranges")
                             .font(.headline)
-                        Image(systemName: "info.circle")
+                        Image(systemName: "questionmark.circle")
                             .font(.body)
                             .imageScale(.small)
                             .foregroundStyle(.secondary)
@@ -286,19 +288,21 @@ struct RoutingView: View {
                         if appState.destinationRuleStore.customRules.isEmpty {
                             Text("No custom ranges yet.")
                                 .foregroundStyle(.secondary)
+                                .opacity(customRangesEnabled ? 1 : 0.4)
                         } else {
                             ForEach(appState.destinationRuleStore.customRules) { rule in
                                 DestinationCidrRuleRow(
                                     ruleID: rule.id,
-                                    controlsDisabled: destinationRoutingEditingLocked || !customRangesEnabled
+                                    controlsDisabled: destinationRoutingEditingLocked || !customRangesEnabled,
+                                    editingLocked: destinationRoutingEditingLocked
                                 )
                                 .environmentObject(appState)
                             }
                         }
 
                         addRow(sectionEnabled: customRangesEnabled)
+                            .opacity(customRangesEnabled ? 1 : 0.4)
                     }
-                    .opacity(customRangesEnabled ? 1 : 0.4)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.vertical, 4)
@@ -410,7 +414,7 @@ struct RoutingView: View {
                     HStack(alignment: .firstTextBaseline, spacing: 6) {
                         Text("Domain names")
                             .font(.headline)
-                        Image(systemName: "info.circle")
+                        Image(systemName: "questionmark.circle")
                             .font(.body)
                             .imageScale(.small)
                             .foregroundStyle(.secondary)
@@ -423,7 +427,7 @@ struct RoutingView: View {
                             }
                             .buttonStyle(.borderless)
                             .instantTooltip("Remove all domains")
-                            .disabled(destinationRoutingEditingLocked || !domainNamesEnabled)
+                            .disabled(destinationRoutingEditingLocked)
                         }
                         Toggle("", isOn: domainNamesEnabledBinding)
                             .toggleStyle(.switch)
@@ -440,9 +444,10 @@ struct RoutingView: View {
                         if appState.destinationRuleStore.domainRules.isEmpty {
                             Text("No domains yet.")
                                 .foregroundStyle(.secondary)
+                                .opacity(domainNamesEnabled ? 1 : 0.4)
                         } else {
                             ForEach(appState.destinationRuleStore.domainRules) { rule in
-                                DestinationDomainRuleRow(ruleID: rule.id, controlsDisabled: destinationRoutingEditingLocked || !domainNamesEnabled) {
+                                DestinationDomainRuleRow(ruleID: rule.id, controlsDisabled: destinationRoutingEditingLocked || !domainNamesEnabled, editingLocked: destinationRoutingEditingLocked) {
                                     bulkPrefixBrowse = BulkPrefixBrowsePayload(
                                         id: rule.id,
                                         title: rule.domain,
@@ -454,8 +459,8 @@ struct RoutingView: View {
                         }
 
                         domainAddRow(sectionEnabled: domainNamesEnabled)
+                            .opacity(domainNamesEnabled ? 1 : 0.4)
                     }
-                    .opacity(domainNamesEnabled ? 1 : 0.4)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.vertical, 4)
@@ -565,6 +570,7 @@ private struct BulkPrefixBrowsePayload: Identifiable {
 private struct DestinationCidrBulkGroupRow: View {
     let groupID: UUID
     var controlsDisabled: Bool
+    var editingLocked: Bool
     let onBrowse: () -> Void
 
     @EnvironmentObject private var appState: AppState
@@ -680,6 +686,7 @@ private struct DestinationCidrBulkGroupRow: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
+            .opacity(controlsDisabled ? 0.4 : 1)
             .onAppear {
                 titleDraft = storedTitle
             }
@@ -696,7 +703,6 @@ private struct DestinationCidrBulkGroupRow: View {
             }
             .buttonStyle(.borderless)
             .instantTooltip("View prefixes")
-            .disabled(controlsDisabled || storedGroup() == nil)
 
             Button {
                 if let cidrs = storedGroup()?.cidrs {
@@ -713,14 +719,13 @@ private struct DestinationCidrBulkGroupRow: View {
             }
             .buttonStyle(.borderless)
             .instantTooltip(copiedPrefixes ? "Copied!" : "Copy prefix list")
-            .disabled(storedGroup() == nil)
 
             Button { confirmDelete = true } label: {
                 Image(systemName: "xmark")
             }
             .buttonStyle(.borderless)
             .instantTooltip("Remove this bulk list")
-            .disabled(controlsDisabled)
+            .disabled(editingLocked)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.vertical, 4)
@@ -739,6 +744,7 @@ private struct BulkGroupPrefixesView: View {
     let cidrs: [String]
     @Environment(\.dismiss) private var dismiss
     @State private var filter = ""
+    @State private var copied = false
 
     private var filteredEnumerated: [(offset: Int, cidr: String)] {
         let f = filter.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
@@ -749,22 +755,57 @@ private struct BulkGroupPrefixesView: View {
         return pairs.filter { $0.cidr.lowercased().contains(f) }
     }
 
+    private func copyVisible() {
+        let text = filteredEnumerated.map(\.cidr).joined(separator: "\n")
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
+        copied = true
+        Task {
+            try? await Task.sleep(for: .seconds(1.5))
+            copied = false
+        }
+    }
+
     var body: some View {
-        NavigationStack {
+        VStack(spacing: 0) {
+            HStack {
+                Text(title).font(.headline)
+                Spacer()
+                Button(action: copyVisible) {
+                    Label(copied ? "Copied!" : "Copy", systemImage: copied ? "checkmark" : "doc.on.doc")
+                        .contentTransition(.symbolEffect(.replace))
+                }
+                .animation(.default, value: copied)
+                Button("Done") { dismiss() }
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
+
+            HStack(spacing: 6) {
+                Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+                TextField("Filter prefixes", text: $filter)
+                    .textFieldStyle(.plain)
+                if !filter.isEmpty {
+                    Button { filter = "" } label: {
+                        Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 7)
+            .background(Color(nsColor: .separatorColor).opacity(0.15), in: RoundedRectangle(cornerRadius: 8))
+            .padding(.horizontal, 16)
+            .padding(.bottom, 10)
+
+            Divider()
+
             List(Array(filteredEnumerated), id: \.offset) { pair in
                 Text(pair.cidr)
                     .font(.system(.body, design: .monospaced))
                     .textSelection(.enabled)
             }
-            .navigationTitle(title)
-            .searchable(text: $filter, prompt: Text("Filter prefixes"))
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Done") {
-                        dismiss()
-                    }
-                }
-            }
+            .listStyle(.plain)
         }
         .frame(minWidth: 480, minHeight: 420)
     }
@@ -775,6 +816,7 @@ private struct BulkGroupPrefixesView: View {
 private struct DestinationCidrRuleRow: View {
     let ruleID: UUID
     var controlsDisabled: Bool
+    var editingLocked: Bool
 
     @EnvironmentObject private var appState: AppState
     @State private var draft: String = ""
@@ -804,13 +846,14 @@ private struct DestinationCidrRuleRow: View {
                     persistDraftOrRevert()
                 }
                 .disabled(controlsDisabled)
+                .opacity(controlsDisabled ? 0.4 : 1)
 
             Button { confirmDelete = true } label: {
                 Image(systemName: "xmark")
             }
             .buttonStyle(.borderless)
             .instantTooltip("Remove this range")
-            .disabled(controlsDisabled)
+            .disabled(editingLocked)
         }
         .padding(.vertical, 2)
         .confirmationDialog("Remove \"\(storedRecord()?.cidr ?? "")\"?", isPresented: $confirmDelete) {
@@ -840,6 +883,7 @@ private struct DestinationCidrRuleRow: View {
 private struct DestinationDomainRuleRow: View {
     let ruleID: UUID
     var controlsDisabled: Bool
+    var editingLocked: Bool
     @State private var confirmDelete = false
     @State private var copiedIPs = false
     let onBrowse: () -> Void
@@ -885,6 +929,7 @@ private struct DestinationDomainRuleRow: View {
                     .font(.caption)
                     .foregroundStyle(statusColor)
             }
+            .opacity(controlsDisabled ? 0.4 : 1)
 
             Spacer(minLength: 0)
 
@@ -898,13 +943,13 @@ private struct DestinationDomainRuleRow: View {
             .buttonStyle(.borderless)
             .instantTooltip("Refresh resolved IPs")
             .disabled(rule()?.status == .resolving)
+            .opacity(controlsDisabled ? 0.4 : 1)
 
             Button { onBrowse() } label: {
                 Image(systemName: "eye")
             }
             .buttonStyle(.borderless)
             .instantTooltip("View resolved IPs")
-            .disabled(rule()?.resolvedCidrs.isEmpty ?? true)
 
             Button {
                 if let cidrs = rule()?.resolvedCidrs, !cidrs.isEmpty {
@@ -921,14 +966,13 @@ private struct DestinationDomainRuleRow: View {
             }
             .buttonStyle(.borderless)
             .instantTooltip(copiedIPs ? "Copied!" : "Copy IP list")
-            .disabled(rule()?.resolvedCidrs.isEmpty ?? true)
 
             Button { confirmDelete = true } label: {
                 Image(systemName: "xmark")
             }
             .buttonStyle(.borderless)
             .instantTooltip("Remove this domain")
-            .disabled(controlsDisabled)
+            .disabled(editingLocked)
         }
         .padding(.vertical, 2)
         .confirmationDialog("Remove \"\(rule()?.domain ?? "")\"?", isPresented: $confirmDelete) {

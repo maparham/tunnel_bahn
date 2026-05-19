@@ -684,7 +684,7 @@ private struct SplitTunnelWarningIcon: View {
                 .font(.system(size: 16))
         }
         .buttonStyle(.plain)
-        .help("Privacy & IP Leak Risk")
+        .instantTooltip("Privacy & IP Leak Risk")
         .popover(isPresented: $showPopover, arrowEdge: .bottom) {
             VStack(alignment: .leading, spacing: 8) {
                 HStack(spacing: 6) {
