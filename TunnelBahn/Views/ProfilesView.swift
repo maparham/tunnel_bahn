@@ -323,9 +323,7 @@ struct ProfilesView: View {
                     RoutingView()
                 }
             }
-            .onChange(of: profileStore.selectedProfileID) {
-                profileDetailTab = .overview
-            }
+
         } else {
             ContentUnavailableView(
                 "No Profile Selected",

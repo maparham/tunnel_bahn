@@ -39,7 +39,7 @@ final class AppState: ObservableObject {
         self.profileRoutingStore = profileRoutingStore
         let resourceMonitor = ResourceMonitor()
         self.resourceMonitor = resourceMonitor
-        self.vpnManager = VPNManager(settings: settings, resourceMonitor: resourceMonitor)
+        self.vpnManager = VPNManager(settings: settings, resourceMonitor: resourceMonitor, profileStore: profileStore)
         self.domainResolutionCoordinator = DomainResolutionCoordinator(ruleStore: destinationRuleStore)
         bindChildStores()
         domainResolutionCoordinator.start()

@@ -18,7 +18,12 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         logger.log("runtime state source: \(loadedRuntime.source.rawValue, privacy: .public)")
         logRuntimeProfileSummary(runtime.profile, source: loadedRuntime.source.rawValue)
         adapter = BoringTunAdapter(provider: self)
-        try await adapter?.start(with: runtime.profile)
+        do {
+            try await adapter?.start(with: runtime.profile)
+        } catch {
+            logger.error("startTunnel failed: \(error.localizedDescription, privacy: .public)")
+            throw error
+        }
         if let runtimeConfiguration = await adapter?.runtimeConfiguration() {
             logger.log("wireguard runtimeConfiguration after start:\n\(runtimeConfiguration, privacy: .public)")
         } else {

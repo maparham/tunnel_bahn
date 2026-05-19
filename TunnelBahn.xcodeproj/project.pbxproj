@@ -45,11 +45,11 @@
 		7F6E967524842A75F4E177EA /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8C066CA526386F398EAAD416 /* ContentView.swift */; };
 		7FE46529E271AA701B21343B /* PerAppTransferStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 804194AB9838F944A7CD9DD5 /* PerAppTransferStore.swift */; };
 		83F7A2736B5E56EC8342004F /* PacketTunnelProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = 575EA7FA92707A3BE5CF97E1 /* PacketTunnelProvider.swift */; };
-		87704DF880CFF272F33DF86A /* PacketTunnelExtension.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 888C8E8925251E02C15A943B /* PacketTunnelExtension.appex */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		8A75EC38FC5D685DDAA66E27 /* WireGuardProfile.swift in Sources */ = {isa = PBXBuildFile; fileRef = 597D1A15AF482ECB340F8519 /* WireGuardProfile.swift */; };
 		8E5AECD0D7BACDE0885CFA6B /* PerAppTransferStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 804194AB9838F944A7CD9DD5 /* PerAppTransferStore.swift */; };
 		9218BD1308ABA5BBCDE2D1E6 /* AppGroup.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A326E604708829F35A2C2FE /* AppGroup.swift */; };
 		950889D4805B0B825BCFC1DC /* AppDiscoveryService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9C3EBCDA1A0C341A0630B092 /* AppDiscoveryService.swift */; };
+		981E6E5C2FBBBF5100C03105 /* PacketTunnelExtension.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 888C8E8925251E02C15A943B /* PacketTunnelExtension.appex */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		98CA90B92FBB1D4F00B5C765 /* PrivacyInfo.xcprivacy in CopyFiles */ = {isa = PBXBuildFile; fileRef = 98CA90B62FBB0E6C00B5C765 /* PrivacyInfo.xcprivacy */; };
 		98CA90BB2FBB1D9C00B5C765 /* PrivacyInfo.xcprivacy in CopyFiles */ = {isa = PBXBuildFile; fileRef = 98CA90B72FBB0E7E00B5C765 /* PrivacyInfo.xcprivacy */; };
 		9C6F18B022DA3CE8022BB563 /* VPNManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = CF5CCD4C2857BFC6B0CC64D5 /* VPNManager.swift */; };
@@ -112,7 +112,7 @@
 			remoteGlobalIDString = 8D036A9487EEA447427A4EE2;
 			remoteInfo = TransparentProxyExtension;
 		};
-		D7D1A28F17A7CA09429A26B7 /* PBXContainerItemProxy */ = {
+		981E6E5D2FBBBF5100C03105 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
 			containerPortal = 008ACF82343476CEB3BA09B5 /* Project object */;
 			proxyType = 1;
@@ -128,7 +128,7 @@
 			dstPath = "";
 			dstSubfolderSpec = 13;
 			files = (
-				87704DF880CFF272F33DF86A /* PacketTunnelExtension.appex in Embed Foundation Extensions */,
+				981E6E5C2FBBBF5100C03105 /* PacketTunnelExtension.appex in Embed Foundation Extensions */,
 				2C2673F5D03E3CC614BA2F3A /* TransparentProxyExtension.appex in Embed Foundation Extensions */,
 			);
 			name = "Embed Foundation Extensions";
@@ -254,6 +254,7 @@
 				B95B5C14707851CD0AAF0881 /* Shared */,
 				496075DC557B175629CD2713 /* TransparentProxyExtension */,
 				3EB3821CDC456515E75EDF33 /* TunnelBahn */,
+				981E6E5B2FBBBF5100C03105 /* Frameworks */,
 				AEAF18816FC1DA996B5E4FAE /* Products */,
 			);
 			sourceTree = "<group>";
@@ -348,6 +349,13 @@
 				876F0DFB0843A40A070235AC /* WireGuardConfigRenderer.swift */,
 			);
 			path = Services;
+			sourceTree = "<group>";
+		};
+		981E6E5B2FBBBF5100C03105 /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+			);
+			name = Frameworks;
 			sourceTree = "<group>";
 		};
 		A0D832DCD779F91F3A8A3581 /* Preview Content */ = {
@@ -470,8 +478,8 @@
 			buildRules = (
 			);
 			dependencies = (
-				39617DC3FDD6D3C53762CF0D /* PBXTargetDependency */,
 				10158CEF05CF658D9017C4F6 /* PBXTargetDependency */,
+				981E6E5E2FBBBF5100C03105 /* PBXTargetDependency */,
 			);
 			name = TunnelBahn;
 			packageProductDependencies = (
@@ -495,9 +503,6 @@
 					};
 					A5DFE5D3B5175D2D358E833E = {
 						DevelopmentTeam = 92G3VZAPVG;
-						ProvisioningStyle = Automatic;
-					};
-					F1B81DFB16C0AC3C70771F60 = {
 						ProvisioningStyle = Automatic;
 					};
 				};
@@ -678,10 +683,10 @@
 			target = 8D036A9487EEA447427A4EE2 /* TransparentProxyExtension */;
 			targetProxy = 31063449DB351D7DE60C0922 /* PBXContainerItemProxy */;
 		};
-		39617DC3FDD6D3C53762CF0D /* PBXTargetDependency */ = {
+		981E6E5E2FBBBF5100C03105 /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
 			target = A5DFE5D3B5175D2D358E833E /* PacketTunnelExtension */;
-			targetProxy = D7D1A28F17A7CA09429A26B7 /* PBXContainerItemProxy */;
+			targetProxy = 981E6E5D2FBBBF5100C03105 /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
 
@@ -738,6 +743,8 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_INCLUDE_ALL_APPICON_ASSETS = NO;
 				CODE_SIGN_ENTITLEMENTS = TunnelBahn/TunnelBahn.entitlements;
+				CODE_SIGN_IDENTITY = "Apple Development";
+				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				DEAD_CODE_STRIPPING = YES;
 				DEVELOPMENT_TEAM = 92G3VZAPVG;
@@ -746,6 +753,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
+				PROVISIONING_PROFILE_SPECIFIER = "";
 				REGISTER_APP_GROUPS = YES;
 				SDKROOT = macosx;
 			};
@@ -757,6 +765,8 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_INCLUDE_ALL_APPICON_ASSETS = NO;
 				CODE_SIGN_ENTITLEMENTS = TunnelBahn/TunnelBahn.entitlements;
+				CODE_SIGN_IDENTITY = "Apple Development";
+				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				DEAD_CODE_STRIPPING = YES;
 				DEVELOPMENT_TEAM = 92G3VZAPVG;
@@ -765,6 +775,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
+				PROVISIONING_PROFILE_SPECIFIER = "";
 				REGISTER_APP_GROUPS = YES;
 				SDKROOT = macosx;
 			};

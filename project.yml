@@ -42,6 +42,7 @@ targets:
       - path: TunnelBahn/Models
     settings:
       base:
+        DEVELOPMENT_TEAM: 92G3VZAPVG
         PRODUCT_BUNDLE_IDENTIFIER: com.tunnelbahn.mac.networkextension
         INFOPLIST_FILE: NetworkExtension/Info.plist
         CODE_SIGN_ENTITLEMENTS: NetworkExtension/NetworkExtension.entitlements
@@ -68,6 +69,7 @@ targets:
       - path: TunnelBahn/Models
     settings:
       base:
+        DEVELOPMENT_TEAM: 92G3VZAPVG
         PRODUCT_BUNDLE_IDENTIFIER: com.tunnelbahn.mac.transparentproxy
         INFOPLIST_FILE: TransparentProxyExtension/Info.plist
         CODE_SIGN_ENTITLEMENTS: TransparentProxyExtension/TransparentProxyExtension.entitlements

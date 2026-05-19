@@ -4,6 +4,9 @@ import Foundation
 final class ProfileStore: ObservableObject {
     @Published private(set) var profiles: [WireGuardProfile] = []
     @Published private(set) var selectedProfileID: UUID?
+    /// Profiles whose private key cannot be read from the keychain.
+    /// Populated by `runKeychainIntegrityCheck()`. Empty until that method is called.
+    @Published private(set) var profilesWithMissingKeys: [WireGuardProfile] = []
 
     private enum Keys {
         static let profiles = "profiles"
@@ -28,6 +31,7 @@ final class ProfileStore: ObservableObject {
         profiles.append(new)
         selectedProfileID = new.id
         save()
+        runKeychainIntegrityCheck()
     }
 
     /// Replaces the profile at `id` (keychain cleanup + new row). Use when importing under an existing display name.
@@ -41,6 +45,7 @@ final class ProfileStore: ObservableObject {
         profiles.append(new)
         selectedProfileID = new.id
         save()
+        runKeychainIntegrityCheck()
     }
 
     func delete(id: UUID) {
@@ -49,6 +54,7 @@ final class ProfileStore: ObservableObject {
             cleanupKeychainSecrets(for: profile)
         }
         profiles.removeAll { $0.id == id }
+        profilesWithMissingKeys.removeAll { $0.id == id }
         if selectedProfileID == id {
             selectedProfileID = profiles.first?.id
         }
@@ -77,6 +83,26 @@ final class ProfileStore: ObservableObject {
 
     var selectedProfile: WireGuardProfile? {
         profiles.first(where: { $0.id == selectedProfileID })
+    }
+
+    /// Checks whether each profile's private key is readable from the keychain and
+    /// populates `profilesWithMissingKeys` with any that are broken.
+    ///
+    /// This can happen after an app-group ID change (new UserDefaults container) if
+    /// profiles were added to the new container without the corresponding keychain writes
+    /// — the profile metadata exists but the key material was never stored. Call once
+    /// at app startup after `load()`.
+    func runKeychainIntegrityCheck() {
+        profilesWithMissingKeys = profiles.filter { profile in
+            (try? keychainService.read(account: profile.interface.privateKeyRef)) == nil
+        }
+    }
+
+    /// Returns true when the profile's private key can be read from the keychain right now.
+    /// Use this as a connect-time guard to give an actionable error before the extension
+    /// tries (and fails with -25300) to read the key itself.
+    func hasValidPrivateKey(for profile: WireGuardProfile) -> Bool {
+        (try? keychainService.read(account: profile.interface.privateKeyRef)) != nil
     }
 
     private func save() {

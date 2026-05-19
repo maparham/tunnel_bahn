@@ -4,6 +4,28 @@ enum AppConstants {
     /// Host app bundle identifier (extensions use `\(primaryBundleID).<suffix>`).
     static let primaryBundleID = "com.tunnelbahn.mac"
     /// Must match `com.apple.security.application-groups` on the app and all extensions.
+    ///
+    /// WARNING — changing this value is destructive:
+    ///   • macOS creates a brand-new empty container; all UserDefaults data (profiles,
+    ///     settings, routing snapshots, signing identifiers) in the old container becomes
+    ///     invisible to the new build.
+    ///   • Profiles that were re-imported into the new container get fresh `privateKeyRef`
+    ///     UUIDs. If the import flow doesn't run — or the user copies profile metadata
+    ///     without going through import — those UUIDs have no corresponding keychain items
+    ///     and every tunnel-start fails with keychain error -25300 (errSecItemNotFound).
+    ///   • The keychain access group (team-ID-prefixed, set in Info.plist as
+    ///     `$(AppIdentifierPrefix)\(primaryBundleID)`) is SEPARATE from this value and is
+    ///     stable across app-group renames, so old keychain items stay readable as long as
+    ///     the same team signs the app.
+    ///
+    /// If you must change this: update all three entitlements files, the App ID / app-group
+    /// in the Apple Developer Portal, re-run `xcodegen generate`, and tell users to
+    /// delete + re-import all WireGuard profiles.
+    ///
+    /// Migration history:
+    ///   3c9b7b1  (AppSplitWG era)       92G3VZAPVG.group.com.appsplit.wg
+    ///   6f32874  (TunnelBahn rename)     92G3VZAPVG.group.com.tunnelbahn.mac
+    ///   8a39c7f  (App Store readiness)   group.com.tunnelbahn.mac  ← current
     static let appGroupID = "group.\(primaryBundleID)"
     static let keychainService = primaryBundleID
     /// Matches `keychain-access-groups`. Set in each target's Info.plist as

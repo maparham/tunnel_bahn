@@ -26,6 +26,7 @@ final class VPNManager: ObservableObject {
 
     private var manager = NETunnelProviderManager()
     private let settings: AppSettings
+    private let profileStore: ProfileStore
     private weak var resourceMonitor: ResourceMonitor?
     private var resourceMonitorCancellables = Set<AnyCancellable>()
     private let publicIPSession = URLSession(configuration: .ephemeral)
@@ -52,10 +53,17 @@ final class VPNManager: ObservableObject {
     private var lastLoggedSyncStatusKey: String?
     private var lastLoggedDisconnectSuppressRaw: Int?
 
-    init(settings: AppSettings, resourceMonitor: ResourceMonitor?) {
+    init(settings: AppSettings, resourceMonitor: ResourceMonitor?, profileStore: ProfileStore) {
         self.settings = settings
+        self.profileStore = profileStore
         self.resourceMonitor = resourceMonitor
         traceLog("init")
+        if !AppGroupStore.isAvailable {
+            traceLog(
+                "WARNING: App Group container unavailable for \(AppConstants.appGroupID) — " +
+                "shared state will not sync with extensions; check signing and app-group entitlements"
+            )
+        }
         if let resourceMonitor {
             resourceMonitor.$cpuUsage
                 .combineLatest(resourceMonitor.$memoryUsage)
@@ -131,6 +139,11 @@ final class VPNManager: ObservableObject {
                 managerAppRuleCount: nil
             )
             traceLog("connect ignored because connect or disconnect is in flight")
+            return
+        }
+        guard profileStore.hasValidPrivateKey(for: profile) else {
+            stats.state = .error
+            stats.lastError = "The private key for \"\(profile.name)\" is missing from the keychain. Delete the profile and re-import it from its original .conf file."
             return
         }
         traceLog("connect requested profile=\(profile.name) rules=\(rules.count)")
@@ -392,8 +405,7 @@ final class VPNManager: ObservableObject {
                 return
             case .failed:
                 stats.state = .error
-                stats.lastError =
-                    "Tunnel did not connect (status: \(connectionStatusString(manager.connection.status))). If you were switching profiles, try again."
+                stats.lastError = tunnelConnectFailureMessage(neStatus: manager.connection.status)
                 stats.connectedProfileID = nil
                 stats.endpoint = nil
                 traceLog(
@@ -409,6 +421,8 @@ final class VPNManager: ObservableObject {
                     onDemand: manager.isOnDemandEnabled,
                     managerAppRuleCount: manager.appRules.count
                 )
+                await coordinatedDisconnect(waitForTunnelStop: false)
+                stats.state = .error
                 return
             case .stillStarting:
                 Self.osLog.notice("[connect] NEVPN stillStarting — awaiting deferred completion inline")
@@ -486,6 +500,12 @@ final class VPNManager: ObservableObject {
     }
 
     private func waitForTunnelConnectOutcome(timeoutSeconds: TimeInterval) async -> TunnelConnectWaitOutcome {
+        // After startVPNTunnel(), the NE manager briefly stays at .disconnected while
+        // the daemon processes the request (especially with forPerAppVPN + On-Demand).
+        // Fast-failing on that initial disconnected state causes a false error before the
+        // tunnel reaches .connecting. 3 s gives slower Macs (and heavier on-demand configs)
+        // enough runway to transition to .connecting without a false teardown.
+        let graceDeadline = Date().addingTimeInterval(3.0)
         let deadline = Date().addingTimeInterval(timeoutSeconds)
         while Date() < deadline {
             if connectCancelled {
@@ -494,6 +514,9 @@ final class VPNManager: ObservableObject {
             let status = manager.connection.status
             if status == .connected {
                 return .connected
+            }
+            if (status == .disconnected || status == .invalid), Date() > graceDeadline {
+                return .failed
             }
             try? await Task.sleep(for: .milliseconds(200))
         }
@@ -521,6 +544,9 @@ final class VPNManager: ObservableObject {
         profileOkForAccounting: Bool,
         rulesForVPNManagerCount: Int
     ) async {
+        // Mirror the grace from waitForTunnelConnectOutcome: NE can flicker to .disconnected
+        // during forPerAppVPN manager reconfiguration transitions before settling into .connecting.
+        let graceDeadline = Date().addingTimeInterval(3.0)
         let deadline = Date().addingTimeInterval(120)
         while Date() < deadline {
             if connectCancelled {
@@ -541,9 +567,9 @@ final class VPNManager: ObservableObject {
                 )
                 return
             }
-            if status == .disconnected || status == .invalid {
+            if (status == .disconnected || status == .invalid), Date() > graceDeadline {
                 stats.state = .error
-                stats.lastError = "Tunnel failed before connecting."
+                stats.lastError = tunnelConnectFailureMessage(neStatus: status)
                 stats.connectedProfileID = nil
                 stats.endpoint = nil
                 emitConnectSummaryLine(
@@ -556,6 +582,8 @@ final class VPNManager: ObservableObject {
                     onDemand: manager.isOnDemandEnabled,
                     managerAppRuleCount: manager.appRules.count
                 )
+                await coordinatedDisconnect(waitForTunnelStop: false)
+                stats.state = .error
                 return
             }
             try? await Task.sleep(for: .milliseconds(250))
@@ -590,6 +618,8 @@ final class VPNManager: ObservableObject {
             onDemand: manager.isOnDemandEnabled,
             managerAppRuleCount: manager.appRules.count
         )
+        await coordinatedDisconnect(waitForTunnelStop: false)
+        stats.state = .error
     }
 
     private func applySuccessfulConnectPostTunnel(
@@ -618,8 +648,10 @@ final class VPNManager: ObservableObject {
             } catch {
                 Self.osLog.notice("[connect] perAppStatsProxy.enable() failed: \(error.localizedDescription, privacy: .public)")
                 traceLog("app-tunnel stats proxy enable failed: \(error.localizedDescription)")
+                stats.state = .error
                 stats.lastError = "App-tunnel accounting could not start: \(error.localizedDescription)"
                 await coordinatedDisconnect(waitForTunnelStop: false)
+                stats.state = .error
                 emitConnectSummaryLine(
                     outcome: "error",
                     profileName: profile.name,
@@ -872,6 +904,26 @@ final class VPNManager: ObservableObject {
         let matching = managers.filter { $0.localizedDescription == AppConstants.vpnManagerDescription }
         if let existing = matching.first {
             manager = existing
+            // If the previous session ended without clean teardown (force-quit, crash while
+            // connected), the manager may still have isOnDemandEnabled=true on disk. macOS sees
+            // the On-Demand rule and repeatedly tries to start the packet tunnel on network
+            // activity, producing phantom connect→disconnect cycles every ~19 seconds.
+            // Only clear stale on-demand prefs when the system tunnel is fully stopped; if the
+            // tunnel is still live (force-quit while connected), leave prefs intact so the running
+            // tunnel is not orphaned with disabled manager preferences.
+            let liveStatus = existing.connection.status
+            let tunnelIsStopped = liveStatus == .disconnected || liveStatus == .invalid
+            if tunnelIsStopped, existing.isOnDemandEnabled || existing.isEnabled {
+                existing.isOnDemandEnabled = false
+                existing.isEnabled = false
+                do {
+                    try await existing.saveToPreferences()
+                    try await existing.loadFromPreferences()
+                    traceLog("startup: cleared stale on-demand/enabled from previous session")
+                } catch {
+                    traceLog("startup: WARNING — failed to clear stale on-demand: \(error.localizedDescription)")
+                }
+            }
             if matching.count > 1 {
                 for dup in matching.dropFirst() {
                     do { try await dup.removeFromPreferences() } catch {
@@ -1673,8 +1725,62 @@ final class VPNManager: ObservableObject {
         if lowered.contains("app rule") {
             return "App-tunnel policy could not be configured. Verify app bundle identifiers and Network Extension entitlements, then retry Connect."
         }
+        if lowered.contains("internal error") {
+            return Self.packetTunnelExtensionLaunchHint()
+                ?? "VPN session failed with an internal error."
+        }
         return description
     }
+
+    private func tunnelConnectFailureMessage(neStatus: NEVPNStatus) -> String {
+        let statusLine = connectionStatusString(neStatus)
+        if let hint = Self.packetTunnelExtensionLaunchHint() {
+            return "\(hint) (NEVPN \(statusLine))"
+        }
+        return "Tunnel did not connect (NEVPN \(statusLine)). If you were switching profiles, try again."
+    }
+
+    /// Explains the common macOS case where `nesessionmanager` reports Plugin failed / PID 0.
+    /// Only available in DEBUG builds — distribution builds always return nil so no
+    /// developer-targeted copy reaches end users and no subprocess is spawned on the main actor.
+    #if DEBUG
+    private static func packetTunnelExtensionLaunchHint() -> String? {
+        guard let pluginsURL = Bundle.main.builtInPlugInsURL else { return nil }
+        let appex = pluginsURL.appendingPathComponent("PacketTunnelExtension.appex", isDirectory: true)
+        guard FileManager.default.fileExists(atPath: appex.path) else {
+            return "Packet tunnel extension is missing from this app bundle. Rebuild TunnelBahn from Xcode."
+        }
+        guard let codesignOutput = runCodesignVerbose(at: appex.path) else { return nil }
+        if codesignOutput.contains("Apple Distribution"), !codesignOutput.contains("Apple Development") {
+            return """
+            VPN extension is signed with Apple Distribution. macOS will not launch it for local \
+            debugging. Use Product → Run in Xcode (Development signing), not a copy in /Applications \
+            built for App Store or TestFlight, unless that build uses Development provisioning profiles \
+            that include Network Extension entitlements for all targets.
+            """
+        }
+        return nil
+    }
+
+    private static func runCodesignVerbose(at path: String) -> String? {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/codesign")
+        process.arguments = ["-dv", path]
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        process.standardError = pipe
+        do {
+            try process.run()
+            process.waitUntilExit()
+        } catch {
+            return nil
+        }
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        return String(data: data, encoding: .utf8)
+    }
+    #else
+    private static func packetTunnelExtensionLaunchHint() -> String? { nil }
+    #endif
 }
 
 /// Ensures only one completion fires when racing `sendProviderMessage` against a timeout `Task`.

@@ -59,11 +59,39 @@ struct TunnelBahnApp: App {
     @StateObject private var menuBarController = MenuBarController()
     @NSApplicationDelegateAdaptor(AppLifecycleDelegate.self) private var appDelegate
     @State private var autoReconnectTask: Task<Void, Never>?
+    @State private var missingKeyProfileNames: [String] = []
 
     var body: some Scene {
         WindowGroup("TunnelBahn") {
             ContentView()
                 .environmentObject(appState)
+                .alert(
+                    "Profiles Need Re-import",
+                    isPresented: Binding(
+                        get: { !missingKeyProfileNames.isEmpty },
+                        set: { if !$0 { missingKeyProfileNames = [] } }
+                    )
+                ) {
+                    Button("OK") { missingKeyProfileNames = [] }
+                } message: {
+                    // swiftlint:disable:next line_length
+                    let names = missingKeyProfileNames.joined(separator: ", ")
+                    let plural = missingKeyProfileNames.count == 1 ? "profile is" : "profiles are"
+                    Text(
+                        "The private key for \(missingKeyProfileNames.count) \(plural) missing from the keychain: \(names).\n\n" +
+                        "This usually happens after a build change that created a new app-group container. " +
+                        "Delete these profiles and re-import them from their original .conf files."
+                    )
+                }
+                .onChange(of: appState.profileStore.profilesWithMissingKeys) { _, stillMissing in
+                    let stillMissingNames = Set(stillMissing.map(\.name))
+                    // Remove profiles whose keys have been fixed (re-import cleared them).
+                    missingKeyProfileNames = missingKeyProfileNames.filter { stillMissingNames.contains($0) }
+                    // Surface profiles whose keys went missing after startup (e.g., bad import).
+                    for name in stillMissingNames where !missingKeyProfileNames.contains(name) {
+                        missingKeyProfileNames.append(name)
+                    }
+                }
                 .task {
                     traceLog("app startup task started")
                     appDelegate.vpnManager = appState.vpnManager
@@ -73,6 +101,8 @@ struct TunnelBahnApp: App {
                         window.delegate = appDelegate
                     }
                     await appState.vpnManager.load()
+                    appState.profileStore.runKeychainIntegrityCheck()
+                    missingKeyProfileNames = appState.profileStore.profilesWithMissingKeys.map(\.name)
                     appState.syncDestinationRoutingFileWithPreferences()
                     menuBarController.configure(
                         onConnectProfile: { profileID in

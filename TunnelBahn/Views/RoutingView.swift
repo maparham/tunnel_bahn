@@ -73,8 +73,6 @@ struct RoutingView: View {
             VStack(alignment: .leading, spacing: 0) {
                 restrictProxySection()
 
-                let filteringOff = !appState.settings.enforceDestinationFiltering
-
                 VStack(alignment: .leading, spacing: 0) {
                     bulkListsStandaloneSection()
                     customRangesStandaloneSection()
@@ -96,8 +94,6 @@ struct RoutingView: View {
                     .padding(.horizontal, 16)
                     .padding(.vertical, 4)
                 }
-                .opacity(filteringOff ? 0.7 : 1.0)
-                .animation(.easeInOut(duration: 0.2), value: filteringOff)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         }
@@ -131,6 +127,11 @@ struct RoutingView: View {
             set: { newValue in
                 if newValue && !hasAnyDestinations { return }
                 appState.settings.enforceDestinationFiltering = newValue
+                if !newValue {
+                    appState.settings.destinationBulkListsEnabled = false
+                    appState.settings.destinationCustomRangesEnabled = false
+                    appState.settings.destinationDomainNamesEnabled = false
+                }
             }
         )
     }
@@ -571,6 +572,7 @@ private struct DestinationCidrBulkGroupRow: View {
     @State private var editingTitle = false
     @State private var titleDraft = ""
     @State private var confirmDelete = false
+    @State private var copiedPrefixes = false
 
     private var storedTitle: String {
         storedGroup()?.title ?? "Bulk list"
@@ -695,6 +697,23 @@ private struct DestinationCidrBulkGroupRow: View {
             .buttonStyle(.borderless)
             .instantTooltip("View prefixes")
             .disabled(controlsDisabled || storedGroup() == nil)
+
+            Button {
+                if let cidrs = storedGroup()?.cidrs {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(cidrs.joined(separator: "\n"), forType: .string)
+                    copiedPrefixes = true
+                    Task {
+                        try? await Task.sleep(for: .seconds(1.5))
+                        copiedPrefixes = false
+                    }
+                }
+            } label: {
+                Image(systemName: copiedPrefixes ? "checkmark" : "doc.on.doc")
+            }
+            .buttonStyle(.borderless)
+            .instantTooltip(copiedPrefixes ? "Copied!" : "Copy prefix list")
+            .disabled(storedGroup() == nil)
 
             Button { confirmDelete = true } label: {
                 Image(systemName: "xmark")
@@ -822,6 +841,7 @@ private struct DestinationDomainRuleRow: View {
     let ruleID: UUID
     var controlsDisabled: Bool
     @State private var confirmDelete = false
+    @State private var copiedIPs = false
     let onBrowse: () -> Void
 
     @EnvironmentObject private var appState: AppState
@@ -884,6 +904,23 @@ private struct DestinationDomainRuleRow: View {
             }
             .buttonStyle(.borderless)
             .instantTooltip("View resolved IPs")
+            .disabled(rule()?.resolvedCidrs.isEmpty ?? true)
+
+            Button {
+                if let cidrs = rule()?.resolvedCidrs, !cidrs.isEmpty {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(cidrs.joined(separator: "\n"), forType: .string)
+                    copiedIPs = true
+                    Task {
+                        try? await Task.sleep(for: .seconds(1.5))
+                        copiedIPs = false
+                    }
+                }
+            } label: {
+                Image(systemName: copiedIPs ? "checkmark" : "doc.on.doc")
+            }
+            .buttonStyle(.borderless)
+            .instantTooltip(copiedIPs ? "Copied!" : "Copy IP list")
             .disabled(rule()?.resolvedCidrs.isEmpty ?? true)
 
             Button { confirmDelete = true } label: {
