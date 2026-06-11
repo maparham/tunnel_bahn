@@ -8,23 +8,31 @@ public struct DestinationRoutingFilePayload: Codable, Equatable {
     public var schemaVersion: Int
     public var enforceDestinationFiltering: Bool
     public var ranges: [String]
+    /// Domain-rule names (e.g. `x.com`), lowercased. The transparent proxy matches these against
+    /// each TCP flow's TLS SNI to route by hostname — solving the CDN/anycast case where the
+    /// browser connects to an IP the host resolver never returned. Empty = no SNI routing (the
+    /// proxy keeps its IP-only behavior). Suffix-matched, so `x.com` also covers `api.x.com`.
+    public var domainNames: [String]
 
-    public init(schemaVersion: Int = 1, enforceDestinationFiltering: Bool, ranges: [String]) {
+    public init(schemaVersion: Int = 1, enforceDestinationFiltering: Bool, ranges: [String], domainNames: [String] = []) {
         self.schemaVersion = schemaVersion
         self.enforceDestinationFiltering = enforceDestinationFiltering
         self.ranges = ranges
+        self.domainNames = domainNames
     }
 
     enum CodingKeys: String, CodingKey {
         case schemaVersion
         case enforceDestinationFiltering
         case ranges
+        case domainNames
     }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         enforceDestinationFiltering = try c.decodeIfPresent(Bool.self, forKey: .enforceDestinationFiltering) ?? false
         ranges = try c.decodeIfPresent([String].self, forKey: .ranges) ?? []
+        domainNames = try c.decodeIfPresent([String].self, forKey: .domainNames) ?? []
         schemaVersion = try c.decodeIfPresent(Int.self, forKey: .schemaVersion) ?? 1
     }
 }
@@ -273,4 +281,31 @@ public enum IPCIDRMatcher {
         return (lhs & hi) == (rhs & hi)
     }
 
+}
+
+public extension IPCIDRMatcher {
+    /// Private / loopback / link-local ranges (RFC-1918, RFC-4193 ULA, etc.) that the WireGuard peer
+    /// has no route back to. A flow to one of these must exit DIRECTLY, never through the tunnel —
+    /// otherwise it black-holes. The system DNS resolver is frequently such an address (e.g. a local
+    /// resolver installed by another VPN like Cloudflare WARP), which is why tunneling it kills every
+    /// lookup and, with it, nearly all browsing.
+    ///
+    /// NOTE: if DNS is ever redirected to the tunnel resolver (e.g. 10.2.0.1, itself inside 10/8),
+    /// that rewrite must happen BEFORE this check so the redirected target isn't bounced to direct.
+    static let localBypassRanges: [PreparedRange] = prepare([
+        "10.0.0.0/8",
+        "172.16.0.0/12",
+        "192.168.0.0/16",
+        "169.254.0.0/16",   // IPv4 link-local
+        "127.0.0.0/8",      // loopback
+        "::1/128",          // IPv6 loopback
+        "fc00::/7",         // IPv6 unique-local
+        "fe80::/10",        // IPv6 link-local
+    ])
+
+    /// True when `host` is an IPv4/IPv6 literal that falls in a private/local range (see
+    /// `localBypassRanges`). Non-literals (hostnames) return false, so the caller tunnels by default.
+    static func isLocalLiteral(_ host: String) -> Bool {
+        literalMatches(host, ranges: localBypassRanges)
+    }
 }
