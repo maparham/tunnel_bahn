@@ -7,12 +7,14 @@ struct ContentView: View {
     enum Tab: String, CaseIterable {
         case profiles = "Profiles"
         case status = "Monitoring"
+        case logs = "Logs"
         case settings = "Settings"
 
         var icon: String {
             switch self {
             case .profiles: "doc.badge.plus"
             case .status: "network"
+            case .logs: "doc.text.magnifyingglass"
             case .settings: "gearshape"
             }
         }
@@ -25,6 +27,16 @@ struct ContentView: View {
                     .tag(tab)
             }
             .listStyle(.sidebar)
+            #if DEBUG
+            // Dev-only build stamp: helps confirm the running app matches the
+            // current source. Hidden in release builds shipped to end users.
+            .safeAreaInset(edge: .bottom) {
+                BuildStampView()
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            #endif
         } detail: {
             switch selectedTab {
             case .profiles:
@@ -36,6 +48,7 @@ struct ContentView: View {
                     destinationRuleStore: appState.destinationRuleStore
                 )
             case .status: StatusView()
+            case .logs: LogsView(store: appState.logCaptureStore)
             case .settings: SettingsView()
             }
         }

@@ -1,0 +1,24 @@
+[package]
+name = "tunnelbahn_relay"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["staticlib"]
+path = "src/lib.rs"
+
+[dependencies]
+smoltcp = { version = "0.12", default-features = false, features = [
+    "std",
+    "medium-ip",
+    "proto-ipv4",
+    "proto-ipv6",
+    "socket-tcp",
+    "socket-tcp-cubic",
+    "socket-udp",
+] }
+
+[profile.release]
+opt-level = 2
+strip = false
+lto = false

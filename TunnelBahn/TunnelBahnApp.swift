@@ -15,7 +15,7 @@ private struct MenuBarRefreshInputs: Equatable {
     let profiles: [WireGuardProfile]
     let selectedProfileID: UUID?
     let appRules: [AppRule]
-    let routingMode: AppSettings.RoutingMode
+    let routingMode: RoutingMode
     let destinationFilterMenuSummary: String?
 
     init(appState: AppState) {
@@ -53,18 +53,35 @@ private struct MenuBarRefreshInputs: Equatable {
 
 @main
 struct TunnelBahnApp: App {
-    private static let osLog = Logger(subsystem: "com.tunnelbahn.mac", category: "App")
+    private static let osLog = AppLog(subsystem: "com.tunnelbahn.mac", category: "App")
 
     @StateObject private var appState = AppState()
     @StateObject private var menuBarController = MenuBarController()
+    @StateObject private var sysExtManager = SystemExtensionManager()
     @NSApplicationDelegateAdaptor(AppLifecycleDelegate.self) private var appDelegate
     @State private var autoReconnectTask: Task<Void, Never>?
     @State private var missingKeyProfileNames: [String] = []
+    /// Last profile the tunnel was actually connected with. `stats.connectedProfileID` is already
+    /// cleared by the time the `.disconnected` state change is observed, so auto-reconnect must
+    /// capture it here while it's still set — otherwise a Wi-Fi blip reconnects whatever profile
+    /// happens to be *selected* (possibly never connected) with its routing rules.
+    @State private var lastConnectedProfileID: UUID?
 
     var body: some Scene {
         WindowGroup("TunnelBahn") {
             ContentView()
                 .environmentObject(appState)
+                .alert(
+                    "Network Extensions Need Approval",
+                    isPresented: $sysExtManager.needsUserApproval
+                ) {
+                    Button("Open System Settings") {
+                        NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.LoginItems-Settings.extension")!)
+                    }
+                    Button("Later") {}
+                } message: {
+                    Text("TunnelBahn's network extensions need your approval before the VPN can connect.\n\nOpen System Settings → General → Login Items & Extensions → Network Extensions and enable both TunnelBahn extensions.")
+                }
                 .alert(
                     "Profiles Need Re-import",
                     isPresented: Binding(
@@ -94,13 +111,20 @@ struct TunnelBahnApp: App {
                 }
                 .task {
                     traceLog("app startup task started")
+                    sysExtManager.installExtensions()
                     appDelegate.vpnManager = appState.vpnManager
-                    appDelegate.appState = appState
                     // Wire window delegate now that the SwiftUI window definitely exists.
                     if let window = NSApp.windows.first {
                         window.delegate = appDelegate
                     }
                     await appState.vpnManager.load()
+                    appDelegate.appState = appState
+                    // Drain any tunnelbahn:// URL that arrived during cold launch before
+                    // vpnManager.load() completed.
+                    if let pendingURL = AppLifecycleDelegate.pendingTestURL {
+                        AppLifecycleDelegate.pendingTestURL = nil
+                        appDelegate.handleTestURL(pendingURL)
+                    }
                     appState.profileStore.runKeychainIntegrityCheck()
                     missingKeyProfileNames = appState.profileStore.profilesWithMissingKeys.map(\.name)
                     appState.syncDestinationRoutingFileWithPreferences()
@@ -132,6 +156,9 @@ struct TunnelBahnApp: App {
         // Scene-level observers keep firing even when the window is closed.
         .onChange(of: appState.vpnManager.stats.state) { _, newValue in
             traceLog("vpn state changed -> \(newValue.rawValue)")
+            if let connectedID = appState.vpnManager.stats.connectedProfileID {
+                lastConnectedProfileID = connectedID
+            }
             if newValue != .disconnected {
                 autoReconnectTask?.cancel()
                 autoReconnectTask = nil
@@ -141,6 +168,10 @@ struct TunnelBahnApp: App {
                appState.vpnManager.shouldAutoReconnect
             {
                 autoReconnectTask?.cancel()
+                // Reconnect the profile that was connected when the tunnel dropped, not
+                // whatever is currently selected in the UI. Captured at drop-detection time
+                // so a mid-wait selection change cannot redirect the reconnect either.
+                let targetProfileID = lastConnectedProfileID
                 let task = Task { @MainActor in
                     defer { autoReconnectTask = nil }
                     try? await Task.sleep(for: .seconds(2))
@@ -157,7 +188,13 @@ struct TunnelBahnApp: App {
                         return
                     }
                     traceLog("auto reconnect attempt starting")
-                    Task { await quickConnect() }
+                    if let targetProfileID,
+                       appState.profileStore.profiles.contains(where: { $0.id == targetProfileID }) {
+                        Task { await connect(profileID: targetProfileID) }
+                    } else {
+                        // Previous profile unknown or deleted — fall back to the selected profile.
+                        Task { await quickConnect() }
+                    }
                 }
                 autoReconnectTask = task
                 traceLog("auto reconnect scheduled in 2 seconds (single-flight)")
@@ -247,7 +284,7 @@ struct TunnelBahnApp: App {
     }
 
     private func traceLog(_ message: String) {
-        Self.osLog.debug("\(message, privacy: .public)")
+        Self.osLog.debug("\(message)")
     }
 }
 
@@ -271,10 +308,12 @@ private func makeDockIcon() -> NSImage? {
 
 @MainActor
 final class AppLifecycleDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
-    private static let lifecycleLog = Logger(subsystem: "com.tunnelbahn.mac", category: "AppLifecycle")
+    private static let lifecycleLog = AppLog(subsystem: "com.tunnelbahn.mac", category: "AppLifecycle")
+    private static let testURLLog = AppLog(subsystem: "com.tunnelbahn.mac", category: "TestURL")
 
     weak var vpnManager: VPNManager?
     weak var appState: AppState?
+    static var pendingTestURL: URL?
     private var terminateReplySent = false
     private var isHandlingTermination = false
 
@@ -284,6 +323,201 @@ final class AppLifecycleDelegate: NSObject, NSApplicationDelegate, NSWindowDeleg
         NSApp.applicationIconImage = makeDockIcon()
         if let window = NSApp.windows.first {
             window.delegate = self
+        }
+        // Register for tunnelbahn:// URL opens. NSAppleEventManager fires regardless of
+        // window visibility — required for menu-bar-only mode where .onOpenURL won't fire.
+        NSAppleEventManager.shared().setEventHandler(
+            self,
+            andSelector: #selector(handleURLAppleEvent(_:withReplyEvent:)),
+            forEventClass: 0x4755524C, // 'GURL' kInternetEventClass
+            andEventID: 0x4755524C    // 'GURL' kAEGetURL
+        )
+    }
+
+    // MARK: - tunnelbahn:// URL scheme
+    // Format: tunnelbahn://test?routingMode=app_tunnel&enforceDestinationFiltering=true&connect=Proton
+
+    @objc private func handleURLAppleEvent(_ event: NSAppleEventDescriptor, withReplyEvent _: NSAppleEventDescriptor) {
+        guard let urlString = event.paramDescriptor(forKeyword: 0x2D2D2D2D)?.stringValue, // keyDirectObject '----'
+              let url = URL(string: urlString) else { return }
+        handleTestURL(url)
+    }
+
+    func handleTestURL(_ url: URL) {
+        guard url.scheme == "tunnelbahn", url.host == "test" else { return }
+        guard let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
+              let queryItems = components.queryItems else { return }
+
+        func param(_ name: String) -> String? { queryItems.first(where: { $0.name == name })?.value }
+        func flag(_ name: String) -> Bool { param(name).map { $0 == "true" || $0 == "1" } ?? false }
+
+        let routingMode: RoutingMode? = param("routingMode").flatMap { RoutingMode(rawValue: $0) }
+        let enforceFilter: Bool? = param("enforceDestinationFiltering").map { $0 == "true" || $0 == "1" }
+        let profileName: String? = param("connect")
+        let shouldDisconnect = param("disconnect") != nil
+
+        Self.testURLLog.notice(
+            "[APPSPLIT_TEST_URL] routingMode=\(routingMode?.rawValue ?? "nil") enforceFilter=\(enforceFilter.map(String.init) ?? "nil") connect=\(profileName ?? "nil") disconnect=\(shouldDisconnect)"
+        )
+
+        guard let appState else {
+            Self.testURLLog.notice("[APPSPLIT_TEST_URL] appState not ready — queuing URL until load completes")
+            AppLifecycleDelegate.pendingTestURL = url
+            return
+        }
+
+        // ── setDestinationCIDRs=1.1.1.1/32,... ────────────────────────────────
+        if let rawCidrs = param("setDestinationCIDRs") {
+            let cidrs = rawCidrs.split(separator: ",").map(String.init)
+            let rules = cidrs.map { DestinationCidrRule(cidr: $0.trimmingCharacters(in: .whitespaces), isEnabled: true) }
+            appState.destinationRuleStore.replaceAll(
+                customRules: rules,
+                bulkGroups: appState.destinationRuleStore.bulkGroups,
+                domainRules: appState.destinationRuleStore.domainRules
+            )
+            Self.testURLLog.notice("[APPSPLIT_TEST_URL] set \(rules.count) destination CIDRs")
+        }
+
+        // ── clearDestinationCIDRs=1 ────────────────────────────────────────────
+        if flag("clearDestinationCIDRs") {
+            appState.destinationRuleStore.replaceAll(
+                customRules: [],
+                bulkGroups: appState.destinationRuleStore.bulkGroups,
+                domainRules: appState.destinationRuleStore.domainRules
+            )
+            Self.testURLLog.notice("[APPSPLIT_TEST_URL] cleared destination CIDRs")
+        }
+
+        // ── setAppRules=com.apple.Terminal,... ────────────────────────────────
+        if let rawBundleIDs = param("setAppRules") {
+            let bundleIDs = rawBundleIDs.split(separator: ",").map(String.init)
+            let rules = bundleIDs.map { bundleID -> AppRule in
+                let trimmed = bundleID.trimmingCharacters(in: .whitespaces)
+                return AppRule(
+                    displayName: trimmed,
+                    bundleIdentifier: trimmed,
+                    appPath: "",
+                    action: .routeVPN
+                )
+            }
+            appState.appRuleStore.replaceAll(rules)
+            Self.testURLLog.notice("[APPSPLIT_TEST_URL] set \(rules.count) app rules")
+        }
+
+        // ── clearAppRules=1 ───────────────────────────────────────────────────
+        if flag("clearAppRules") {
+            appState.appRuleStore.replaceAll([])
+            Self.testURLLog.notice("[APPSPLIT_TEST_URL] cleared app rules")
+        }
+
+        // ── saveSnapshot=<name> ───────────────────────────────────────────────
+        if let snapName = param("saveSnapshot") {
+            let snapshot: [String: Any] = [
+                "routingMode": appState.settings.routingMode.rawValue,
+                "enforceDestinationFiltering": appState.settings.enforceDestinationFiltering
+            ]
+            if let data = try? JSONSerialization.data(withJSONObject: snapshot) {
+                let path = "/tmp/tunnelbahn-snapshot-\(snapName).json"
+                try? data.write(to: URL(fileURLWithPath: path))
+                Self.testURLLog.notice("[APPSPLIT_TEST_URL] saved snapshot '\(snapName)' to \(path)")
+            }
+        }
+
+        // ── restoreSnapshot=<name> ────────────────────────────────────────────
+        if let snapName = param("restoreSnapshot") {
+            let path = "/tmp/tunnelbahn-snapshot-\(snapName).json"
+            if let data = try? Data(contentsOf: URL(fileURLWithPath: path)),
+               let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                if let rawMode = obj["routingMode"] as? String,
+                   let mode = RoutingMode(rawValue: rawMode) {
+                    appState.settings.routingMode = mode
+                }
+                if let enforce = obj["enforceDestinationFiltering"] as? Bool {
+                    appState.settings.enforceDestinationFiltering = enforce
+                }
+                Self.testURLLog.notice("[APPSPLIT_TEST_URL] restored snapshot '\(snapName)'")
+            } else {
+                Self.testURLLog.error("[APPSPLIT_TEST_URL] snapshot '\(snapName)' not found at \(path)")
+            }
+        }
+
+        // ── dump=stats ────────────────────────────────────────────────────────
+        if param("dump") == "stats" {
+            let state = appState.vpnManager.stats
+            let obj: [String: Any] = [
+                "vpnState": state.state.rawValue,
+                "routingMode": appState.settings.routingMode.rawValue,
+                "enforceDestinationFiltering": appState.settings.enforceDestinationFiltering,
+                "perAppSplitTunnelActive": state.perAppSplitTunnelActive,
+                "connectedProfileID": state.connectedProfileID?.uuidString ?? "",
+                "publicIP": state.publicIP ?? "",
+                "appRuleCount": appState.appRuleStore.rules.count,
+                "destinationCidrCount": appState.destinationRuleStore.customRules.count,
+                "destinationBulkListsEnabled": appState.settings.destinationBulkListsEnabled,
+                "destinationCustomRangesEnabled": appState.settings.destinationCustomRangesEnabled
+            ]
+            if let data = try? JSONSerialization.data(withJSONObject: obj, options: .prettyPrinted) {
+                let path = "/tmp/tunnelbahn-state.json"
+                try? data.write(to: URL(fileURLWithPath: path))
+                Self.testURLLog.notice("[APPSPLIT_TEST_URL] wrote stats to \(path)")
+            }
+        }
+
+        // ── probe=<url> ───────────────────────────────────────────────────────
+        if let probeURLString = param("probe"),
+           let probeURL = URL(string: probeURLString) {
+            let outputPath = param("probeOutput") ?? "/tmp/tunnelbahn-probe.json"
+            Task {
+                let start = Date()
+                var result: [String: Any] = ["url": probeURLString, "ts": ISO8601DateFormatter().string(from: start)]
+                Self.testURLLog.notice("[APPSPLIT_PROBE] probing \(probeURLString)")
+                do {
+                    let (data, response) = try await URLSession.shared.data(from: probeURL)
+                    let ms = Int(Date().timeIntervalSince(start) * 1000)
+                    let body = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                    let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+                    result["exitIP"] = body
+                    result["statusCode"] = status
+                    result["durationMs"] = ms
+                    Self.testURLLog.notice("[APPSPLIT_PROBE] result exitIP=\(body) status=\(status) ms=\(ms)")
+                } catch {
+                    result["error"] = error.localizedDescription
+                    Self.testURLLog.error("[APPSPLIT_PROBE] error: \(error.localizedDescription)")
+                }
+                if let data = try? JSONSerialization.data(withJSONObject: result, options: .prettyPrinted) {
+                    try? data.write(to: URL(fileURLWithPath: outputPath))
+                }
+            }
+        }
+
+        // ── quit=1 ────────────────────────────────────────────────────────────
+        if flag("quit") {
+            Self.testURLLog.notice("[APPSPLIT_TEST_URL] quit requested")
+            NSApp.terminate(nil)
+            return
+        }
+
+        // ── disconnect ────────────────────────────────────────────────────────
+        if shouldDisconnect && profileName == nil {
+            appState.vpnManager.disconnect()
+            return
+        }
+
+        // ── connect (with optional routingMode / enforceDestinationFiltering) ─
+        guard let profileName else { return }
+
+        guard let profile = appState.profileStore.profiles.first(where: {
+            $0.name.caseInsensitiveCompare(profileName) == .orderedSame
+        }) else {
+            Self.testURLLog.error("[APPSPLIT_TEST_URL] profile '\(profileName)' not found")
+            return
+        }
+
+        let mode = routingMode ?? appState.settings.routingMode
+        let enforce = enforceFilter ?? appState.settings.enforceDestinationFiltering
+
+        Task {
+            await appState.connectProfileForTest(profile, routingMode: mode, enforceDestinationFiltering: enforce)
         }
     }
 

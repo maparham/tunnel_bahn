@@ -15,18 +15,21 @@
 	<key>CFBundleName</key>
 	<string>TunnelBahn Transparent Proxy</string>
 	<key>CFBundlePackageType</key>
-	<string>XPC!</string>
+	<string>SYSX</string>
 	<key>CFBundleShortVersionString</key>
-	<string>1.0</string>
+	<string>0.1.0</string>
 	<key>CFBundleVersion</key>
-	<string>1</string>
-	<key>NSExtension</key>
+	<string>10</string>
+	<key>NetworkExtension</key>
 	<dict>
-		<key>NSExtensionPointIdentifier</key>
-		<string>com.apple.networkextension.app-proxy</string>
-		<key>NSExtensionPrincipalClass</key>
-		<string>$(PRODUCT_MODULE_NAME).TransparentProxyProvider</string>
+		<key>NEProviderClasses</key>
+		<dict>
+			<key>com.apple.networkextension.app-proxy</key>
+			<string>$(PRODUCT_MODULE_NAME).TransparentProxyProvider</string>
+		</dict>
 	</dict>
+	<key>NSSystemExtensionUsageDescription</key>
+	<string>TunnelBahn uses this extension to monitor per-app network traffic for split-tunnel routing.</string>
 	<key>TunnelBahnKeychainAccessGroup</key>
 	<string>$(AppIdentifierPrefix)com.tunnelbahn.mac</string>
 </dict>

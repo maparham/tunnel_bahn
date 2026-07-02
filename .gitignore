@@ -6,5 +6,17 @@ build/
 DerivedData/
 BoringTunBridge/target/
 BoringTunBridge/out/
+BoringTunBridge/*.o
+BoringTunBridge/*.d
+BoringTunBridge/__.SYMDEF
+BoringTunRelay/target/
 Frameworks/*.a
 tools/captured/
+
+# Generated git build stamp (regenerated every build by tools/gen-buildinfo.sh)
+Shared/Generated/
+
+# Claude Code local session state
+.claude/settings.local.json
+.claude/scheduled_tasks.lock
+*.rcgu.o

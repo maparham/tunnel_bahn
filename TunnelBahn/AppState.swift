@@ -12,6 +12,7 @@ final class AppState: ObservableObject {
     var resourceMonitor: ResourceMonitor
     var vpnManager: VPNManager
     var domainResolutionCoordinator: DomainResolutionCoordinator
+    var logCaptureStore: LogCaptureStore
     private var cancellables: Set<AnyCancellable> = []
     private var lastKnownProfileID: UUID?
     /// The profile ID whose snapshot is currently installed in the live stores.
@@ -21,7 +22,13 @@ final class AppState: ObservableObject {
     /// new profile before `profileStore.select(id:)` propagates.
     private var loadedProfileID: UUID?
 
-    @Published var selectedTab: Int = 0
+    /// Last destination CIDR set pushed live to the running proxy (per-app split sessions).
+    /// Tracked so we only message the extension when the merged set actually grows, and reset
+    /// to `nil` on disconnect so the next session re-baselines. See
+    /// `pushDestinationRangesToProxyIfConnected()`.
+    private var lastSyncedConnectedDestinationRanges: [String]?
+
+    private static let log = AppLog(subsystem: "com.tunnelbahn.mac", category: "DestRouting")
 
     init() {
         let settings = AppSettings()
@@ -41,6 +48,7 @@ final class AppState: ObservableObject {
         self.resourceMonitor = resourceMonitor
         self.vpnManager = VPNManager(settings: settings, resourceMonitor: resourceMonitor, profileStore: profileStore)
         self.domainResolutionCoordinator = DomainResolutionCoordinator(ruleStore: destinationRuleStore)
+        self.logCaptureStore = LogCaptureStore()
         bindChildStores()
         domainResolutionCoordinator.start()
 
@@ -90,6 +98,8 @@ final class AppState: ObservableObject {
             .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in
                 self?.domainResolutionCoordinator.isConnected = false
+                // Drop the live-push baseline so the next session re-pushes from scratch.
+                self?.lastSyncedConnectedDestinationRanges = nil
                 // Re-apply the selected profile's snapshot now that the tunnel is idle so the
                 // destination-routing.json sync (skipped while the tunnel was active) runs
                 // against the currently-selected profile.
@@ -112,6 +122,10 @@ final class AppState: ObservableObject {
             .sink { [weak self] _ in self?.objectWillChange.send() }
             .store(in: &cancellables)
 
+        logCaptureStore.objectWillChange
+            .sink { [weak self] _ in self?.objectWillChange.send() }
+            .store(in: &cancellables)
+
         // Save current snapshot (debounced) whenever per-profile settings change.
         appRuleStore.objectWillChange
             .merge(with: destinationRuleStore.objectWillChange)
@@ -123,6 +137,10 @@ final class AppState: ObservableObject {
             .debounce(for: .milliseconds(500), scheduler: DispatchQueue.main)
             .sink { [weak self] _ in
                 self?.saveCurrentSnapshot()
+                // A domain re-resolving to a new IP mutates destinationRuleStore and lands here.
+                // While a per-app split is connected, that new IP must reach the running proxy
+                // live or flows to it bypass the tunnel (the proxy can't see the host's file).
+                self?.pushDestinationRangesToProxyIfConnected()
             }
             .store(in: &cancellables)
 
@@ -255,6 +273,7 @@ final class AppState: ObservableObject {
             prepareLiveRoutingForConnect(profileID: profile.id)
             domainResolutionCoordinator.cancelInFlight()
             await domainResolutionCoordinator.resolveAllAndWait()
+            logDomainResolutionForConnect()
             await vpnManager.connect(
                 profile: profile,
                 rules: appRuleStore.rules,
@@ -262,7 +281,13 @@ final class AppState: ObservableObject {
                     customRangesEnabled: settings.destinationCustomRangesEnabled,
                     bulkListsEnabled: settings.destinationBulkListsEnabled,
                     domainNamesEnabled: settings.destinationDomainNamesEnabled
-                )
+                ),
+                // App-tunnel only: domain rules also route by name (TLS SNI) in the proxy, catching
+                // CDN/anycast IPs the host resolver never returned. Resolved IPs still ship in the
+                // CIDR set above (covers UDP/QUIC + non-SNI). Full-tunnel passes none — unchanged.
+                destinationDomainNames: settings.routingMode == .appTunnel
+                    ? destinationRuleStore.enabledDomainNames(domainNamesEnabled: settings.destinationDomainNamesEnabled)
+                    : []
             )
         }
     }
@@ -270,6 +295,73 @@ final class AppState: ObservableObject {
     func connectSelectedProfile() async {
         guard let profile = profileStore.selectedProfile else { return }
         await connectProfile(profile)
+    }
+
+    /// Like `connectProfile` but overrides `routingMode` and `enforceDestinationFiltering`
+    /// after loading the profile snapshot. Used by the `tunnelbahn://test` URL scheme so
+    /// tests can pin specific settings without permanently modifying stored snapshots.
+    func connectProfileForTest(
+        _ profile: WireGuardProfile,
+        routingMode: RoutingMode,
+        enforceDestinationFiltering: Bool
+    ) async {
+        await vpnManager.runUserConnectSequence {
+            saveCurrentSnapshot()
+            await vpnManager.disconnectAndWait()
+            profileStore.select(id: profile.id)
+            prepareLiveRoutingForConnect(profileID: profile.id)
+            settings.routingMode = routingMode
+            settings.enforceDestinationFiltering = enforceDestinationFiltering
+            domainResolutionCoordinator.cancelInFlight()
+            await domainResolutionCoordinator.resolveAllAndWait()
+            logDomainResolutionForConnect()
+            await vpnManager.connect(
+                profile: profile,
+                rules: appRuleStore.rules,
+                destinationCidrStrings: destinationRuleStore.enabledFlattenedCidrs(
+                    customRangesEnabled: settings.destinationCustomRangesEnabled,
+                    bulkListsEnabled: settings.destinationBulkListsEnabled,
+                    domainNamesEnabled: settings.destinationDomainNamesEnabled
+                ),
+                // Mirror connectProfile: app-tunnel routes domains by SNI in the proxy.
+                destinationDomainNames: settings.routingMode == .appTunnel
+                    ? destinationRuleStore.enabledDomainNames(domainNamesEnabled: settings.destinationDomainNamesEnabled)
+                    : []
+            )
+        }
+    }
+
+    /// Diagnostic: logs each enabled domain rule's resolution status and the exact IPs the
+    /// host store holds, captured immediately before the connect payload is flattened.
+    /// Compare the per-domain `ips=` here against the `destCIDRs=` line in the
+    /// `[APPSPLIT_SCENARIO]` summary that `connect()` emits right after:
+    ///   • IP missing here too  → the DNS resolver dropped it (DomainResolver).
+    ///   • IP present here but absent from destCIDRs → the payload-building path dropped it.
+    /// Grep: `log show --predicate 'subsystem == "com.tunnelbahn.mac"' | grep APPSPLIT_DOMAIN_RESOLVE`
+    private func logDomainResolutionForConnect() {
+        guard settings.destinationDomainNamesEnabled else {
+            Self.log.notice("[APPSPLIT_DOMAIN_RESOLVE] domainNames disabled — domain rules contribute no CIDRs")
+            return
+        }
+        let enabled = destinationRuleStore.domainRules.filter(\.isEnabled)
+        guard !enabled.isEmpty else {
+            Self.log.notice("[APPSPLIT_DOMAIN_RESOLVE] no enabled domain rules")
+            return
+        }
+        for rule in enabled {
+            let statusText: String
+            switch rule.status {
+            case .pending: statusText = "pending"
+            case .resolving: statusText = "resolving"
+            case .resolved(let count): statusText = "resolved(\(count))"
+            case .failed(let message): statusText = "failed(\(message))"
+            }
+            let ips = rule.resolvedCidrs.joined(separator: ",")
+            Self.log.notice(
+                "[APPSPLIT_DOMAIN_RESOLVE] domain=\(rule.domain) status=\(statusText) "
+                + "ipCount=\(rule.resolvedCidrs.count) ips=[\(ips)]"
+            )
+        }
     }
 
     /// Deletes all profiles, app rules, destination rules, routing snapshots, and resets
@@ -326,6 +418,51 @@ final class AppState: ObservableObject {
                 domainNamesEnabled: settings.destinationDomainNamesEnabled
             )
         )
+    }
+
+    /// While a per-app split tunnel is connected for the **loaded** profile, push the merged
+    /// destination CIDR set to the running proxy whenever it grows — e.g. a routed domain
+    /// resolved to a new IP. The proxy unions these into `includedNetworkRules` live, so the
+    /// new IP starts tunneling without a reconnect.
+    ///
+    /// This is the per-app-split counterpart to `syncDestinationRoutingFileWithPreferences()`,
+    /// which deliberately skips while a per-app split is active (and writes a file the root
+    /// proxy can't read anyway). Here we push over the provider-message channel, but only for
+    /// the connected profile, only when filtering is on, and only the resolved-destination set
+    /// (enforce stays pinned on the extension side) — so we can never hand a different profile's
+    /// rules to the extension or flip it to full-funnel.
+    private func pushDestinationRangesToProxyIfConnected() {
+        guard !vpnManager.isBusy else { return }
+        // Fire whenever the transparent proxy is running (`perAppStatsCollectionActive`) and
+        // destination filtering is on — that covers BOTH app-tunnel split and full-tunnel +
+        // destination-filter mode. In both, the proxy enforces the filter by intercepting flows to
+        // these CIDRs and relaying them through the tunnel (BoringTun AllowedIPs stay 0.0.0.0/0), so
+        // live-pushing newly-resolved IPs keeps them enforced without a reconnect. The earlier
+        // `perAppSplitTunnelActive` gate skipped full-tunnel mode, leaving rotated domain IPs (e.g.
+        // x.com CDN) to bypass the tunnel until the next reconnect.
+        guard isTunnelActive, vpnManager.stats.perAppStatsCollectionActive else { return }
+        guard settings.enforceDestinationFiltering else { return }
+        guard let connectedID = vpnManager.stats.connectedProfileID,
+              let loadedID = loadedProfileID,
+              connectedID == loadedID else { return }
+
+        let ranges = destinationRuleStore.enabledFlattenedCidrs(
+            customRangesEnabled: settings.destinationCustomRangesEnabled,
+            bulkListsEnabled: settings.destinationBulkListsEnabled,
+            domainNamesEnabled: settings.destinationDomainNamesEnabled
+        )
+        guard ranges != lastSyncedConnectedDestinationRanges else { return }
+        lastSyncedConnectedDestinationRanges = ranges
+
+        Task { [weak self] in
+            guard let self else { return }
+            let ok = await self.vpnManager.pushDestinationRangesToRunningProxy(enforce: true, ranges: ranges)
+            if !ok {
+                // Delivery failed (e.g. proxy not reachable yet); clear the baseline so the
+                // next resolution change retries rather than suppressing as "unchanged".
+                self.lastSyncedConnectedDestinationRanges = nil
+            }
+        }
     }
 
     /// Whether the VPN is in any active phase (including transitions). Used by routing

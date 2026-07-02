@@ -8,23 +8,31 @@ public struct DestinationRoutingFilePayload: Codable, Equatable {
     public var schemaVersion: Int
     public var enforceDestinationFiltering: Bool
     public var ranges: [String]
+    /// Domain-rule names (e.g. `x.com`), lowercased. The transparent proxy matches these against
+    /// each TCP flow's TLS SNI to route by hostname — solving the CDN/anycast case where the
+    /// browser connects to an IP the host resolver never returned. Empty = no SNI routing (the
+    /// proxy keeps its IP-only behavior). Suffix-matched, so `x.com` also covers `api.x.com`.
+    public var domainNames: [String]
 
-    public init(schemaVersion: Int = 1, enforceDestinationFiltering: Bool, ranges: [String]) {
+    public init(schemaVersion: Int = 1, enforceDestinationFiltering: Bool, ranges: [String], domainNames: [String] = []) {
         self.schemaVersion = schemaVersion
         self.enforceDestinationFiltering = enforceDestinationFiltering
         self.ranges = ranges
+        self.domainNames = domainNames
     }
 
     enum CodingKeys: String, CodingKey {
         case schemaVersion
         case enforceDestinationFiltering
         case ranges
+        case domainNames
     }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         enforceDestinationFiltering = try c.decodeIfPresent(Bool.self, forKey: .enforceDestinationFiltering) ?? false
         ranges = try c.decodeIfPresent([String].self, forKey: .ranges) ?? []
+        domainNames = try c.decodeIfPresent([String].self, forKey: .domainNames) ?? []
         schemaVersion = try c.decodeIfPresent(Int.self, forKey: .schemaVersion) ?? 1
     }
 }
@@ -90,6 +98,9 @@ public enum IPCIDRMatcher {
         var v6 = in6_addr()
         if inet_pton(AF_INET6, trimmed, &v6) == 1 {
             guard let oc = ipv6Octets(from: &v6) else { return false }
+            if let mappedV4 = ipv4FromMapped(oc) {
+                return ranges.contains { $0.containsLiteralIPv4(mappedV4) }
+            }
             return ranges.contains { $0.containsLiteralIPv6(oc) }
         }
         return false
@@ -105,6 +116,16 @@ public enum IPCIDRMatcher {
     private static func stripZone(_ ip: String) -> String {
         guard let pct = ip.firstIndex(of: "%") else { return ip }
         return String(ip[..<pct])
+    }
+
+    /// IPv4-mapped IPv6 (`::ffff:a.b.c.d`, RFC 4291 §2.5.5.2). AF_INET6 sockets (Java, Go, …)
+    /// reach IPv4 destinations through this form, so it must match IPv4 ranges — including the
+    /// private/LAN bypass, or a mapped LAN destination gets tunneled and black-holes.
+    private static func ipv4FromMapped(_ oc: IPv6Octets) -> UInt32? {
+        let b = oc.b
+        guard b.0 == 0, b.1 == 0, b.2 == 0, b.3 == 0, b.4 == 0, b.5 == 0,
+              b.6 == 0, b.7 == 0, b.8 == 0, b.9 == 0, b.10 == 0xFF, b.11 == 0xFF else { return nil }
+        return (UInt32(b.12) << 24) | (UInt32(b.13) << 16) | (UInt32(b.14) << 8) | UInt32(b.15)
     }
 
     private static func parseCIDR(_ raw: String) -> PreparedRange? {
@@ -273,4 +294,36 @@ public enum IPCIDRMatcher {
         return (lhs & hi) == (rhs & hi)
     }
 
+}
+
+public extension IPCIDRMatcher {
+    /// Private / loopback / link-local ranges (RFC-1918, RFC-4193 ULA, etc.) that the WireGuard peer
+    /// has no route back to. A flow to one of these must exit DIRECTLY, never through the tunnel —
+    /// otherwise it black-holes. The system DNS resolver is frequently such an address (e.g. a local
+    /// resolver installed by another VPN like Cloudflare WARP), which is why tunneling it kills every
+    /// lookup and, with it, nearly all browsing.
+    ///
+    /// NOTE: if DNS is ever redirected to the tunnel resolver (e.g. 10.2.0.1, itself inside 10/8),
+    /// that rewrite must happen BEFORE this check so the redirected target isn't bounced to direct.
+    static let localBypassRanges: [PreparedRange] = prepare([
+        "0.0.0.0/8",        // "this host/network" — 0.0.0.0 is a loopback-equivalent dest on macOS
+        "10.0.0.0/8",
+        "172.16.0.0/12",
+        "192.168.0.0/16",
+        "100.64.0.0/10",    // RFC-6598 CGNAT / Tailscale — not routable through the WG peer
+        "169.254.0.0/16",   // IPv4 link-local
+        "127.0.0.0/8",      // loopback
+        "224.0.0.0/4",      // IPv4 multicast (mDNS/SSDP) — never a tunnelable unicast dest
+        "255.255.255.255/32", // limited broadcast
+        "::1/128",          // IPv6 loopback
+        "fc00::/7",         // IPv6 unique-local
+        "fe80::/10",        // IPv6 link-local
+        "ff00::/8",         // IPv6 multicast
+    ])
+
+    /// True when `host` is an IPv4/IPv6 literal that falls in a private/local range (see
+    /// `localBypassRanges`). Non-literals (hostnames) return false, so the caller tunnels by default.
+    static func isLocalLiteral(_ host: String) -> Bool {
+        literalMatches(host, ranges: localBypassRanges)
+    }
 }

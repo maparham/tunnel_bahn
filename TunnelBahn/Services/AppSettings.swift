@@ -2,11 +2,6 @@ import Foundation
 
 @MainActor
 final class AppSettings: ObservableObject {
-    enum RoutingMode: String, CaseIterable, Codable {
-        case fullTunnel = "full_tunnel"
-        case appTunnel = "app_tunnel"
-    }
-
     @Published var autoReconnect: Bool {
         didSet { save() }
     }

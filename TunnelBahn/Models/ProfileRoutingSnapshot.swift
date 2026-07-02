@@ -1,7 +1,7 @@
 import Foundation
 
 struct ProfileRoutingSnapshot: Codable {
-    var routingMode: AppSettings.RoutingMode
+    var routingMode: RoutingMode
     var enforceDestinationFiltering: Bool
     var bulkListsEnabled: Bool
     var customRangesEnabled: Bool
@@ -33,7 +33,7 @@ struct ProfileRoutingSnapshot: Codable {
     }
 
     init(
-        routingMode: AppSettings.RoutingMode,
+        routingMode: RoutingMode,
         enforceDestinationFiltering: Bool,
         bulkListsEnabled: Bool,
         customRangesEnabled: Bool,
@@ -56,7 +56,7 @@ struct ProfileRoutingSnapshot: Codable {
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
-        routingMode = try c.decode(AppSettings.RoutingMode.self, forKey: .routingMode)
+        routingMode = try c.decode(RoutingMode.self, forKey: .routingMode)
         enforceDestinationFiltering = try c.decode(Bool.self, forKey: .enforceDestinationFiltering)
         bulkListsEnabled = try c.decodeIfPresent(Bool.self, forKey: .bulkListsEnabled) ?? true
         customRangesEnabled = try c.decodeIfPresent(Bool.self, forKey: .customRangesEnabled) ?? true

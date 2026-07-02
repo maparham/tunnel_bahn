@@ -14,8 +14,8 @@ import os.log
 ///   which is the only way to count payload bytes.
 /// - For flows from apps NOT in the app-tunnel routing list we return `false` immediately, so
 ///   the OS handles them and we incur no overhead.
-final class TransparentProxyProvider: NETransparentProxyProvider {
-    private static let log = Logger(
+public final class TransparentProxyProvider: NETransparentProxyProvider {
+    private static let log = AppLog(
         subsystem: "com.tunnelbahn.mac.transparentproxy",
         category: "Provider"
     )
@@ -23,8 +23,39 @@ final class TransparentProxyProvider: NETransparentProxyProvider {
     private let aggregator = PerAppCounterAggregator()
     private let destinationAggregator = PerDestinationCounterAggregator()
     private let flowQueue = DispatchQueue(label: "com.tunnelbahn.mac.transparentproxy.flows", qos: .userInitiated)
-    private let flushQueue = DispatchQueue(label: "com.tunnelbahn.mac.transparentproxy.flush", qos: .utility)
+    // Tagged with `flushQueueKey` so `sampleResources()` can detect when it is already running on
+    // this queue and call the sampler directly instead of dispatching `sync` onto itself (deadlock).
+    private static let flushQueueKey = DispatchSpecificKey<Void>()
+    private let flushQueue: DispatchQueue = {
+        let queue = DispatchQueue(label: "com.tunnelbahn.mac.transparentproxy.flush", qos: .utility)
+        queue.setSpecific(key: TransparentProxyProvider.flushQueueKey, value: ())
+        return queue
+    }()
+    /// Confined to `flushQueue` (created in `startFlushTimer`'s async block, cancelled in
+    /// `stopProxy`'s sync block) — it was previously an unsynchronized var touched from two queues.
     private var flushTimer: DispatchSourceTimer?
+    private let resourceSampler = ProcessResourceSampler()
+
+    /// Bumped in both startProxy and stopProxy. Work scheduled by a previous session — a pending
+    /// `startFlushTimer`, an in-flight `flushOnce`, or a `setDestinations` appMessage — compares
+    /// its captured generation and bails instead of resurrecting destination state stopProxy just
+    /// cleared (`applyDestinationPayload` unions, never replaces, so a stale writer would leak the
+    /// previous profile's CIDRs into the next session).
+    private let sessionGenerationLock = NSLock()
+    private var sessionGeneration: UInt64 = 0
+
+    private func currentSessionGeneration() -> UInt64 {
+        sessionGenerationLock.lock()
+        defer { sessionGenerationLock.unlock() }
+        return sessionGeneration
+    }
+
+    private func bumpSessionGeneration() -> UInt64 {
+        sessionGenerationLock.lock()
+        defer { sessionGenerationLock.unlock() }
+        sessionGeneration &+= 1
+        return sessionGeneration
+    }
 
     // Keep relay objects alive for the lifetime of a flow. Without this, relays are
     // deallocated immediately after `handleNewFlow` returns, and no bytes are ever relayed/counted.
@@ -39,14 +70,51 @@ final class TransparentProxyProvider: NETransparentProxyProvider {
     private var routeAllIdentifiedFlows = false
 
     private let destinationLock = NSLock()
-    /// When false, flows that pass signing-ID eligibility are relayed for any remote.
-    /// When true, relay only IPv4/v6 literals whose address matches at least one CIDR snapshot.
+    /// When true, `includedNetworkRules` are narrowed to the destination CIDRs so only flows
+    /// to those ranges are delivered to `handleNewFlow`. Relays use `RelayCreateOutboundConnection`
+    /// bound to `tunnelInterfaceName` so outbound connections exit via the WireGuard utun interface.
     private var enforceDestinationFiltering = false
     private var destinationRawCIDRs: [String] = []
+    /// TEMP INSTRUMENTATION (first-run domain-bypass diagnosis) — remove after diagnosis. The
+    /// extension process is reused across stop/start, so this instance counter distinguishes the
+    /// first activation (#1) from a reconnect (#2+) in a single log capture. Grep "[FIRSTRUN-DIAG]".
+    private var startProxyActivationCount = 0
+    /// Domain-rule names (lowercased) for SNI routing. When non-empty and filtering is enforced,
+    /// the proxy enters "SNI mode": it intercepts ALL routed-app TCP, peeks each flow's TLS SNI,
+    /// and tunnels name/IP matches while sending the rest straight out en0. Empty = IP-only.
+    private var destinationDomainNames: [String] = []
+    /// Prepared form of `destinationRawCIDRs`, rebuilt only when the CIDR set changes, so the
+    /// per-flow SNI decider can IP-match without re-parsing CIDR strings on the hot path.
+    private var cachedPreparedRanges: [IPCIDRMatcher.PreparedRange] = []
+    /// The WireGuard utun interface name (e.g. "utun3"), populated from
+    /// `TransparentProxyRuntimeConfig.packetTunnelInterfaceName` on each config refresh.
+    private var tunnelInterfaceName: String?
+
+    /// Suffix match: `api.x.com` matches rule `x.com`; `notx.com` does not. `names` are lowercased.
+    private static func sniMatches(_ host: String, names: [String]) -> Bool {
+        let h = host.lowercased()
+        for name in names where !name.isEmpty {
+            if h == name || h.hasSuffix("." + name) { return true }
+        }
+        return false
+    }
 
     // Last-logged snapshot of the flushOnce summary line — used to suppress
     // repeated identical heartbeats so only real changes get logged.
     private var lastLoggedFlushSummary: (rules: Int, rolledUp: Int, destinations: Int)?
+
+    /// Latest per-app stats, JSON-encoded, served to the host over `sendProviderMessage`
+    /// (`cmd:"getStats"`). The host (user) and this extension (root) resolve the App Group
+    /// container to different directories and the sandbox forbids the root extension from
+    /// writing into the user's container, so a shared file can't carry stats to the host —
+    /// the IPC channel is the only path that crosses the uid boundary. Refreshed by `flushOnce`.
+    private let statsLock = NSLock()
+    private var latestStatsPayload: Data?
+    private static let statsEncoder: JSONEncoder = {
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        return encoder
+    }()
 
     /// Signing IDs that look like other transparent-proxy extensions whose flows have reached us.
     /// When non-empty, macOS is delivering some flows to a competing proxy before ours — and that
@@ -59,10 +127,16 @@ final class TransparentProxyProvider: NETransparentProxyProvider {
     private static let perAppRoutedSigningIDsDefaultsKey = "perAppRoutedSigningIdentifiers"
     private static let perAppRouteAllFlowsDefaultsKey = "perAppRouteAllIdentifiedFlows"
 
-    override func startProxy(options: [String: Any]?, completionHandler: @escaping (Error?) -> Void) {
+    override public func startProxy(options: [String: Any]?, completionHandler: @escaping (Error?) -> Void) {
         Self.log.notice("startProxy invoked")
+        let generation = bumpSessionGeneration()
+        // The relay client is a process-singleton; on a reconnect the proxy extension process
+        // is reused while the tunnel extension recreates its UDS listener at the same path.
+        // Without dropping the cached socket here, the next openFlow writes to a dead server-side
+        // fd, the reply never arrives, and curl hangs forever.
+        TransparentProxyRelayClient.shared.reset(reason: "startProxy")
         refreshRoutedSigningIdentifiers()
-        refreshDestinationConfig()
+        refreshDestinationConfig(generation: generation)
         // Reset the observed-competitor list on a fresh start. If the user removed the competing
         // proxy between connects, this prevents a stale warning from persisting forever.
         foreignProxyLock.lock()
@@ -71,39 +145,190 @@ final class TransparentProxyProvider: NETransparentProxyProvider {
         persistObservedForeignProxySigningIDs([])
 
         let settings = NETransparentProxyNetworkSettings(tunnelRemoteAddress: "127.0.0.1")
-        settings.includedNetworkRules = buildIncludedNetworkRules()
+        let includeRules = buildIncludedNetworkRules()
+        settings.includedNetworkRules = includeRules
+
+        // TEMP INSTRUMENTATION (first-run domain-bypass diagnosis) — remove after diagnosis.
+        // Prints, per activation, the EXACT destination CIDRs and rule shape the OS is given. If
+        // activation #1 shows x.com's IPs + a matching includeRuleCount and sniMode=false, the rules
+        // are correct on first start (points to macOS-first-activation or CDN-anycast). If #1 lacks
+        // them but #2 has them, it's a host-side ordering gap. sniMode=true means x.com is caught by
+        // domain regardless of IPs (only happens in app-tunnel mode).
+        startProxyActivationCount += 1
+        let (diagCidrs, diagEnforce, _) = currentDestinationState()
+        let sniMode = diagEnforce && !destinationDomainNames.isEmpty
+        Self.log.notice(
+            "[FIRSTRUN-DIAG] activation #\(self.startProxyActivationCount) enforce=\(diagEnforce) sniMode=\(sniMode) includeRuleCount=\(includeRules.count) destCidrCount=\(diagCidrs.count) cidrs=[\(diagCidrs.prefix(24).joined(separator: ","))]"
+        )
 
         setTunnelNetworkSettings(settings) { [weak self] error in
             guard let self else { return }
             if let error {
-                Self.log.error("setTunnelNetworkSettings failed: \(error.localizedDescription, privacy: .public)")
+                Self.log.error("setTunnelNetworkSettings failed: \(error.localizedDescription)")
                 completionHandler(error)
                 return
             }
-            self.startFlushTimer()
+            self.startFlushTimer(generation: generation)
             Self.log.notice("startProxy completed")
             completionHandler(nil)
         }
     }
 
-    override func stopProxy(with reason: NEProviderStopReason, completionHandler: @escaping () -> Void) {
-        Self.log.notice("stopProxy reason=\(reason.rawValue, privacy: .public)")
-        flushTimer?.cancel()
-        flushTimer = nil
-        flushOnce()
+    override public func stopProxy(with reason: NEProviderStopReason, completionHandler: @escaping () -> Void) {
+        Self.log.notice("stopProxy reason=\(reason.rawValue)")
+        // Bump FIRST: any flushOnce/appMessage still holding the old generation now fails its
+        // check and cannot re-populate the state cleared below. The sync hop serializes the
+        // cancel with `startFlushTimer`'s creation block, closing the start-completion race
+        // (a fast stop before setTunnelNetworkSettings completed left a live timer flushing).
+        let generation = bumpSessionGeneration()
+        flushQueue.sync {
+            flushTimer?.cancel()
+            flushTimer = nil
+        }
+        flushOnce(generation: generation)
         aggregator.clear()
         destinationAggregator.clear()
+        // The extension process is reused across stop/start, and `applyDestinationPayload` now
+        // unions (never replaces). Clear the per-session destination set here so the next
+        // session starts from its own providerConfiguration baseline instead of inheriting the
+        // previous profile's CIDRs. (Done in stopProxy, not startProxy, so an appMessage that
+        // races ahead of the next startProxy isn't wiped.)
+        destinationLock.lock()
+        destinationRawCIDRs = []
+        enforceDestinationFiltering = false
+        tunnelInterfaceName = nil
+        destinationDomainNames = []
+        cachedPreparedRanges = []
+        destinationLock.unlock()
         completionHandler()
     }
 
-    override func handleNewFlow(_ flow: NEAppProxyFlow) -> Bool {
+    /// Live destination-set updates pushed by the host app.
+    ///
+    /// Why this channel exists: the host (user uid) and these system extensions (root uid)
+    /// resolve the App Group container to *different* directories, so the host cannot hand us
+    /// an updated `destination-routing.json` — that file, read in `refreshDestinationConfig`,
+    /// only ever exists in our own (root) container. `providerConfiguration` likewise carries
+    /// only the connect-time snapshot. So when a routed domain resolves to a *new* IP
+    /// mid-session (e.g. a CDN's second A record), the host pushes the merged destination set
+    /// here and we widen `includedNetworkRules` live. Without it, flows to the newly-learned
+    /// IP are never diverted to the proxy and silently bypass the tunnel.
+    public override func handleAppMessage(_ messageData: Data) async -> Data? {
+        guard
+            let obj = try? JSONSerialization.jsonObject(with: messageData) as? [String: Any],
+            let cmd = obj["cmd"] as? String
+        else { return nil }
+
+        switch cmd {
+        case "setDestinations":
+            let incoming = (obj["ranges"] as? [String]) ?? []
+            // Captured before the state snapshot: a stop that lands after this point bumps the
+            // generation, so `applyDestinationPayload`'s under-lock check rejects the write —
+            // a message racing a stop can't re-enable filtering on a stopped provider.
+            let generation = currentSessionGeneration()
+            let snapshot = currentDestinationState()
+            // Only apply once destination filtering is already active. If `enforce` is false the
+            // proxy is either still starting (its providerConfiguration baseline hasn't run yet)
+            // or in full-funnel mode where destination ranges gate nothing. Applying now would
+            // publish a *catch-all* includedNetworkRules set (buildIncludedNetworkRules returns
+            // catch-all when !enforce) and `startProxy` would immediately re-narrow it — a double
+            // setTunnelNetworkSettings on connect that leaves macOS diverting nothing, so flows
+            // bypass the tunnel until a reconnect. The connect-time providerConfiguration already
+            // carries the current ranges; genuinely new mid-session IPs arrive here once `enforce`
+            // is true (the proxy is up) and are applied then — which is the whole point of this
+            // channel. `enforce`/`iface` stay pinned so a message can never flip either.
+            guard snapshot.enforce else {
+                return try? JSONSerialization.data(withJSONObject: ["ok": false, "reason": "filtering-inactive"])
+            }
+            applyDestinationPayload(enforce: true, rawCIDRs: incoming, ifaceName: snapshot.iface, source: "appMessage", generation: generation)
+            let ack: [String: Any] = ["ok": true, "count": currentDestinationState().cidrs.count]
+            return try? JSONSerialization.data(withJSONObject: ack)
+        case "getStats":
+            // Per-app stats can't reach the host via the shared file (uid boundary + sandbox);
+            // hand back the latest JSON-encoded snapshot cached by `flushOnce`. The lock is taken
+            // inside a synchronous helper so no `NSLock` is held across this async function's
+            // suspension points (Swift 6 rejects lock/unlock in async contexts).
+            return currentStatsPayload() ?? (try? Self.statsEncoder.encode(PerAppTransferStats.empty))
+        case "getResourceStats":
+            // Same uid-boundary reason as getStats — hand back this extension's own CPU/memory.
+            // `sampleResources()` hops onto `flushQueue` so it shares the smoothed time-delta
+            // state with the flush-timer path instead of returning a divergent reading.
+            let sample = sampleResources()
+            let payload: [String: Any] = [
+                "cpu": sample.cpuPercent,
+                "memory": sample.memoryBytes,
+            ]
+            return try? JSONSerialization.data(withJSONObject: payload)
+        default:
+            return nil
+        }
+    }
+
+    /// Synchronous (lock-taking) read of the current destination state, kept out of the async
+    /// `handleAppMessage` so no `NSLock` is acquired across a suspension point.
+    private func currentDestinationState() -> (cidrs: [String], enforce: Bool, iface: String?) {
+        destinationLock.lock()
+        defer { destinationLock.unlock() }
+        return (destinationRawCIDRs, enforceDestinationFiltering, tunnelInterfaceName)
+    }
+
+    /// Synchronous (lock-taking) read of the cached stats payload, kept out of the async
+    /// `handleAppMessage` so no `NSLock` is acquired across a suspension point.
+    private func currentStatsPayload() -> Data? {
+        statsLock.lock()
+        defer { statsLock.unlock() }
+        return latestStatsPayload
+    }
+
+    /// Order-preserving, de-duplicated union of CIDR strings (trims whitespace, drops empties).
+    private static func unionPreservingOrder(_ a: [String], _ b: [String]) -> [String] {
+        var seen = Set<String>()
+        var out: [String] = []
+        for raw in a + b {
+            let t = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !t.isEmpty, seen.insert(t).inserted else { continue }
+            out.append(t)
+        }
+        return out
+    }
+
+    override public func handleNewFlow(_ flow: NEAppProxyFlow) -> Bool {
         let signingID = flow.metaData.sourceAppSigningIdentifier.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !signingID.isEmpty else {
             return false
         }
         
         let routed = isRouted(signingID)
-        Self.log.notice("handleNewFlow: signingID=\(signingID, privacy: .public) isRouted=\(routed, privacy: .public) flowType=\(String(describing: type(of: flow)), privacy: .public)")
+        let remote = literalRemoteHostname(from: flow) ?? "unknown"
+        let flowTypeName = String(describing: type(of: flow))
+
+        destinationLock.lock()
+        // Whenever we intercept a flow we want it exiting via the WireGuard tunnel —
+        // that's the whole point of routing the app. The UDS+smoltcp relay
+        // (`startTunnelConnection` in TCPFlowRelay) is the only path that reliably
+        // reaches utun from this extension's process, since NECP refuses explicit
+        // utun binding and `setMetadata` alone doesn't redirect off en0. Destination
+        // filtering still narrows WHICH flows are intercepted via `includedNetworkRules`;
+        // it no longer gates the tunnel-vs-direct decision here.
+        let routeThroughTunnel = true
+        let ifaceName = tunnelInterfaceName
+        let cidrCount = destinationRawCIDRs.count
+        let enforce = enforceDestinationFiltering
+        let domainNames = destinationDomainNames
+        let preparedRanges = cachedPreparedRanges
+        destinationLock.unlock()
+        // SNI mode: filtering on AND domain rules present. `includedNetworkRules` is catch-all for
+        // TCP in this mode, so we peek each routed TCP flow's TLS SNI and route by name; UDP stays
+        // IP-narrowed upstream so it needs no special handling here.
+        let sniMode = enforce && !domainNames.isEmpty
+
+        // Detail line at .debug only: in SNI mode `includedNetworkRules` is catch-all TCP, so this
+        // fires for EVERY TCP connection from EVERY app on the machine (most are immediately
+        // released below). Keeping it at .notice floods the log; the routed `decision=intercept`
+        // line below carries what matters at .notice.
+        Self.log.debug(
+            "[APPSPLIT_FLOW] signingID=\(signingID) remote=\(remote) flowType=\(flowTypeName) routed=\(routed) sniMode=\(sniMode) destCIDRcount=\(cidrCount) iface=\(ifaceName ?? "nil")"
+        )
 
         // Competing-proxy hints only consult flows we decline (`!routed`). In full-traffic /
         // `routeAllIdentifiedFlows` mode every identified flow is routed, so this path stays cold by
@@ -113,17 +338,66 @@ final class TransparentProxyProvider: NETransparentProxyProvider {
         }
 
         guard routed else {
+            // .debug: one of these per system-wide non-routed TCP flow in SNI mode — pure noise.
+            Self.log.debug("[APPSPLIT_FLOW] decision=release reason=not-routed signingID=\(signingID)")
             return false
         }
+
+        // Destinations on the local network (RFC-1918 / loopback / link-local) aren't reachable
+        // across the WireGuard tunnel — the peer has no route back to a private address, so a
+        // tunneled flow black-holes. Decline the flow so the OS routes it directly. TCP carries its
+        // destination at flow-open (checked here); UDP's remote isn't known until the first datagram,
+        // so it's filtered per-datagram in UDPFlowRelay instead.
+        if let literal = literalRemoteHostname(from: flow), IPCIDRMatcher.isLocalLiteral(literal) {
+            Self.log.notice("[APPSPLIT_FLOW] decision=bypass-local signingID=\(signingID) remote=\(literal)")
+            return false
+        }
+
+        Self.log.notice("[APPSPLIT_FLOW] decision=intercept signingID=\(signingID) remote=\(remote) routeThroughTunnel=\(routeThroughTunnel)")
 
         let flowKey = ObjectIdentifier(flow)
 
         if let tcp = flow as? NEAppProxyTCPFlow {
             let remoteLiteral = literalRemoteHostname(from: tcp)
+
+            // In SNI mode, hand the relay a decider that peeks the TLS ClientHello and routes by
+            // hostname: tunnel if the SNI matches a domain rule (suffix) OR the remote IP is in a
+            // fixed-IP/resolved CIDR; otherwise direct/en0. Captures only value snapshots + statics,
+            // so it's free of `self` and safe to run on the relay's queue.
+            let routeDecider: ((Data) -> Bool)? = sniMode ? { firstChunk in
+                let sni = TLSClientHelloSNI.serverName(from: firstChunk)
+                let ipMatch = remoteLiteral.map { IPCIDRMatcher.literalMatches($0, ranges: preparedRanges) } ?? false
+                let tunnel: Bool
+                let reason: String
+                if let sni {
+                    if Self.sniMatches(sni, names: domainNames) {
+                        tunnel = true; reason = "sni"
+                    } else if ipMatch {
+                        tunnel = true; reason = "ip"
+                    } else {
+                        tunnel = false; reason = "unmatched"
+                    }
+                } else if ipMatch {
+                    // No SNI (non-TLS, or a ClientHello fragmented across segments) → fall back to IP.
+                    tunnel = true; reason = "ip-nosni"
+                } else {
+                    tunnel = false; reason = "no-sni"
+                }
+                // Summary at .notice carries decision + reason but NO hostname (privacy + volume);
+                // the full detail with the SNI hostname is logged at .debug only.
+                let decision = tunnel ? "tunnel" : "direct"
+                Self.log.notice("[APPSPLIT_SNI] decision=\(decision) reason=\(reason) signingID=\(signingID)")
+                Self.log.debug("[APPSPLIT_SNI] detail decision=\(decision) reason=\(reason) host=\(sni ?? "nil") remote=\(remoteLiteral ?? "nil") signingID=\(signingID)")
+                return tunnel
+            } : nil
+
             let relay = TCPFlowRelay(
                 flow: tcp,
                 signingID: signingID,
+                routeThroughTunnel: routeThroughTunnel,
+                tunnelInterfaceName: ifaceName,
                 queue: flowQueue,
+                routeDecider: routeDecider,
                 onTx: { [weak self] bytes in
                     self?.aggregator.addTx(bytes, signingID: signingID)
                     if let remoteLiteral {
@@ -153,6 +427,8 @@ final class TransparentProxyProvider: NETransparentProxyProvider {
             let relay = UDPFlowRelay(
                 flow: udp,
                 signingID: signingID,
+                routeThroughTunnel: routeThroughTunnel,
+                tunnelInterfaceName: ifaceName,
                 queue: flowQueue,
                 onTx: { [weak self] in self?.aggregator.addTx($0, signingID: signingID) },
                 onRx: { [weak self] in self?.aggregator.addRx($0, signingID: signingID) },
@@ -170,7 +446,7 @@ final class TransparentProxyProvider: NETransparentProxyProvider {
             return true
         }
 
-        Self.log.error("handleNewFlow: routed but unsupported flow type=\(String(describing: type(of: flow)), privacy: .public)")
+        Self.log.error("handleNewFlow: routed but unsupported flow type=\(String(describing: type(of: flow)))")
         return false
     }
 
@@ -184,7 +460,7 @@ final class TransparentProxyProvider: NETransparentProxyProvider {
         foreignProxyLock.unlock()
         guard inserted else { return }
         Self.log.notice(
-            "noted foreign transparent proxy signingID=\(signingID, privacy: .public) totalObserved=\(snapshot.count, privacy: .public)"
+            "noted foreign transparent proxy signingID=\(signingID) totalObserved=\(snapshot.count)"
         )
         persistObservedForeignProxySigningIDs(snapshot)
     }
@@ -212,7 +488,7 @@ final class TransparentProxyProvider: NETransparentProxyProvider {
             let data = try JSONSerialization.data(withJSONObject: payload, options: [.prettyPrinted, .sortedKeys])
             try data.write(to: url, options: .atomic)
         } catch {
-            Self.log.error("persistObservedForeignProxySigningIDs failed: \(error.localizedDescription, privacy: .public)")
+            Self.log.error("persistObservedForeignProxySigningIDs failed: \(error.localizedDescription)")
         }
     }
 
@@ -225,7 +501,21 @@ final class TransparentProxyProvider: NETransparentProxyProvider {
         return routedSigningIdentifiers.contains(signingID)
     }
 
+    private func runtimeConfigFromProvider() -> TransparentProxyRuntimeConfig? {
+        guard let proto = protocolConfiguration as? NETunnelProviderProtocol else { return nil }
+        return TransparentProxyRuntimeConfig.decode(from: proto.providerConfiguration)
+    }
+
     private func refreshRoutedSigningIdentifiers() {
+        if let config = runtimeConfigFromProvider() {
+            applySigningSnapshot(
+                routeAllIdentifiedFlows: config.routeAllIdentifiedFlows,
+                signingIdentifiers: config.signingIdentifiers,
+                source: "providerConfiguration"
+            )
+            return
+        }
+
         // Prefer the shared file written by the host app; CFPreferences-backed app-group defaults
         // can fail inside extensions on some macOS configurations.
         guard let fileURL = SharedPaths.perAppRoutedSigningIdentifiersFileURL() else {
@@ -245,14 +535,7 @@ final class TransparentProxyProvider: NETransparentProxyProvider {
         }
 
         if dict["routeAllIdentifiedFlows"] as? Bool == true {
-            routedFiltersLock.lock()
-            let wasAll = routeAllIdentifiedFlows
-            routeAllIdentifiedFlows = true
-            routedSigningIdentifiers = []
-            routedFiltersLock.unlock()
-            if !wasAll {
-                Self.log.notice("refreshRoutedSigningIdentifiers: routeAllIdentifiedFlows=true (full-traffic accounting)")
-            }
+            applySigningSnapshot(routeAllIdentifiedFlows: true, signingIdentifiers: [], source: "sharedFile")
             return
         }
 
@@ -260,6 +543,30 @@ final class TransparentProxyProvider: NETransparentProxyProvider {
               !fromFile.isEmpty else {
             Self.log.notice("refreshRoutedSigningIdentifiers: signingIdentifiers missing or empty")
             return loadFromUserDefaultsOrFallback()
+        }
+
+        applySigningSnapshot(
+            routeAllIdentifiedFlows: false,
+            signingIdentifiers: fromFile,
+            source: "sharedFile"
+        )
+    }
+
+    private func applySigningSnapshot(
+        routeAllIdentifiedFlows: Bool,
+        signingIdentifiers fromFile: [String],
+        source: String
+    ) {
+        if routeAllIdentifiedFlows {
+            routedFiltersLock.lock()
+            let wasAll = self.routeAllIdentifiedFlows
+            self.routeAllIdentifiedFlows = true
+            routedSigningIdentifiers = []
+            routedFiltersLock.unlock()
+            if !wasAll {
+                Self.log.notice("refreshRoutedSigningIdentifiers: routeAllIdentifiedFlows=true source=\(source)")
+            }
+            return
         }
 
         var ids = Set(
@@ -274,11 +581,13 @@ final class TransparentProxyProvider: NETransparentProxyProvider {
         routedFiltersLock.lock()
         let previousIDs = routedSigningIdentifiers
         let wasRouteAll = routeAllIdentifiedFlows
-        routeAllIdentifiedFlows = false
+        self.routeAllIdentifiedFlows = false
         routedSigningIdentifiers = ids
         routedFiltersLock.unlock()
         if wasRouteAll || ids != previousIDs {
-            Self.log.notice("refreshRoutedSigningIdentifiers: loaded \(ids.count, privacy: .public) IDs from shared file: \(ids.sorted().joined(separator: ","), privacy: .public)")
+            Self.log.notice(
+                "refreshRoutedSigningIdentifiers: loaded \(ids.count) IDs source=\(source): \(ids.sorted().joined(separator: ","))"
+            )
         }
     }
     
@@ -304,18 +613,40 @@ final class TransparentProxyProvider: NETransparentProxyProvider {
         destinationLock.lock()
         let enforce = enforceDestinationFiltering
         let cidrs = destinationRawCIDRs
+        let hasDomainNames = !destinationDomainNames.isEmpty
         destinationLock.unlock()
+        return buildIncludedNetworkRules(enforce: enforce, cidrs: cidrs, hasDomainNames: hasDomainNames)
+    }
 
+    /// Pure rule builder over an explicit destination-state snapshot. Kept off the
+    /// `destinationLock` so a caller that has *just* written the state (under the lock) can pass
+    /// exactly what it wrote. The previous version re-read the locked fields here, which let a
+    /// concurrent `stopProxy` zero them between the write and this read and publish the catch-all
+    /// rule set (full-tunnel for routed apps). The no-arg overload above reads a fresh locked
+    /// snapshot, which is the right behavior for `startProxy`.
+    private func buildIncludedNetworkRules(enforce: Bool, cidrs: [String], hasDomainNames: Bool) -> [NENetworkRule] {
         let catchAll: [NENetworkRule] = [
             NENetworkRule(remoteNetwork: nil, remotePrefix: 0, localNetwork: nil, localPrefix: 0, protocol: .TCP, direction: .outbound),
             NENetworkRule(remoteNetwork: nil, remotePrefix: 0, localNetwork: nil, localPrefix: 0, protocol: .UDP, direction: .outbound),
         ]
 
+        // SNI mode: filtering on AND domain rules present. Intercept ALL outbound TCP so the proxy
+        // can peek every flow's TLS SNI (the leaking CDN IPs are in no CIDR), but keep UDP narrowed
+        // to the known CIDRs — QUIC can't be SNI-peeked here, so it stays on the IP filter (same
+        // coverage as before). The per-TCP-flow decider tunnels SNI/IP matches; the rest exit en0.
+        if enforce && hasDomainNames {
+            let catchAllTCP = NENetworkRule(remoteNetwork: nil, remotePrefix: 0, localNetwork: nil, localPrefix: 0, protocol: .TCP, direction: .outbound)
+            let udpRules = udpInterceptRules(for: cidrs)
+            Self.log.notice("buildIncludedNetworkRules: SNI mode — catch-all TCP + \(udpRules.count) UDP CIDR rules")
+            return [catchAllTCP] + udpRules
+        }
+
         guard enforce, !cidrs.isEmpty else { return catchAll }
 
         var rules: [NENetworkRule] = []
         for cidr in cidrs {
-            let parts = cidr.split(separator: "/")
+            let routingCIDR = Self.widenIPv4HostRoute(Self.explicitPrefixCIDR(cidr))
+            let parts = routingCIDR.split(separator: "/")
             guard parts.count == 2, let prefix = Int(parts[1]) else { continue }
             let networkIP = String(parts[0])
             let endpoint = NWHostEndpoint(hostname: networkIP, port: "0")
@@ -329,7 +660,21 @@ final class TransparentProxyProvider: NETransparentProxyProvider {
             Self.log.error("buildIncludedNetworkRules: all CIDRs unparseable — using empty rule set")
             return []
         }
-        Self.log.notice("buildIncludedNetworkRules: split-tunnel \(rules.count, privacy: .public) rules for \(cidrs.count, privacy: .public) CIDRs")
+        Self.log.notice("buildIncludedNetworkRules: split-tunnel \(rules.count) rules for \(cidrs.count) CIDRs")
+        return rules
+    }
+
+    /// UDP-only intercept rules for the given CIDRs (widening /32 host routes to /24 for CDN
+    /// rotation), used in SNI mode where TCP is catch-all but UDP stays IP-narrowed.
+    private func udpInterceptRules(for cidrs: [String]) -> [NENetworkRule] {
+        var rules: [NENetworkRule] = []
+        for cidr in cidrs {
+            let routingCIDR = Self.widenIPv4HostRoute(Self.explicitPrefixCIDR(cidr))
+            let parts = routingCIDR.split(separator: "/")
+            guard parts.count == 2, let prefix = Int(parts[1]) else { continue }
+            let endpoint = NWHostEndpoint(hostname: String(parts[0]), port: "0")
+            rules.append(NENetworkRule(remoteNetwork: endpoint, remotePrefix: prefix, localNetwork: nil, localPrefix: 0, protocol: .UDP, direction: .outbound))
+        }
         return rules
     }
 
@@ -361,61 +706,159 @@ final class TransparentProxyProvider: NETransparentProxyProvider {
         return nil
     }
 
-    private func refreshDestinationConfig() {
+    /// Ensures a destination literal carries an explicit prefix. A bare IPv4/IPv6 literal (no `/n`)
+    /// is a host route: `/32` for v4, `/128` for v6. Without this, prefixless entries (which the
+    /// store accepts and shows as enabled in the UI) were dropped by the `parts.count == 2` guard in
+    /// `buildIncludedNetworkRules`/`udpInterceptRules` — enforced ≠ displayed, and the flow leaked
+    /// out the direct path. Non-literal / already-prefixed strings pass through unchanged.
+    private static func explicitPrefixCIDR(_ cidr: String) -> String {
+        let trimmed = cidr.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.contains("/") else { return trimmed }
+        var v4 = in_addr()
+        if inet_pton(AF_INET, trimmed, &v4) == 1 { return trimmed + "/32" }
+        var v6 = in6_addr()
+        if inet_pton(AF_INET6, trimmed, &v6) == 1 { return trimmed + "/128" }
+        return trimmed
+    }
+
+    /// Widen resolved /32 host routes to /24 so CDN address rotation still matches intercept rules.
+    private static func widenIPv4HostRoute(_ cidr: String) -> String {
+        let parts = cidr.split(separator: "/")
+        guard parts.count == 2, let prefix = Int(parts[1]), prefix == 32 else { return cidr }
+        let ip = String(parts[0])
+        guard ip.contains(".") else { return cidr }
+        var octets = ip.split(separator: ".")
+        guard octets.count == 4 else { return cidr }
+        octets[3] = "0"
+        return "\(octets.joined(separator: "."))/24"
+    }
+
+    private func refreshDestinationConfig(generation: UInt64) {
+        if let config = runtimeConfigFromProvider() {
+            applyDestinationPayload(
+                enforce: config.destinationRouting.enforceDestinationFiltering,
+                rawCIDRs: config.destinationRouting.ranges,
+                ifaceName: config.packetTunnelInterfaceName,
+                source: "providerConfiguration",
+                domainNames: config.destinationRouting.domainNames,
+                generation: generation
+            )
+            return
+        }
+
         guard let fileURL = SharedPaths.destinationRangesFileURL() else {
             Self.log.notice("refreshDestinationConfig fileURL nil")
-            applyDestinationPayload(enforce: false, rawCIDRs: [])
+            applyDestinationPayload(enforce: false, rawCIDRs: [], ifaceName: nil, source: "none", generation: generation)
             return
         }
         guard let data = try? Data(contentsOf: fileURL) else {
-            Self.log.notice("refreshDestinationConfig: file missing/unreadable \(fileURL.lastPathComponent, privacy: .public)")
-            applyDestinationPayload(enforce: false, rawCIDRs: [])
+            Self.log.notice("refreshDestinationConfig: file missing/unreadable \(fileURL.lastPathComponent)")
+            applyDestinationPayload(enforce: false, rawCIDRs: [], ifaceName: nil, source: "none", generation: generation)
             return
         }
         do {
             let payload = try JSONDecoder().decode(DestinationRoutingFilePayload.self, from: data)
-            applyDestinationPayload(enforce: payload.enforceDestinationFiltering, rawCIDRs: payload.ranges)
+            applyDestinationPayload(
+                enforce: payload.enforceDestinationFiltering,
+                rawCIDRs: payload.ranges,
+                ifaceName: nil,
+                source: "sharedFile",
+                domainNames: payload.domainNames,
+                generation: generation
+            )
         } catch {
             Self.log.notice(
-                "refreshDestinationConfig decode failed \(error.localizedDescription, privacy: .public)"
+                "refreshDestinationConfig decode failed \(error.localizedDescription)"
             )
-            applyDestinationPayload(enforce: false, rawCIDRs: [])
+            applyDestinationPayload(enforce: false, rawCIDRs: [], ifaceName: nil, source: "none", generation: generation)
         }
     }
 
-    private func applyDestinationPayload(enforce: Bool, rawCIDRs: [String]) {
+    /// `domainNames == nil` leaves the SNI name set unchanged (used by the appMessage live-push,
+    /// which only ever carries newly-resolved IPs — names are static for a session). A non-nil
+    /// value replaces the set (lowercased).
+    private func applyDestinationPayload(enforce: Bool, rawCIDRs: [String], ifaceName: String?, source: String, domainNames: [String]? = nil, generation: UInt64) {
         destinationLock.lock()
-        let changed = enforce != enforceDestinationFiltering || rawCIDRs != destinationRawCIDRs
+        // Checked under `destinationLock` because `stopProxy` bumps the generation BEFORE taking
+        // this lock to clear the state: a stale writer either sees the new generation here and
+        // bails, or completed its write first and gets wiped by the clear — never union-after-clear.
+        guard generation == currentSessionGeneration() else {
+            destinationLock.unlock()
+            Self.log.notice("applyDestinationPayload: stale generation, dropped source=\(source)")
+            return
+        }
+        // Union, never replace, within a session. Three writers race for this set — `startProxy`
+        // (providerConfiguration baseline), the 1.5s `flushOnce` (re-reads the same baseline), and
+        // host `appMessage` pushes (newly-resolved IPs) — and they can arrive in any order. A
+        // replace let whichever ran last win, so a providerConfiguration re-apply would wipe an
+        // appMessage's freshly-learned IP (and vice versa). Unioning makes order irrelevant. The
+        // set is cleared in `stopProxy` so it can't accumulate across sessions (the extension
+        // process is reused across stop/start). Shrinking only happens on reconnect — the safe
+        // direction for a split-tunnel filter.
+        let merged = Self.unionPreservingOrder(destinationRawCIDRs, rawCIDRs)
+        let rangesChanged = merged != destinationRawCIDRs
+        let newNames = domainNames?.map { $0.lowercased() } ?? destinationDomainNames
+        let namesChanged = newNames != destinationDomainNames
+        let changed = enforce != enforceDestinationFiltering || rangesChanged || namesChanged
         enforceDestinationFiltering = enforce
-        destinationRawCIDRs = rawCIDRs
+        destinationRawCIDRs = merged
+        destinationDomainNames = newNames
+        if rangesChanged {
+            cachedPreparedRanges = IPCIDRMatcher.prepare(merged)
+        }
+        if let ifaceName {
+            tunnelInterfaceName = ifaceName
+        }
         destinationLock.unlock()
 
         guard changed else { return }
+        // Log the actual SNI names (capped) — not just the count — so a "count right, string wrong"
+        // mismatch (trailing dot, casing) is visible here instead of only inferable per-flow.
+        let namesPreview = newNames.prefix(12).joined(separator: ",")
         Self.log.notice(
-            "applyDestinationPayload: enforce=\(enforce, privacy: .public) ranges=\(rawCIDRs.count, privacy: .public)"
+            "applyDestinationPayload: enforce=\(enforce) ranges=\(merged.count) domains=\(newNames.count) names=[\(namesPreview)] iface=\(ifaceName ?? "nil") source=\(source)"
         )
         let settings = NETransparentProxyNetworkSettings(tunnelRemoteAddress: "127.0.0.1")
-        settings.includedNetworkRules = buildIncludedNetworkRules()
+        // Build from the snapshot we just wrote under the lock (`enforce`/`merged`/`newNames`),
+        // NOT a fresh re-read: a concurrent `stopProxy` could zero the destination state between
+        // the unlock above and rule-building, making a re-read return — and publish — the
+        // catch-all set (full-tunnel for routed apps) instead of the CIDR-narrowed rules.
+        settings.includedNetworkRules = buildIncludedNetworkRules(
+            enforce: enforce, cidrs: merged, hasDomainNames: !newNames.isEmpty
+        )
+        // Best-effort re-check: don't push rules built from pre-stop state onto a provider that
+        // stopped between the unlock above and here.
+        guard generation == currentSessionGeneration() else { return }
         setTunnelNetworkSettings(settings) { error in
             if let error {
-                Self.log.error("applyDestinationPayload setTunnelNetworkSettings failed: \(error.localizedDescription, privacy: .public)")
+                Self.log.error("applyDestinationPayload setTunnelNetworkSettings failed: \(error.localizedDescription)")
             }
         }
     }
 
-    private func startFlushTimer() {
-        let timer = DispatchSource.makeTimerSource(queue: flushQueue)
-        timer.schedule(deadline: .now() + Self.flushInterval, repeating: Self.flushInterval)
-        timer.setEventHandler { [weak self] in
-            self?.flushOnce()
+    /// `generation` is captured at schedule time (startProxy entry): if a stop landed while the
+    /// async `setTunnelNetworkSettings` completion was in flight, the hop below sees a changed
+    /// generation and refuses to create the timer at all — no timer outlives its session.
+    private func startFlushTimer(generation: UInt64) {
+        flushQueue.async { [weak self] in
+            guard let self, generation == self.currentSessionGeneration() else { return }
+            self.flushTimer?.cancel()
+            let timer = DispatchSource.makeTimerSource(queue: self.flushQueue)
+            timer.schedule(deadline: .now() + Self.flushInterval, repeating: Self.flushInterval)
+            timer.setEventHandler { [weak self] in
+                self?.flushOnce(generation: generation)
+            }
+            timer.resume()
+            self.flushTimer = timer
         }
-        timer.resume()
-        flushTimer = timer
     }
 
-    private func flushOnce() {
+    private func flushOnce(generation: UInt64) {
+        // A tick already running when stopProxy fires must not re-read config into the
+        // destination state stopProxy is about to clear.
+        guard generation == currentSessionGeneration() else { return }
         refreshRoutedSigningIdentifiers()
-        refreshDestinationConfig()
+        refreshDestinationConfig(generation: generation)
         let rules = PerAppIdentityMap.loadActiveRules()
         let rolledUp = aggregator.rollup(rules: rules)
         let perDestination = destinationAggregator.rollupToRows(rules: rules)
@@ -423,7 +866,7 @@ final class TransparentProxyProvider: NETransparentProxyProvider {
         if lastLoggedFlushSummary.map({ $0 != summary }) ?? true {
             lastLoggedFlushSummary = summary
             Self.log.notice(
-                "flushOnce: rules=\(summary.rules, privacy: .public) rolledUp=\(summary.rolledUp, privacy: .public) destinations=\(summary.destinations, privacy: .public)"
+                "flushOnce: rules=\(summary.rules) rolledUp=\(summary.rolledUp) destinations=\(summary.destinations)"
             )
         }
         let stats = PerAppTransferStats(
@@ -432,74 +875,45 @@ final class TransparentProxyProvider: NETransparentProxyProvider {
             lastUpdate: .now,
             perDestination: perDestination
         )
+        // Cache for the host's `getStats` IPC pull — this, not the file write below, is what
+        // actually reaches the host across the uid boundary.
+        if let payload = try? Self.statsEncoder.encode(stats) {
+            statsLock.lock()
+            latestStatsPayload = payload
+            statsLock.unlock()
+        }
         do {
             try PerAppTransferStore.write(stats)
         } catch {
-            Self.log.error("failed to flush app-tunnel stats: \(error.localizedDescription, privacy: .public)")
+            Self.log.error("failed to flush app-tunnel stats: \(error.localizedDescription)")
         }
 
         flushExtensionResourceStats()
     }
 
     private func flushExtensionResourceStats() {
-        let cpu = Self.readCPUUsagePercent()
-        let memory = Self.readResidentMemoryBytes()
+        // Runs on `flushQueue` (via the flush timer). `sampleResources()` keeps all sampler
+        // access on that one queue so its cross-sample state can't race the IPC reader.
+        let sample = sampleResources()
         var merged = ExtensionResourceStore.read()
-        merged.transparentProxyCPU = cpu
-        merged.transparentProxyMemory = memory
+        merged.transparentProxyCPU = sample.cpuPercent
+        merged.transparentProxyMemory = sample.memoryBytes
         merged.lastUpdate = .now
         merged.schemaVersion = ExtensionResourceStats.currentSchemaVersion
         do {
             try ExtensionResourceStore.write(merged)
         } catch {
-            Self.log.error("failed to flush extension resource stats: \(error.localizedDescription, privacy: .public)")
+            Self.log.error("failed to flush extension resource stats: \(error.localizedDescription)")
         }
     }
 
-    private static func readResidentMemoryBytes() -> UInt64 {
-        var info = mach_task_basic_info()
-        var count = mach_msg_type_number_t(MemoryLayout<mach_task_basic_info>.stride / MemoryLayout<natural_t>.stride)
-        let kr: kern_return_t = withUnsafeMutablePointer(to: &info) {
-            $0.withMemoryRebound(to: integer_t.self, capacity: Int(count)) {
-                task_info(
-                    mach_task_self_,
-                    task_flavor_t(MACH_TASK_BASIC_INFO),
-                    $0,
-                    &count
-                )
-            }
+    /// Serializes `resourceSampler` on `flushQueue`. The sampler carries time-delta state between
+    /// calls and is not thread-safe, while `getResourceStats` IPC arrives on a different queue than
+    /// the flush timer — funneling both through `flushQueue` keeps the smoothed value coherent.
+    private func sampleResources() -> ProcessResourceSampler.Sample {
+        if DispatchQueue.getSpecific(key: Self.flushQueueKey) != nil {
+            return resourceSampler.sample()
         }
-        guard kr == KERN_SUCCESS else { return 0 }
-        return UInt64(info.resident_size)
-    }
-
-    private static func readCPUUsagePercent() -> Double {
-        var threadList: thread_act_array_t?
-        var threadCount: mach_msg_type_number_t = 0
-        let task = mach_task_self_
-        guard task_threads(task, &threadList, &threadCount) == KERN_SUCCESS, let threads = threadList else {
-            return 0
-        }
-        defer {
-            let address = vm_address_t(UInt(bitPattern: threads))
-            let byteCount = vm_size_t(Int(threadCount) * MemoryLayout<thread_t>.stride)
-            vm_deallocate(task, address, byteCount)
-        }
-
-        var total: Double = 0
-        for index in 0..<Int(threadCount) {
-            var threadInfo = thread_basic_info()
-            var threadInfoCount = mach_msg_type_number_t(THREAD_INFO_MAX)
-            let kr = withUnsafeMutablePointer(to: &threadInfo) {
-                $0.withMemoryRebound(to: integer_t.self, capacity: Int(threadInfoCount)) {
-                    thread_info(threads[index], thread_flavor_t(THREAD_BASIC_INFO), $0, &threadInfoCount)
-                }
-            }
-            guard kr == KERN_SUCCESS else { continue }
-            if threadInfo.flags & Int32(TH_FLAGS_IDLE) == 0 {
-                total += Double(threadInfo.cpu_usage) / Double(TH_USAGE_SCALE) * 100.0
-            }
-        }
-        return total
+        return flushQueue.sync { resourceSampler.sample() }
     }
 }

@@ -19,15 +19,30 @@ struct RoutingView: View {
 
     private var bulkListsEnabledBinding: Binding<Bool> {
         Binding(get: { appState.settings.destinationBulkListsEnabled },
-                set: { appState.settings.destinationBulkListsEnabled = $0 })
+                set: { newValue in
+                    appState.settings.destinationBulkListsEnabled = newValue
+                    if newValue && appState.destinationRuleStore.bulkGroups.contains(where: \.isEnabled) {
+                        appState.settings.enforceDestinationFiltering = true
+                    }
+                })
     }
     private var customRangesEnabledBinding: Binding<Bool> {
         Binding(get: { appState.settings.destinationCustomRangesEnabled },
-                set: { appState.settings.destinationCustomRangesEnabled = $0 })
+                set: { newValue in
+                    appState.settings.destinationCustomRangesEnabled = newValue
+                    if newValue && appState.destinationRuleStore.customRules.contains(where: \.isEnabled) {
+                        appState.settings.enforceDestinationFiltering = true
+                    }
+                })
     }
     private var domainNamesEnabledBinding: Binding<Bool> {
         Binding(get: { appState.settings.destinationDomainNamesEnabled },
-                set: { appState.settings.destinationDomainNamesEnabled = $0 })
+                set: { newValue in
+                    appState.settings.destinationDomainNamesEnabled = newValue
+                    if newValue && appState.destinationRuleStore.domainRules.contains(where: \.isEnabled) {
+                        appState.settings.enforceDestinationFiltering = true
+                    }
+                })
     }
 
     /// Shown as the macOS tooltip on the bulk-lists info icon (Import… and Paste List share one parser).

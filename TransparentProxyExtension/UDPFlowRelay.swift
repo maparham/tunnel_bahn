@@ -3,16 +3,11 @@ import Network
 import NetworkExtension
 import os.log
 
-/// UDP relay between an `NEAppProxyUDPFlow` and one or more outbound `NWConnection`s
-/// (UDP can fan out to multiple destinations within a single flow).
-///
-/// We open one outbound `NWConnection` per unique remote endpoint observed and route
-/// inbound datagrams back to the proxy flow tagged with the originating endpoint, which
-/// is what `NEAppProxyUDPFlow.writeDatagrams(_:sentBy:)` expects.
-///
-/// Clean teardown uses `nil` on the flow; relay failures use a non-nil error on close.
+/// UDP relay between an `NEAppProxyUDPFlow` and outbound datagram sockets.
+/// When `routeThroughTunnel` is true, each per-destination connection is created via
+/// `RelayOutboundConnection` which binds it to the WireGuard utun interface.
 final class UDPFlowRelay {
-    private static let log = Logger(
+    private static let log = AppLog(
         subsystem: "com.tunnelbahn.mac.transparentproxy",
         category: "UDPRelay"
     )
@@ -25,22 +20,28 @@ final class UDPFlowRelay {
 
     private let flow: NEAppProxyUDPFlow
     private let signingID: String
+    private let routeThroughTunnel: Bool
+    private let tunnelInterfaceName: String?
+    private let queue: DispatchQueue
     private let onTx: (UInt64) -> Void
     private let onRx: (UInt64) -> Void
     private let onClose: () -> Void
-    private let queue: DispatchQueue
 
-    /// Cached connections, keyed by `"host:port"`. Each is a connected UDP socket to a
-    /// specific remote endpoint.
-    private var connections: [String: NWConnection] = [:]
-    /// Reverse map so we can tag inbound datagrams with the legacy host endpoint the proxy
-    /// flow expects in `writeDatagrams(_:sentBy:)`.
+    // Tunnel path: keyed by "host:port"
+    private var relayConns: [String: RelayOutboundConnection] = [:]
+    // Direct path: keyed by "host:port"
+    private var nwConnections: [String: NWConnection] = [:]
     private var legacyEndpoints: [String: NWHostEndpoint] = [:]
+    /// Guards the one-shot `didCloseOnce` test-and-set against finish paths arriving on different
+    /// queues (NE flow callbacks vs the relay connection's queue). See `TCPFlowRelay.closeLock`.
+    private let closeLock = NSLock()
     private var didCloseOnce = false
 
     init(
         flow: NEAppProxyUDPFlow,
         signingID: String,
+        routeThroughTunnel: Bool,
+        tunnelInterfaceName: String?,
         queue: DispatchQueue,
         onTx: @escaping (UInt64) -> Void,
         onRx: @escaping (UInt64) -> Void,
@@ -48,6 +49,8 @@ final class UDPFlowRelay {
     ) {
         self.flow = flow
         self.signingID = signingID
+        self.routeThroughTunnel = routeThroughTunnel
+        self.tunnelInterfaceName = tunnelInterfaceName
         self.queue = queue
         self.onTx = onTx
         self.onRx = onRx
@@ -58,11 +61,13 @@ final class UDPFlowRelay {
         flow.open(withLocalEndpoint: nil) { [weak self] error in
             guard let self else { return }
             if let error {
-                Self.log.error("UDP flow.open failed: \(error.localizedDescription, privacy: .public)")
+                Self.log.error("UDP flow.open failed: \(error.localizedDescription)")
                 self.finishDueToFailure(underlying: error)
                 return
             }
-            Self.log.notice("UDP flow.open succeeded signingID=\(self.signingID, privacy: .public)")
+            Self.log.notice(
+                "UDP flow.open succeeded signingID=\(self.signingID) tunnel=\(self.routeThroughTunnel)"
+            )
             self.queue.async {
                 self.relayAppToRemote()
             }
@@ -73,101 +78,225 @@ final class UDPFlowRelay {
         flow.readDatagrams { [weak self] datagrams, endpoints, error in
             guard let self else { return }
             if let error {
-                Self.log.debug("UDP readDatagrams error: \(error.localizedDescription, privacy: .public)")
+                Self.log.debug("UDP readDatagrams error: \(error.localizedDescription)")
                 self.finishDueToFailure(underlying: error)
                 return
             }
             guard let datagrams, let endpoints, !datagrams.isEmpty else {
-                Self.log.debug("UDP readDatagrams empty (EOF?) signingID=\(self.signingID, privacy: .public)")
+                Self.log.debug("UDP readDatagrams empty (EOF?) signingID=\(self.signingID)")
                 self.finishSuccessfully()
                 return
             }
-            for (datagram, legacyEndpoint) in zip(datagrams, endpoints) {
-                guard let hostEndpoint = legacyEndpoint as? NWHostEndpoint else { continue }
-                self.send(datagram: datagram, to: hostEndpoint)
-            }
+            // Hop to `queue` before touching the connection dictionaries. `send` mutates
+            // relayConns/nwConnections/legacyEndpoints, but `readDatagrams` delivers on the NE flow's
+            // callback queue — not `queue` — so doing it inline raced the receive/teardown paths and
+            // corrupted the dictionaries (the SIGSEGV in `scheduleDirectTeardown` →
+            // `removeValue(forKey:)`). Serialize all dictionary access onto `queue`.
             self.queue.async {
+                for (datagram, legacyEndpoint) in zip(datagrams, endpoints) {
+                    guard let hostEndpoint = legacyEndpoint as? NWHostEndpoint else { continue }
+                    self.send(datagram: datagram, to: hostEndpoint)
+                }
                 self.relayAppToRemote()
             }
         }
     }
 
     private func send(datagram: Data, to legacyEndpoint: NWHostEndpoint) {
-        guard let modern = EndpointBridge.modernize(legacyEndpoint) else {
-            return
-        }
-        let key = endpointKey(modern)
-        let conn: NWConnection
-        if let cached = connections[key] {
-            conn = cached
-        } else {
-            Self.log.notice("UDP new NWConnection signingID=\(self.signingID, privacy: .public) remote=\(String(describing: modern), privacy: .public)")
-            let params = NWParameters.udp
-            conn = NWConnection(to: modern, using: params)
-            legacyEndpoints[key] = legacyEndpoint
-            connections[key] = conn
-            startRelayingInbound(from: conn, key: key)
-            conn.start(queue: queue)
-        }
+        let key = endpointKey(legacyEndpoint)
+        legacyEndpoints[key] = legacyEndpoint
 
-        onTx(UInt64(datagram.count))
-        conn.send(
-            content: datagram,
-            completion: .contentProcessed { [weak self] error in
-                if let error {
-                    Self.log.debug("UDP send error: \(error.localizedDescription, privacy: .public)")
-                    self?.finishDueToFailure(underlying: error)
+        // Per-destination decision: a private/local address (the system DNS resolver typically lives
+        // on one) can't be reached through the WireGuard peer, so it must go direct even when the
+        // flow is otherwise routed — otherwise DNS and LAN traffic black-hole. UDP's remote is only
+        // known here (per datagram), which is why this can't be decided up in handleNewFlow.
+        let useTunnel = routeThroughTunnel && !IPCIDRMatcher.isLocalLiteral(legacyEndpoint.hostname)
+        if useTunnel {
+            sendViaTunnel(datagram: datagram, to: legacyEndpoint, key: key)
+        } else {
+            sendViaDirect(datagram: datagram, to: legacyEndpoint, key: key)
+        }
+    }
+
+    // MARK: - Tunnel path
+
+    private func sendViaTunnel(datagram: Data, to legacyEndpoint: NWHostEndpoint, key: String) {
+        if relayConns[key] == nil {
+            guard let conn = makeTunnelConnection(to: legacyEndpoint) else { return }
+            relayConns[key] = conn
+            startTunnelReadLoop(on: conn, key: key)
+            conn.start(queue: queue) { [weak self, weak conn] (isReady: Bool, error: Error?) in
+                guard let self else { return }
+                if !isReady {
+                    Self.log.debug("UDP tunnel conn failed for key=\(key): \(error?.localizedDescription ?? "cancelled")")
+                    self.scheduleTunnelTeardown(key: key, connection: conn)
                 }
             }
-        )
-    }
-
-    private func startRelayingInbound(from connection: NWConnection, key: String) {
-        connection.stateUpdateHandler = { [weak self] state in
-            switch state {
-            case .failed, .cancelled:
-                self?.connections.removeValue(forKey: key)
-                self?.legacyEndpoints.removeValue(forKey: key)
-            default:
-                break
+        }
+        onTx(UInt64(datagram.count))
+        guard let conn = relayConns[key] else { return }
+        conn.sendData(datagram) { [weak self, weak conn] (error: Error?) in
+            if let error {
+                // One dead destination must not kill the whole flow — a UDP flow multiplexes
+                // many remotes (e.g. a racing resolver, where one ICMP-unreachable DNS server
+                // would take down all the others). Tear down just this destination's
+                // connection; the flow only finishes when the flow itself dies.
+                Self.log.debug("UDP tunnel send error: \(error.localizedDescription)")
+                self?.scheduleTunnelTeardown(key: key, connection: conn)
             }
         }
-        receiveLoop(on: connection, key: key)
     }
 
-    private func receiveLoop(on connection: NWConnection, key: String) {
-        connection.receiveMessage { [weak self] data, _, isComplete, error in
+    private func makeTunnelConnection(to legacyEndpoint: NWHostEndpoint) -> RelayOutboundConnection? {
+        // See TCPFlowRelay.startTunnelConnection: we deliberately do NOT bind to the utun
+        // interface. Routing is handled by the proxy extension's NEAppRule on the per-app
+        // VPN plus [flow setMetadata:params] in RelayOutboundBridge.m.
+        let conn: RelayOutboundConnection? = legacyEndpoint.hostname.withCString { hostCStr in
+            legacyEndpoint.port.withCString { portCStr in
+                RelayOutboundConnection.makeConnection(flow: flow,
+                                                       hostname: hostCStr,
+                                                       port: portCStr,
+                                                       isTCP: false,
+                                                       interfaceName: nil)
+            }
+        }
+        if conn == nil {
+            Self.log.error(
+                "UDP RelayOutboundConnection returned nil signingID=\(self.signingID) remote=\(legacyEndpoint.hostname):\(legacyEndpoint.port)"
+            )
+        } else {
+            Self.log.notice(
+                "UDP tunnel RelayOutboundConnection signingID=\(self.signingID) remote=\(legacyEndpoint.hostname):\(legacyEndpoint.port)"
+            )
+        }
+        return conn
+    }
+
+    private func startTunnelReadLoop(on conn: RelayOutboundConnection, key: String) {
+        conn.receiveMessage { [weak self] (data: Data?, isComplete: Bool, error: Error?) in  // receiveMessage(completion:)
             guard let self else { return }
             if let data, !data.isEmpty, let legacy = self.legacyEndpoints[key] {
                 self.onRx(UInt64(data.count))
-                self.flow.writeDatagrams([data], sentBy: [legacy]) { [weak self] writeError in
-                    guard let self else { return }
+                self.flow.writeDatagrams([data], sentBy: [legacy]) { writeError in
                     if let writeError {
-                        Self.log.debug("UDP writeDatagrams error: \(writeError.localizedDescription, privacy: .public)")
-                        self.finishDueToFailure(underlying: writeError)
+                        Self.log.debug("UDP writeDatagrams error: \(writeError.localizedDescription)")
                     }
                 }
             }
             if let error {
-                Self.log.debug("UDP receive error: \(error.localizedDescription, privacy: .public)")
-                connection.cancel()
+                Self.log.debug("UDP tunnel receive error: \(error.localizedDescription)")
+                self.scheduleTunnelTeardown(key: key, connection: conn)
                 return
             }
             if isComplete {
-                connection.cancel()
+                self.scheduleTunnelTeardown(key: key, connection: conn)
                 return
             }
-            self.receiveLoop(on: connection, key: key)
+            self.startTunnelReadLoop(on: conn, key: key)
         }
     }
 
-    private func endpointKey(_ endpoint: Network.NWEndpoint) -> String {
-        switch endpoint {
-        case let .hostPort(host, port):
-            return "\(host):\(port.rawValue)"
-        default:
-            return String(describing: endpoint)
+    // MARK: - Direct path
+
+    private func sendViaDirect(datagram: Data, to legacyEndpoint: NWHostEndpoint, key: String) {
+        if nwConnections[key] == nil {
+            guard let conn = makeDirectConnection(to: legacyEndpoint) else { return }
+            nwConnections[key] = conn
+            startDirectReadLoop(on: conn, key: key)
+            conn.start(queue: queue)
         }
+        // Direct path bytes never traversed the WireGuard tunnel (this datagram went to a
+        // local/private dest, e.g. the system DNS resolver), so they must NOT be added to the
+        // per-app tunnel accounting — mirrors TCPFlowRelay.countTx gating on routeThroughTunnel.
+        guard let conn = nwConnections[key] else { return }
+        conn.send(content: datagram, completion: .contentProcessed { [weak self, weak conn] error in
+            if let error {
+                // Per-destination failure only — see the matching note in sendViaTunnel.
+                Self.log.debug("UDP direct send error: \(error.localizedDescription)")
+                self?.scheduleDirectTeardown(key: key, connection: conn)
+            }
+        })
+    }
+
+    private func makeDirectConnection(to legacyEndpoint: NWHostEndpoint) -> NWConnection? {
+        guard let modern = EndpointBridge.modernize(legacyEndpoint) else { return nil }
+        Self.log.notice(
+            "UDP direct NWConnection signingID=\(self.signingID) remote=\(legacyEndpoint.hostname):\(legacyEndpoint.port)"
+        )
+        return NWConnection(to: modern, using: .udp)
+    }
+
+    private func startDirectReadLoop(on connection: NWConnection, key: String) {
+        // `[weak connection]` avoids a connection↔handler retain cycle; teardown is
+        // always deferred (never run the release synchronously inside this handler).
+        connection.stateUpdateHandler = { [weak self, weak connection] state in
+            switch state {
+            case .failed, .cancelled:
+                self?.scheduleDirectTeardown(key: key, connection: connection)
+            default:
+                break
+            }
+        }
+        directReceiveLoop(on: connection, key: key)
+    }
+
+    private func directReceiveLoop(on connection: NWConnection, key: String) {
+        connection.receiveMessage { [weak self] data, _, isComplete, error in
+            guard let self else { return }
+            if let data, !data.isEmpty, let legacy = self.legacyEndpoints[key] {
+                // Direct-path receive bytes did not traverse the tunnel — do not count them into
+                // per-app tunnel accounting (see the matching note in sendViaDirect).
+                self.flow.writeDatagrams([data], sentBy: [legacy]) { writeError in
+                    if let writeError {
+                        Self.log.debug("UDP writeDatagrams error: \(writeError.localizedDescription)")
+                    }
+                }
+            }
+            if let error {
+                Self.log.debug("UDP direct receive error: \(error.localizedDescription)")
+                self.scheduleDirectTeardown(key: key, connection: connection)
+                return
+            }
+            if isComplete {
+                self.scheduleDirectTeardown(key: key, connection: connection)
+                return
+            }
+            self.directReceiveLoop(on: connection, key: key)
+        }
+    }
+
+    /// Lifetime-safe teardown of one direct NWConnection. Always hops to `queue`
+    /// (serial) so we never drop the connection's last reference from inside its own
+    /// state/receive callback — that synchronous release is a use-after-free that
+    /// segfaults in objc_release. Idempotent via an identity check so repeated
+    /// state transitions (and `cancelAll`) can't double-free.
+    private func scheduleDirectTeardown(key: String, connection: NWConnection?) {
+        queue.async { [weak self] in
+            guard let self, let connection, self.nwConnections[key] === connection else { return }
+            connection.stateUpdateHandler = nil
+            connection.cancel()
+            self.nwConnections.removeValue(forKey: key)
+            self.legacyEndpoints.removeValue(forKey: key)
+        }
+    }
+
+    /// Tunnel-path counterpart of `scheduleDirectTeardown`: same deferred hop to `queue` (never
+    /// drop the connection's last reference inside its own callback), same identity check for
+    /// idempotence. Cancels before dropping — the previous bare `removeValue` leaked the
+    /// connection's internal resources.
+    private func scheduleTunnelTeardown(key: String, connection: RelayOutboundConnection?) {
+        queue.async { [weak self] in
+            guard let self, let connection, self.relayConns[key] === connection else { return }
+            connection.cancel()
+            self.relayConns.removeValue(forKey: key)
+            self.legacyEndpoints.removeValue(forKey: key)
+        }
+    }
+
+    // MARK: - Lifecycle
+
+    private func endpointKey(_ endpoint: NWHostEndpoint) -> String {
+        "\(endpoint.hostname):\(endpoint.port)"
     }
 
     private func failureNSError(underlying: Error?) -> NSError {
@@ -183,6 +312,8 @@ final class UDPFlowRelay {
     }
 
     private func takeFinishToken() -> Bool {
+        closeLock.lock()
+        defer { closeLock.unlock() }
         if didCloseOnce { return false }
         didCloseOnce = true
         return true
@@ -192,11 +323,7 @@ final class UDPFlowRelay {
         guard takeFinishToken() else { return }
         flow.closeReadWithError(nil)
         flow.closeWriteWithError(nil)
-        for (_, conn) in connections {
-            conn.cancel()
-        }
-        connections.removeAll(keepingCapacity: false)
-        legacyEndpoints.removeAll(keepingCapacity: false)
+        cancelAll()
         onClose()
     }
 
@@ -205,11 +332,26 @@ final class UDPFlowRelay {
         let err = failureNSError(underlying: underlying)
         flow.closeReadWithError(err)
         flow.closeWriteWithError(err)
-        for (_, conn) in connections {
-            conn.cancel()
-        }
-        connections.removeAll(keepingCapacity: false)
-        legacyEndpoints.removeAll(keepingCapacity: false)
+        cancelAll()
         onClose()
+    }
+
+    private func cancelAll() {
+        // Serialize onto `queue` with all other connection-dictionary access. `finish*` (and thus
+        // `cancelAll`) is also invoked from NE flow callbacks, so mutating these dicts inline raced
+        // `removeValue` running on `queue` and corrupted them. Strong `self` so the connections are
+        // still cancelled even if this async holds the last reference.
+        queue.async {
+            for conn in self.relayConns.values { conn.cancel() }
+            self.relayConns.removeAll(keepingCapacity: false)
+            for conn in self.nwConnections.values {
+                // Clear the handler first so the .cancelled transition can't re-enter
+                // teardown while we're dropping the reference here.
+                conn.stateUpdateHandler = nil
+                conn.cancel()
+            }
+            self.nwConnections.removeAll(keepingCapacity: false)
+            self.legacyEndpoints.removeAll(keepingCapacity: false)
+        }
     }
 }
