@@ -72,11 +72,17 @@ private let addrInfoCallback: DNSServiceGetAddrInfoReply = { _, flags, _, errCod
     guard !ctx.done else { return }
 
     if errCode != kDNSServiceErr_NoError {
-        ctx.finalize(with: .failure(DomainResolverError.setupFailed(code: errCode)))
-        return
-    }
-
-    if let addressPtr {
+        // A dual-protocol query answers each family separately; NoSuchRecord for one family
+        // (e.g. no AAAA on an IPv4-only domain) is a valid negative answer, not a failure.
+        // Failing here would discard records already collected for the other family.
+        guard errCode == kDNSServiceErr_NoSuchRecord else {
+            ctx.finalize(with: .failure(DomainResolverError.setupFailed(code: errCode)))
+            return
+        }
+        if let addressPtr {
+            ctx.negativeFamilies.insert(Int32(addressPtr.pointee.sa_family))
+        }
+    } else if let addressPtr {
         let family = Int32(addressPtr.pointee.sa_family)
         if family == AF_INET {
             addressPtr.withMemoryRebound(to: sockaddr_in.self, capacity: 1) { sin in
@@ -104,15 +110,16 @@ private let addrInfoCallback: DNSServiceGetAddrInfoReply = { _, flags, _, errCod
     let moreComingMask = DNSServiceFlags(kDNSServiceFlagsMoreComing)
     let moreComing = (flags & moreComingMask) != 0
     if !moreComing {
-        let result: Result<DomainResolutionResult, Error>
-        if ctx.cidrs.isEmpty {
-            result = .failure(DomainResolverError.noAddressesFound)
-        } else {
+        if !ctx.cidrs.isEmpty {
             let rawTTL = ctx.minTTL == UInt32.max ? UInt32(DomainResolver.minTTL) : ctx.minTTL
             let clamped = min(max(TimeInterval(rawTTL), DomainResolver.minTTL), DomainResolver.maxTTL)
-            result = .success(DomainResolutionResult(cidrs: ctx.cidrs, ttl: clamped))
+            ctx.finalize(with: .success(DomainResolutionResult(cidrs: ctx.cidrs, ttl: clamped)))
+        } else if ctx.negativeFamilies.count >= 2 {
+            ctx.finalize(with: .failure(DomainResolverError.noAddressesFound))
         }
-        ctx.finalize(with: result)
+        // else: no records yet but one family hasn't answered — a negative answer can land with
+        // moreComing unset before the other family's positive answer arrives. Leave the query
+        // open; a later callback or the timeout finalizes it.
     }
 }
 
@@ -121,6 +128,8 @@ private let addrInfoCallback: DNSServiceGetAddrInfoReply = { _, flags, _, errCod
 private final class DNSQueryContext {
     var sdRef: DNSServiceRef? = nil
     var cidrs: [String] = []
+    /// Address families (AF_INET/AF_INET6) that answered NoSuchRecord.
+    var negativeFamilies: Set<Int32> = []
     var minTTL: UInt32 = UInt32.max
     var timeoutWork: DispatchWorkItem?
     private(set) var done = false

@@ -42,8 +42,10 @@ fi
 
 echo ""
 echo "=== System Extensions ==="
+sysex_found=0
 for ext in "$APP"/Contents/Library/SystemExtensions/*.systemextension; do
   [[ -d "$ext" ]] || continue
+  sysex_found=1
   name="$(basename "$ext")"
   ext_sig="$(codesign -dvv "$ext" 2>&1 || true)"
   ext_auth="$(printf '%s\n' "$ext_sig" | awk -F= '/^Authority=/{print $2; exit}')"
@@ -61,6 +63,10 @@ for ext in "$APP"/Contents/Library/SystemExtensions/*.systemextension; do
     fi
   fi
 done
+if [[ $sysex_found -eq 0 ]]; then
+  echo "✗ No system extensions found in Contents/Library/SystemExtensions/"
+  fail=1
+fi
 
 echo ""
 echo "=== codesign --verify ==="
@@ -91,7 +97,10 @@ else
 fi
 
 echo ""
-if stapler validate "$APP" 2>&1 | grep -q "stapled"; then
+# stapler validate exits 0 (and prints "The validate action worked!") when a ticket
+# is stapled; on failure it prints "...does not have a ticket stapled to it".
+# Key on the exit code — grepping for "stapled" matched the FAILURE message.
+if stapler validate "$APP" >/dev/null 2>&1; then
   echo "✓ Notarization ticket stapled"
 else
   echo "⚠ No stapled notarization ticket"

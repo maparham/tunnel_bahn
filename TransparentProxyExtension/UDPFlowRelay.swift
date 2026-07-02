@@ -87,11 +87,16 @@ final class UDPFlowRelay {
                 self.finishSuccessfully()
                 return
             }
-            for (datagram, legacyEndpoint) in zip(datagrams, endpoints) {
-                guard let hostEndpoint = legacyEndpoint as? NWHostEndpoint else { continue }
-                self.send(datagram: datagram, to: hostEndpoint)
-            }
+            // Hop to `queue` before touching the connection dictionaries. `send` mutates
+            // relayConns/nwConnections/legacyEndpoints, but `readDatagrams` delivers on the NE flow's
+            // callback queue — not `queue` — so doing it inline raced the receive/teardown paths and
+            // corrupted the dictionaries (the SIGSEGV in `scheduleDirectTeardown` →
+            // `removeValue(forKey:)`). Serialize all dictionary access onto `queue`.
             self.queue.async {
+                for (datagram, legacyEndpoint) in zip(datagrams, endpoints) {
+                    guard let hostEndpoint = legacyEndpoint as? NWHostEndpoint else { continue }
+                    self.send(datagram: datagram, to: hostEndpoint)
+                }
                 self.relayAppToRemote()
             }
         }
@@ -120,20 +125,24 @@ final class UDPFlowRelay {
             guard let conn = makeTunnelConnection(to: legacyEndpoint) else { return }
             relayConns[key] = conn
             startTunnelReadLoop(on: conn, key: key)
-            conn.start(queue: queue) { [weak self] (isReady: Bool, error: Error?) in
+            conn.start(queue: queue) { [weak self, weak conn] (isReady: Bool, error: Error?) in
                 guard let self else { return }
                 if !isReady {
                     Self.log.debug("UDP tunnel conn failed for key=\(key): \(error?.localizedDescription ?? "cancelled")")
-                    self.relayConns.removeValue(forKey: key)
-                    self.legacyEndpoints.removeValue(forKey: key)
+                    self.scheduleTunnelTeardown(key: key, connection: conn)
                 }
             }
         }
         onTx(UInt64(datagram.count))
-        relayConns[key]?.sendData(datagram) { [weak self] (error: Error?) in
+        guard let conn = relayConns[key] else { return }
+        conn.sendData(datagram) { [weak self, weak conn] (error: Error?) in
             if let error {
+                // One dead destination must not kill the whole flow — a UDP flow multiplexes
+                // many remotes (e.g. a racing resolver, where one ICMP-unreachable DNS server
+                // would take down all the others). Tear down just this destination's
+                // connection; the flow only finishes when the flow itself dies.
                 Self.log.debug("UDP tunnel send error: \(error.localizedDescription)")
-                self?.finishDueToFailure(underlying: error)
+                self?.scheduleTunnelTeardown(key: key, connection: conn)
             }
         }
     }
@@ -176,13 +185,11 @@ final class UDPFlowRelay {
             }
             if let error {
                 Self.log.debug("UDP tunnel receive error: \(error.localizedDescription)")
-                self.relayConns.removeValue(forKey: key)
-                self.legacyEndpoints.removeValue(forKey: key)
+                self.scheduleTunnelTeardown(key: key, connection: conn)
                 return
             }
             if isComplete {
-                self.relayConns.removeValue(forKey: key)
-                self.legacyEndpoints.removeValue(forKey: key)
+                self.scheduleTunnelTeardown(key: key, connection: conn)
                 return
             }
             self.startTunnelReadLoop(on: conn, key: key)
@@ -198,11 +205,15 @@ final class UDPFlowRelay {
             startDirectReadLoop(on: conn, key: key)
             conn.start(queue: queue)
         }
-        onTx(UInt64(datagram.count))
-        nwConnections[key]?.send(content: datagram, completion: .contentProcessed { [weak self] error in
+        // Direct path bytes never traversed the WireGuard tunnel (this datagram went to a
+        // local/private dest, e.g. the system DNS resolver), so they must NOT be added to the
+        // per-app tunnel accounting — mirrors TCPFlowRelay.countTx gating on routeThroughTunnel.
+        guard let conn = nwConnections[key] else { return }
+        conn.send(content: datagram, completion: .contentProcessed { [weak self, weak conn] error in
             if let error {
+                // Per-destination failure only — see the matching note in sendViaTunnel.
                 Self.log.debug("UDP direct send error: \(error.localizedDescription)")
-                self?.finishDueToFailure(underlying: error)
+                self?.scheduleDirectTeardown(key: key, connection: conn)
             }
         })
     }
@@ -233,7 +244,8 @@ final class UDPFlowRelay {
         connection.receiveMessage { [weak self] data, _, isComplete, error in
             guard let self else { return }
             if let data, !data.isEmpty, let legacy = self.legacyEndpoints[key] {
-                self.onRx(UInt64(data.count))
+                // Direct-path receive bytes did not traverse the tunnel — do not count them into
+                // per-app tunnel accounting (see the matching note in sendViaDirect).
                 self.flow.writeDatagrams([data], sentBy: [legacy]) { writeError in
                     if let writeError {
                         Self.log.debug("UDP writeDatagrams error: \(writeError.localizedDescription)")
@@ -264,6 +276,19 @@ final class UDPFlowRelay {
             connection.stateUpdateHandler = nil
             connection.cancel()
             self.nwConnections.removeValue(forKey: key)
+            self.legacyEndpoints.removeValue(forKey: key)
+        }
+    }
+
+    /// Tunnel-path counterpart of `scheduleDirectTeardown`: same deferred hop to `queue` (never
+    /// drop the connection's last reference inside its own callback), same identity check for
+    /// idempotence. Cancels before dropping — the previous bare `removeValue` leaked the
+    /// connection's internal resources.
+    private func scheduleTunnelTeardown(key: String, connection: RelayOutboundConnection?) {
+        queue.async { [weak self] in
+            guard let self, let connection, self.relayConns[key] === connection else { return }
+            connection.cancel()
+            self.relayConns.removeValue(forKey: key)
             self.legacyEndpoints.removeValue(forKey: key)
         }
     }
@@ -312,15 +337,21 @@ final class UDPFlowRelay {
     }
 
     private func cancelAll() {
-        for conn in relayConns.values { conn.cancel() }
-        relayConns.removeAll(keepingCapacity: false)
-        for conn in nwConnections.values {
-            // Clear the handler first so the .cancelled transition can't re-enter
-            // teardown while we're dropping the reference here.
-            conn.stateUpdateHandler = nil
-            conn.cancel()
+        // Serialize onto `queue` with all other connection-dictionary access. `finish*` (and thus
+        // `cancelAll`) is also invoked from NE flow callbacks, so mutating these dicts inline raced
+        // `removeValue` running on `queue` and corrupted them. Strong `self` so the connections are
+        // still cancelled even if this async holds the last reference.
+        queue.async {
+            for conn in self.relayConns.values { conn.cancel() }
+            self.relayConns.removeAll(keepingCapacity: false)
+            for conn in self.nwConnections.values {
+                // Clear the handler first so the .cancelled transition can't re-enter
+                // teardown while we're dropping the reference here.
+                conn.stateUpdateHandler = nil
+                conn.cancel()
+            }
+            self.nwConnections.removeAll(keepingCapacity: false)
+            self.legacyEndpoints.removeAll(keepingCapacity: false)
         }
-        nwConnections.removeAll(keepingCapacity: false)
-        legacyEndpoints.removeAll(keepingCapacity: false)
     }
 }

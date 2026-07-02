@@ -139,13 +139,18 @@ struct ProfileListView: NSViewRepresentable {
 
         let newIDs = profiles.map(\.id)
         let newNames = profiles.map(\.name)
+        // Rows render the first peer's endpoint, so it must be part of the reload
+        // signature or an endpoint edit leaves the row stale.
+        let newEndpoints = profiles.map { $0.peers.first?.endpoint }
 
         if context.coordinator.profileIDs != newIDs
             || context.coordinator.profileNames != newNames
+            || context.coordinator.profileEndpoints != newEndpoints
             || context.coordinator.connectedProfileID != connectedProfileID
             || context.coordinator.isBusy != isBusy {
             context.coordinator.profileIDs = newIDs
             context.coordinator.profileNames = newNames
+            context.coordinator.profileEndpoints = newEndpoints
             context.coordinator.connectedProfileID = connectedProfileID
             context.coordinator.isBusy = isBusy
             context.coordinator.cachedViews = profiles.map { rowContent($0) }
@@ -169,6 +174,7 @@ struct ProfileListView: NSViewRepresentable {
         var cachedViews: [NSView] = []
         var profileIDs: [UUID] = []
         var profileNames: [String] = []
+        var profileEndpoints: [String?] = []
         var connectedProfileID: UUID? = nil
         var isBusy: Bool = false
 

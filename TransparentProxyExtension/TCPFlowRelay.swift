@@ -3,17 +3,20 @@ import Network
 import NetworkExtension
 import os.log
 
-/// Bidirectional TCP relay between an `NEAppProxyTCPFlow` (the intercepted app side) and an
-/// `NWConnection` (the actual destination). Counts payload bytes in both directions and
-/// reports them through the supplied closures.
+/// Bidirectional TCP relay between an `NEAppProxyTCPFlow` and the real destination.
 ///
-/// Lifecycle:
-/// - `start()` opens the proxy flow and the outbound `NWConnection` in parallel.
-/// - When the connection is `.ready`, both relay loops are started.
-/// - On success (e.g. TCP FIN from peer), closes the app flow with `nil` (clean EOF).
-/// - On relay failure, closes with a non-nil error so teardown is not mistaken for a graceful handoff.
+/// Two outbound paths:
+/// - `routeThroughTunnel == true`: relay over the UDS link to the packet-tunnel ext,
+///   where smoltcp + BoringTun deliver the bytes through the WireGuard utun. Used when
+///   destination filtering is on (the in-CIDR subset).
+/// - `routeThroughTunnel == false`: outbound is an `RelayOutboundConnection` (Network
+///   framework via the ObjC bridge) which calls `-[NEAppProxyFlow setMetadata:]` on the
+///   `nw_parameters_t`. That propagates the source app's identity onto the new socket,
+///   so the per-app VPN's NEAppRules apply to the outbound connection. Without that,
+///   the socket inherits the proxy extension's identity and exits via the default
+///   route (en0), bypassing utun entirely — that was the S3 regression.
 final class TCPFlowRelay {
-    private static let log = Logger(
+    private static let log = AppLog(
         subsystem: "com.tunnelbahn.mac.transparentproxy",
         category: "TCPRelay"
     )
@@ -24,74 +27,423 @@ final class TCPFlowRelay {
         userInfo: [NSLocalizedDescriptionKey: "Relay to destination failed"]
     )
 
+    // Monotonic flowID source. The prior `ObjectIdentifier(self).hashValue` exposed Swift's
+    // pointer reuse: a deallocated TCPFlowRelay's address could be recycled by a newly
+    // allocated one and collide with a stale entry in the tunnel-side relay bridge.
+    private static let flowIDLock = NSLock()
+    private static var nextFlowID: UInt64 = 1
+    private static func allocateFlowID() -> UInt64 {
+        flowIDLock.lock()
+        defer { flowIDLock.unlock() }
+        let id = nextFlowID
+        nextFlowID &+= 1
+        return id
+    }
+
     private let flow: NEAppProxyTCPFlow
     private let signingID: String
+    /// Final outbound path. A `let` for the legacy (no-peek) callers; mutated once by the SNI peek
+    /// before any outbound connection is made.
+    private var routeThroughTunnel: Bool
+    private let tunnelInterfaceName: String?
+    private let queue: DispatchQueue
     private let onTx: (UInt64) -> Void
     private let onRx: (UInt64) -> Void
     private let onClose: () -> Void
+    /// When set, the relay opens the flow, peeks the first app→remote chunk (the TLS ClientHello),
+    /// and calls this to decide tunnel (`true`) vs direct/en0 (`false`) BEFORE connecting outbound.
+    /// nil = legacy behavior: route per the `routeThroughTunnel` passed at init, no peek.
+    private let routeDecider: ((Data) -> Bool)?
 
-    private let queue: DispatchQueue
-    private var connection: NWConnection?
+    private var directRelay: RelayOutboundConnection?
+    private var xpcFlowID: UInt64?
+    /// Guards the one-shot `didCloseOnce` test-and-set. Finish paths fire from multiple queues —
+    /// the NE flow's internal callback queue (`flow.readData`/`flow.write`), the relay client's
+    /// `onClose` queue, and `flowQueue` — so an unguarded read-modify-write let two of them both
+    /// observe `false`, both proceed, and double-close the flow (UB per NE) plus double-invoke
+    /// `onClose`. Held only for the test-and-set, never across the close calls themselves.
+    private let closeLock = NSLock()
     private var didCloseOnce = false
+    /// First app→remote chunk captured during the SNI peek. Replayed to the chosen outbound before
+    /// the normal read loop resumes, so the server still receives the original ClientHello.
+    private var pendingFirstChunk: Data?
 
     init(
         flow: NEAppProxyTCPFlow,
         signingID: String,
+        routeThroughTunnel: Bool,
+        tunnelInterfaceName: String?,
         queue: DispatchQueue,
+        routeDecider: ((Data) -> Bool)? = nil,
         onTx: @escaping (UInt64) -> Void,
         onRx: @escaping (UInt64) -> Void,
         onClose: @escaping () -> Void
     ) {
         self.flow = flow
         self.signingID = signingID
+        self.routeThroughTunnel = routeThroughTunnel
+        self.tunnelInterfaceName = tunnelInterfaceName
         self.queue = queue
+        self.routeDecider = routeDecider
         self.onTx = onTx
         self.onRx = onRx
         self.onClose = onClose
     }
 
+    /// Byte counters fire only for tunneled flows — direct/en0 (bypass) bytes never traversed the
+    /// VPN, so counting them would inflate the per-app tunnel stats.
+    private func countTx(_ n: UInt64) { if routeThroughTunnel { onTx(n) } }
+    private func countRx(_ n: UInt64) { if routeThroughTunnel { onRx(n) } }
+
     func start() {
-        guard let hostEndpoint = flow.remoteEndpoint as? NWHostEndpoint,
-              let endpoint = EndpointBridge.modernize(hostEndpoint)
-        else {
+        guard let hostEndpoint = flow.remoteEndpoint as? NWHostEndpoint else {
             Self.log.error("TCP flow has unsupported remoteEndpoint; dropping")
             finishDueToFailure()
             return
         }
 
-        Self.log.notice("TCP start signingID=\(self.signingID, privacy: .public) remote=\(String(describing: endpoint), privacy: .public)")
-        let params = NWParameters.tcp
-        let conn = NWConnection(to: endpoint, using: params)
-        connection = conn
-        conn.stateUpdateHandler = { [weak self] (state: NWConnection.State) in
-            guard let self else { return }
-            switch state {
-            case .ready:
-                Self.log.notice("TCP NWConnection ready signingID=\(self.signingID, privacy: .public)")
-                self.openProxyFlowAndStartRelay()
-            case let .failed(error):
-                Self.log.error("TCP NWConnection failed: \(error.localizedDescription, privacy: .public)")
-                self.finishDueToFailure(underlying: error)
-            case .cancelled:
-                self.finishDueToFailure()
-            case .waiting(let error):
-                Self.log.notice("TCP NWConnection waiting: \(error.localizedDescription, privacy: .public)")
-            default:
-                break
-            }
+        if routeDecider != nil {
+            Self.log.debug(
+                "TCP start signingID=\(self.signingID) mode=peek remote=\(hostEndpoint.hostname):\(hostEndpoint.port)"
+            )
+            startWithPeek(to: hostEndpoint)
+            return
         }
-        conn.start(queue: queue)
+
+        if routeThroughTunnel {
+            Self.log.notice(
+                "TCP start signingID=\(self.signingID) mode=tunnel remote=\(hostEndpoint.hostname):\(hostEndpoint.port) iface=\(self.tunnelInterfaceName ?? "nil")"
+            )
+            startTunnelConnection(to: hostEndpoint)
+            return
+        }
+
+        Self.log.notice(
+            "TCP start signingID=\(self.signingID) mode=direct remote=\(hostEndpoint.hostname):\(hostEndpoint.port) iface=\(self.tunnelInterfaceName ?? "nil")"
+        )
+        startDirectConnection(to: hostEndpoint)
     }
 
-    private func openProxyFlowAndStartRelay() {
+    // MARK: - SNI peek (decide route from the TLS ClientHello, then connect)
+
+    /// Open the flow first (so the app sends its ClientHello), read that first chunk, run the
+    /// decider, then connect the chosen outbound and replay the chunk. Inverts the normal
+    /// connect-then-open order, which is why it needs its own send-pending helpers below.
+    private func startWithPeek(to endpoint: NWHostEndpoint) {
         flow.open(withLocalEndpoint: nil) { [weak self] error in
             guard let self else { return }
             if let error {
-                Self.log.error("flow.open failed: \(error.localizedDescription, privacy: .public)")
+                Self.log.error("peek flow.open failed: \(error.localizedDescription)")
                 self.finishDueToFailure(underlying: error)
                 return
             }
-            Self.log.notice("TCP flow.open succeeded signingID=\(self.signingID, privacy: .public)")
+            self.queue.async { self.peekFirstChunk(endpoint: endpoint) }
+        }
+    }
+
+    private func peekFirstChunk(endpoint: NWHostEndpoint) {
+        flow.readData { [weak self] data, error in
+            guard let self else { return }
+            if let error {
+                Self.log.debug("peek readData error: \(error.localizedDescription)")
+                self.finishDueToFailure(underlying: error)
+                return
+            }
+            guard let data, !data.isEmpty else {
+                Self.log.debug("peek readData empty (EOF) signingID=\(self.signingID)")
+                self.finishSuccessfully()
+                return
+            }
+            self.pendingFirstChunk = data
+            let tunnel = self.routeDecider?(data) ?? true
+            self.routeThroughTunnel = tunnel
+            self.countTx(UInt64(data.count))
+            Self.log.debug(
+                "TCP peek route signingID=\(self.signingID) tunnel=\(tunnel) firstLen=\(data.count) remote=\(endpoint.hostname):\(endpoint.port)"
+            )
+            if tunnel {
+                self.connectTunnelAfterPeek(to: endpoint)
+            } else {
+                self.connectDirectAfterPeek(to: endpoint)
+            }
+        }
+    }
+
+    private func connectTunnelAfterPeek(to endpoint: NWHostEndpoint) {
+        let flowID = Self.allocateFlowID()
+        xpcFlowID = flowID
+        guard let port = UInt16(endpoint.port) else {
+            Self.log.error("peek TCP invalid remote port signingID=\(self.signingID)")
+            finishDueToFailure()
+            return
+        }
+        TransparentProxyRelayClient.shared.openFlow(
+            flowID: flowID,
+            remoteHost: endpoint.hostname,
+            remotePort: port,
+            isTCP: true,
+            onReceive: { [weak self] data in self?.handleXPCPayload(data) },
+            onClose: { [weak self] error in
+                if let error {
+                    Self.log.debug("peek XPC flow closed: \(error)")
+                    self?.finishDueToFailure()
+                } else {
+                    self?.finishSuccessfully()
+                }
+            }
+        ) { [weak self] ok in
+            guard let self else { return }
+            guard ok else {
+                Self.log.error("peek TCP XPC open failed signingID=\(self.signingID)")
+                self.finishDueToFailure()
+                return
+            }
+            // Flow is already open; replay the buffered ClientHello, then resume the read loop.
+            self.queue.async { self.sendPendingThenRelayXPC() }
+        }
+    }
+
+    private func sendPendingThenRelayXPC() {
+        guard let flowID = xpcFlowID else { finishDueToFailure(); return }
+        guard let first = pendingFirstChunk else { relayAppToRemoteXPC(); return }
+        pendingFirstChunk = nil
+        TransparentProxyRelayClient.shared.sendPayload(flowID: flowID, data: first) { [weak self] ok in
+            guard let self else { return }
+            if !ok {
+                Self.log.debug("peek XPC send(first) failed signingID=\(self.signingID)")
+                self.finishDueToFailure()
+                return
+            }
+            self.relayAppToRemoteXPC()
+        }
+    }
+
+    private func connectDirectAfterPeek(to endpoint: NWHostEndpoint) {
+        let relay: RelayOutboundConnection? = endpoint.hostname.withCString { hostCStr in
+            endpoint.port.withCString { portCStr in
+                RelayOutboundConnection.makeConnection(
+                    flow: flow,
+                    hostname: hostCStr,
+                    port: portCStr,
+                    isTCP: true,
+                    interfaceName: nil
+                )
+            }
+        }
+        guard let relay else {
+            Self.log.error("peek TCP RelayOutboundConnection nil signingID=\(self.signingID) remote=\(endpoint.hostname):\(endpoint.port)")
+            finishDueToFailure()
+            return
+        }
+        directRelay = relay
+        relay.start(queue: queue) { [weak self] isReady, error in
+            guard let self else { return }
+            if isReady {
+                Self.log.debug("peek TCP direct ready signingID=\(self.signingID)")
+                self.sendPendingThenRelayDirect()
+                return
+            }
+            if let error {
+                Self.log.error("peek TCP direct failed: \(error.localizedDescription) signingID=\(self.signingID)")
+                self.finishDueToFailure(underlying: error)
+            } else {
+                self.finishDueToFailure()
+            }
+        }
+    }
+
+    private func sendPendingThenRelayDirect() {
+        guard let relay = directRelay else { finishDueToFailure(); return }
+        guard let first = pendingFirstChunk else {
+            relayAppToRemote()
+            relayRemoteToApp()
+            return
+        }
+        pendingFirstChunk = nil
+        relay.sendData(first) { [weak self] (writeError: Error?) in
+            guard let self else { return }
+            if let writeError {
+                Self.log.debug("peek direct send(first) error: \(writeError.localizedDescription)")
+                self.finishDueToFailure(underlying: writeError)
+                return
+            }
+            self.relayAppToRemote()
+            self.relayRemoteToApp()
+        }
+    }
+
+    // MARK: - Tunnel path (XPC → packet-tunnel smoltcp → BoringTun)
+
+    private func startTunnelConnection(to endpoint: NWHostEndpoint) {
+        let flowID = Self.allocateFlowID()
+        xpcFlowID = flowID
+        guard let port = UInt16(endpoint.port) else {
+            Self.log.error("TCP invalid remote port signingID=\(self.signingID)")
+            finishDueToFailure()
+            return
+        }
+        TransparentProxyRelayClient.shared.openFlow(
+            flowID: flowID,
+            remoteHost: endpoint.hostname,
+            remotePort: port,
+            isTCP: true,
+            onReceive: { [weak self] data in
+                self?.handleXPCPayload(data)
+            },
+            onClose: { [weak self] error in
+                if let error {
+                    Self.log.debug("XPC flow closed: \(error)")
+                    self?.finishDueToFailure()
+                } else {
+                    self?.finishSuccessfully()
+                }
+            }
+        ) { [weak self] ok in
+            guard let self else { return }
+            if ok {
+                Self.log.notice("TCP XPC relay open signingID=\(self.signingID)")
+                self.openProxyFlowAndStartRelayXPC()
+            } else {
+                // FAIL CLOSED (P3, window a): the relay/tunnel is unavailable (now bounded by the
+                // client's open-reply watchdog, so this fires fast instead of hanging). We close the
+                // flow with an error — we must NEVER fall back to a direct/en0 connection here, as
+                // that would silently egress a routed app's traffic on the real ISP IP (the leak).
+                Self.log.error("TCP XPC relay open failed signingID=\(self.signingID) — failing closed")
+                self.finishDueToFailure()
+            }
+        }
+    }
+
+    private func openProxyFlowAndStartRelayXPC() {
+        flow.open(withLocalEndpoint: nil) { [weak self] error in
+            guard let self else { return }
+            if let error {
+                Self.log.error("flow.open failed: \(error.localizedDescription)")
+                self.finishDueToFailure(underlying: error)
+                return
+            }
+            Self.log.notice("TCP flow.open succeeded signingID=\(self.signingID)")
+            self.queue.async {
+                self.relayAppToRemoteXPC()
+            }
+        }
+    }
+
+    private func relayAppToRemoteXPC() {
+        flow.readData { [weak self] data, error in
+            guard let self else { return }
+            if let error {
+                Self.log.debug("flow.readData error: \(error.localizedDescription)")
+                self.finishDueToFailure(underlying: error)
+                return
+            }
+            guard let data, !data.isEmpty else {
+                Self.log.debug("flow.readData empty (EOF?) signingID=\(self.signingID)")
+                // The relay protocol has no half-close, so app-side EOF finishes the whole flow
+                // (a SHUT_WR-then-read client loses the response — already true when this sent a
+                // bare closeFlow). The bare closeFlow also unregistered the client handlers, so
+                // the server's later flowClosedPush found none: the flow never closed, `onClose`
+                // never fired, and the relay leaked in activeRelays. `finishSuccessfully` both
+                // sends closeFlow and performs the local finish.
+                self.finishSuccessfully()
+                return
+            }
+            self.countTx(UInt64(data.count))
+            guard let flowID = self.xpcFlowID else {
+                self.finishDueToFailure()
+                return
+            }
+            TransparentProxyRelayClient.shared.sendPayload(flowID: flowID, data: data) { [weak self] ok in
+                guard let self else { return }
+                if !ok {
+                    Self.log.debug("XPC send failed signingID=\(self.signingID)")
+                    self.finishDueToFailure()
+                    return
+                }
+                Self.log.debug(
+                    "[APPSPLIT_RELAY] XPC bridge: sent payload to packet-tunnel for relay len=\(data.count)"
+                )
+                self.relayAppToRemoteXPC()
+            }
+        }
+    }
+
+    private func handleXPCPayload(_ data: Data) {
+        queue.async { [weak self] in
+            guard let self, !data.isEmpty else { return }
+            self.countRx(UInt64(data.count))
+            Self.log.debug(
+                "[APPSPLIT_RELAY] XPC bridge: received reply, wrote to flow len=\(data.count)"
+            )
+            self.flow.write(data) { [weak self] writeError in
+                guard let self else { return }
+                if let writeError {
+                    Self.log.debug("flow.write error: \(writeError.localizedDescription)")
+                    self.finishDueToFailure(underlying: writeError)
+                }
+            }
+        }
+    }
+
+    // MARK: - Direct path (RelayOutboundConnection with source-app metadata)
+
+    private func startDirectConnection(to endpoint: NWHostEndpoint) {
+        // Fallback path. Explicit `nw_parameters_require_interface(utun)` is rejected
+        // by NECP policy ("Path was denied by NECP policy, interface: utun4") when the
+        // socket originates from this extension's process, even after `setMetadata`
+        // re-attributes it to the routed source app. Empirically `setMetadata` alone
+        // also fails to redirect the socket onto utun — it exits via en0.
+        //
+        // The reliable VPN-routed path is the UDS+smoltcp tunnel relay
+        // (`startTunnelConnection`), used whenever the proxy intercepts a flow we want
+        // exiting via WireGuard. This branch remains as a no-binding accounting fallback
+        // for any future shape where we genuinely want OS-default routing.
+        let relay: RelayOutboundConnection? = endpoint.hostname.withCString { hostCStr in
+            endpoint.port.withCString { portCStr in
+                RelayOutboundConnection.makeConnection(
+                    flow: flow,
+                    hostname: hostCStr,
+                    port: portCStr,
+                    isTCP: true,
+                    interfaceName: nil
+                )
+            }
+        }
+        guard let relay else {
+            Self.log.error(
+                "TCP RelayOutboundConnection nil signingID=\(self.signingID) remote=\(endpoint.hostname):\(endpoint.port)"
+            )
+            finishDueToFailure()
+            return
+        }
+        directRelay = relay
+        relay.start(queue: queue) { [weak self] isReady, error in
+            guard let self else { return }
+            if isReady {
+                Self.log.notice("TCP RelayOutboundConnection ready signingID=\(self.signingID)")
+                self.openProxyFlowAndStartRelayDirect()
+                return
+            }
+            if let error {
+                Self.log.error(
+                    "TCP RelayOutboundConnection failed: \(error.localizedDescription) signingID=\(self.signingID)"
+                )
+                self.finishDueToFailure(underlying: error)
+            } else {
+                self.finishDueToFailure()
+            }
+        }
+    }
+
+    private func openProxyFlowAndStartRelayDirect() {
+        flow.open(withLocalEndpoint: nil) { [weak self] error in
+            guard let self else { return }
+            if let error {
+                Self.log.error("flow.open failed: \(error.localizedDescription)")
+                self.finishDueToFailure(underlying: error)
+                return
+            }
+            Self.log.notice("TCP flow.open succeeded signingID=\(self.signingID)")
             self.queue.async {
                 self.relayAppToRemote()
                 self.relayRemoteToApp()
@@ -103,46 +455,47 @@ final class TCPFlowRelay {
         flow.readData { [weak self] data, error in
             guard let self else { return }
             if let error {
-                Self.log.debug("flow.readData error: \(error.localizedDescription, privacy: .public)")
+                Self.log.debug("flow.readData error: \(error.localizedDescription)")
                 self.finishDueToFailure(underlying: error)
                 return
             }
             guard let data, !data.isEmpty else {
-                Self.log.debug("flow.readData empty (EOF?) signingID=\(self.signingID, privacy: .public)")
-                self.connection?.send(content: nil, isComplete: true, completion: .idempotent)
+                Self.log.debug("flow.readData empty (EOF?) signingID=\(self.signingID)")
+                self.signalRemoteEOF()
                 return
             }
-            self.onTx(UInt64(data.count))
-            self.connection?.send(
-                content: data,
-                completion: .contentProcessed { [weak self] sendError in
-                    guard let self else { return }
-                    if let sendError {
-                        Self.log.debug("NWConnection.send error: \(sendError.localizedDescription, privacy: .public)")
-                        self.finishDueToFailure(underlying: sendError)
-                        return
-                    }
-                    self.relayAppToRemote()
+            self.countTx(UInt64(data.count))
+            guard let relay = self.directRelay else {
+                self.finishDueToFailure()
+                return
+            }
+            relay.sendData(data) { [weak self] (writeError: Error?) in
+                guard let self else { return }
+                if let writeError {
+                    Self.log.debug("remote write error: \(writeError.localizedDescription)")
+                    self.finishDueToFailure(underlying: writeError)
+                    return
                 }
-            )
+                self.relayAppToRemote()
+            }
         }
     }
 
     private func relayRemoteToApp() {
-        connection?.receive(minimumIncompleteLength: 1, maximumLength: 65_536) {
-            [weak self] data, _, isComplete, error in
+        guard let relay = directRelay else { return }
+        relay.receive(minLength: 1, maxLength: 65_536) { [weak self] (data: Data?, isComplete: Bool, error: Error?) in
             guard let self else { return }
             if let error {
-                Self.log.debug("NWConnection.receive error: \(error.localizedDescription, privacy: .public)")
+                Self.log.debug("remote read error: \(error.localizedDescription)")
                 self.finishDueToFailure(underlying: error)
                 return
             }
             if let data, !data.isEmpty {
-                self.onRx(UInt64(data.count))
+                self.countRx(UInt64(data.count))
                 self.flow.write(data) { [weak self] writeError in
                     guard let self else { return }
                     if let writeError {
-                        Self.log.debug("flow.write error: \(writeError.localizedDescription, privacy: .public)")
+                        Self.log.debug("flow.write error: \(writeError.localizedDescription)")
                         self.finishDueToFailure(underlying: writeError)
                         return
                     }
@@ -151,11 +504,17 @@ final class TCPFlowRelay {
                 return
             }
             if isComplete {
-                Self.log.debug("NWConnection.receive complete signingID=\(self.signingID, privacy: .public)")
+                Self.log.debug("remote read complete signingID=\(self.signingID)")
                 self.finishSuccessfully()
             }
         }
     }
+
+    private func signalRemoteEOF() {
+        directRelay?.signalEOF()
+    }
+
+    // MARK: - Lifecycle
 
     private func failureNSError(underlying: Error?) -> NSError {
         guard let underlying else { return Self.relayFailureError }
@@ -169,8 +528,9 @@ final class TCPFlowRelay {
         )
     }
 
-    /// Idempotent — multiple error paths can race here.
     private func takeFinishToken() -> Bool {
+        closeLock.lock()
+        defer { closeLock.unlock() }
         if didCloseOnce { return false }
         didCloseOnce = true
         return true
@@ -180,7 +540,12 @@ final class TCPFlowRelay {
         guard takeFinishToken() else { return }
         flow.closeReadWithError(nil)
         flow.closeWriteWithError(nil)
-        connection?.cancel()
+        if let flowID = xpcFlowID {
+            TransparentProxyRelayClient.shared.closeFlow(flowID: flowID)
+            xpcFlowID = nil
+        }
+        directRelay?.cancel()
+        directRelay = nil
         onClose()
     }
 
@@ -189,7 +554,89 @@ final class TCPFlowRelay {
         let err = failureNSError(underlying: underlying)
         flow.closeReadWithError(err)
         flow.closeWriteWithError(err)
-        connection?.cancel()
+        if let flowID = xpcFlowID {
+            TransparentProxyRelayClient.shared.closeFlow(flowID: flowID)
+            xpcFlowID = nil
+        }
+        directRelay?.cancel()
+        directRelay = nil
         onClose()
+    }
+}
+
+/// Minimal, bounds-checked TLS ClientHello SNI extractor. Pulls the server_name (host_name) from
+/// the first handshake record. Returns nil for non-TLS bytes, a fragmented/truncated ClientHello,
+/// or a ClientHello with no SNI extension — callers fall back to IP-based routing in those cases.
+/// Lowercased on success. ECH (encrypted ClientHello) will eventually hide this; out of scope.
+enum TLSClientHelloSNI {
+    static func serverName(from data: Data) -> String? {
+        let b = [UInt8](data)
+        let n = b.count
+        var p = 0
+
+        // TLS record header: content_type(1)=22 (handshake), version(2), length(2).
+        guard n >= 5, b[0] == 0x16 else { return nil }
+        p = 5
+        // Handshake header: msg_type(1)=1 (ClientHello), length(3).
+        guard p + 4 <= n, b[p] == 0x01 else { return nil }
+        let hsLen = Int(b[p + 1]) << 16 | Int(b[p + 2]) << 8 | Int(b[p + 3])
+        p += 4
+        // Tolerate a ClientHello whose declared length exceeds what we captured (TCP segmentation):
+        // clamp the parse window to the bytes actually present.
+        let hsEnd = Swift.min(p + hsLen, n)
+
+        // client_version(2) + random(32).
+        guard p + 34 <= hsEnd else { return nil }
+        p += 34
+        // session_id: len(1) + data.
+        guard p + 1 <= hsEnd else { return nil }
+        let sidLen = Int(b[p]); p += 1
+        guard p + sidLen <= hsEnd else { return nil }
+        p += sidLen
+        // cipher_suites: len(2) + data.
+        guard p + 2 <= hsEnd else { return nil }
+        let csLen = Int(b[p]) << 8 | Int(b[p + 1]); p += 2
+        guard p + csLen <= hsEnd else { return nil }
+        p += csLen
+        // compression_methods: len(1) + data.
+        guard p + 1 <= hsEnd else { return nil }
+        let cmLen = Int(b[p]); p += 1
+        guard p + cmLen <= hsEnd else { return nil }
+        p += cmLen
+        // extensions: len(2) + data.
+        guard p + 2 <= hsEnd else { return nil }
+        let extTotal = Int(b[p]) << 8 | Int(b[p + 1]); p += 2
+        let extEnd = Swift.min(p + extTotal, hsEnd)
+
+        while p + 4 <= extEnd {
+            let extType = Int(b[p]) << 8 | Int(b[p + 1])
+            let extLen = Int(b[p + 2]) << 8 | Int(b[p + 3])
+            p += 4
+            guard p + extLen <= extEnd else { return nil }
+            if extType == 0x0000 {  // server_name
+                return parseServerNameExtension(b, start: p, end: p + extLen)
+            }
+            p += extLen
+        }
+        return nil
+    }
+
+    private static func parseServerNameExtension(_ b: [UInt8], start: Int, end: Int) -> String? {
+        var p = start
+        // server_name_list: len(2).
+        guard p + 2 <= end else { return nil }
+        let listLen = Int(b[p]) << 8 | Int(b[p + 1]); p += 2
+        let listEnd = Swift.min(p + listLen, end)
+        while p + 3 <= listEnd {
+            let nameType = b[p]; p += 1
+            let nameLen = Int(b[p]) << 8 | Int(b[p + 1]); p += 2
+            guard p + nameLen <= listEnd else { return nil }
+            if nameType == 0x00 {  // host_name
+                let host = String(bytes: b[p ..< p + nameLen], encoding: .utf8)
+                return host?.lowercased()
+            }
+            p += nameLen
+        }
+        return nil
     }
 }

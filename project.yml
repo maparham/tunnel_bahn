@@ -12,6 +12,7 @@ settings:
     SWIFT_VERSION: 5.10
     CODE_SIGN_STYLE: Automatic
     DEVELOPMENT_TEAM: 92G3VZAPVG
+    ENABLE_HARDENED_RUNTIME: YES
 targets:
   TunnelBahn:
     type: application
@@ -32,9 +33,13 @@ targets:
       - target: TransparentProxyExtension
         embed: true
         codeSign: true
+    preBuildScripts:
+      - name: Generate BuildInfo (git stamp)
+        script: bash "${SRCROOT}/tools/gen-buildinfo.sh"
+        basedOnDependencyAnalysis: false
 
   PacketTunnelExtension:
-    type: app-extension
+    type: system-extension
     platform: macOS
     sources:
       - path: NetworkExtension
@@ -43,25 +48,35 @@ targets:
     settings:
       base:
         DEVELOPMENT_TEAM: 92G3VZAPVG
+        PRODUCT_NAME: com.tunnelbahn.mac.networkextension
         PRODUCT_BUNDLE_IDENTIFIER: com.tunnelbahn.mac.networkextension
         INFOPLIST_FILE: NetworkExtension/Info.plist
-        CODE_SIGN_ENTITLEMENTS: NetworkExtension/NetworkExtension.entitlements
         SWIFT_OBJC_BRIDGING_HEADER: NetworkExtension/PacketTunnelExtension-Bridging-Header.h
         LIBRARY_SEARCH_PATHS: $(inherited) $(SRCROOT)/Frameworks
         OTHER_LDFLAGS: $(inherited) -lboringtun_bridge
         ENABLE_USER_SCRIPT_SANDBOXING: NO
+      configs:
+        Debug:
+          CODE_SIGN_ENTITLEMENTS: NetworkExtension/NetworkExtension.debug.entitlements
+        Release:
+          CODE_SIGN_ENTITLEMENTS: NetworkExtension/NetworkExtension.entitlements
     preBuildScripts:
       - name: Build BoringTunBridge (universal)
         script: |
           set -euo pipefail
           export MACOSX_DEPLOYMENT_TARGET="${MACOSX_DEPLOYMENT_TARGET:-14.0}"
-          if [ ! -f "${SRCROOT}/Frameworks/libboringtun_bridge.a" ]; then
-            bash "${SRCROOT}/BoringTunBridge/build.sh"
-          fi
+          bash "${SRCROOT}/BoringTunBridge/build.sh"
+        basedOnDependencyAnalysis: false
+      - name: Generate BuildInfo (git stamp)
+        script: bash "${SRCROOT}/tools/gen-buildinfo.sh"
+        basedOnDependencyAnalysis: false
+    postBuildScripts:
+      - name: Auto-bump build number (force sysext redeploy)
+        script: bash "${SRCROOT}/tools/autobump-build-number.sh"
         basedOnDependencyAnalysis: false
 
   TransparentProxyExtension:
-    type: app-extension
+    type: system-extension
     platform: macOS
     sources:
       - path: TransparentProxyExtension
@@ -70,9 +85,24 @@ targets:
     settings:
       base:
         DEVELOPMENT_TEAM: 92G3VZAPVG
+        PRODUCT_NAME: com.tunnelbahn.mac.transparentproxy
         PRODUCT_BUNDLE_IDENTIFIER: com.tunnelbahn.mac.transparentproxy
         INFOPLIST_FILE: TransparentProxyExtension/Info.plist
-        CODE_SIGN_ENTITLEMENTS: TransparentProxyExtension/TransparentProxyExtension.entitlements
+        SWIFT_OBJC_BRIDGING_HEADER: TransparentProxyExtension/TransparentProxyExtension-Bridging-Header.h
+        ENABLE_USER_SCRIPT_SANDBOXING: NO
+      configs:
+        Debug:
+          CODE_SIGN_ENTITLEMENTS: TransparentProxyExtension/TransparentProxyExtension.debug.entitlements
+        Release:
+          CODE_SIGN_ENTITLEMENTS: TransparentProxyExtension/TransparentProxyExtension.entitlements
+    preBuildScripts:
+      - name: Generate BuildInfo (git stamp)
+        script: bash "${SRCROOT}/tools/gen-buildinfo.sh"
+        basedOnDependencyAnalysis: false
+    postBuildScripts:
+      - name: Auto-bump build number (force sysext redeploy)
+        script: bash "${SRCROOT}/tools/autobump-build-number.sh"
+        basedOnDependencyAnalysis: false
 schemes:
   TunnelBahn:
     build:
@@ -82,3 +112,5 @@ schemes:
         TransparentProxyExtension: all
     run:
       config: Debug
+      targets:
+        - TunnelBahn

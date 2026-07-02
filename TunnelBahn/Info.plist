@@ -4,14 +4,14 @@
 <dict>
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
+	<key>CFBundleDisplayName</key>
+	<string>TunnelBahn</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>
 	<string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
-	<key>CFBundleDisplayName</key>
-	<string>TunnelBahn</string>
 	<key>CFBundleName</key>
 	<string>TunnelBahn</string>
 	<key>CFBundlePackageType</key>
@@ -26,7 +26,21 @@
 	<string>14.0</string>
 	<key>NSSupportsAutomaticGraphicsSwitching</key>
 	<true/>
+	<key>NSSystemExtensionUsageDescription</key>
+	<string>TunnelBahn installs network extensions to establish VPN tunnels and monitor per-app traffic.
+</string>
 	<key>TunnelBahnKeychainAccessGroup</key>
 	<string>$(AppIdentifierPrefix)com.tunnelbahn.mac</string>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>com.tunnelbahn.mac</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>tunnelbahn</string>
+			</array>
+		</dict>
+	</array>
 </dict>
 </plist>

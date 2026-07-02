@@ -22,7 +22,7 @@ struct AppsView: View {
         AppConstants.isPerAppSplitTunnelEnabled && selectedCount > 0
     }
 
-    private var routingModeBinding: Binding<AppSettings.RoutingMode> {
+    private var routingModeBinding: Binding<RoutingMode> {
         Binding(
             get: { appState.settings.routingMode },
             set: { newMode in

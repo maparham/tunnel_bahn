@@ -126,9 +126,9 @@ final class DomainResolutionCoordinator {
         guard let ruleStore else { return }
         for rule in ruleStore.domainRules where rule.isEnabled {
             guard rule.isExpired() else { continue }
-            // Use merge semantics on TTL expiry: union new IPs into existing resolvedCidrs
-            // (capped at DestinationRuleStore.resolvedCidrCap per rule).
-            // Full replacement only happens when the user taps "Refresh resolved IPs".
+            // Use merge semantics on TTL expiry: union new IPs into existing resolvedCidrs and
+            // never evict (the set only grows for the session). Full replacement only happens when
+            // the user taps "Refresh resolved IPs".
             enqueueResolution(for: rule.id, domain: rule.domain)
         }
     }

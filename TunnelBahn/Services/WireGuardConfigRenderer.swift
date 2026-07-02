@@ -7,7 +7,7 @@ struct RenderedWireGuardConfig {
 }
 
 final class WireGuardConfigRenderer {
-    private static let log = Logger(subsystem: "com.tunnelbahn.mac", category: "WGConfigRenderer")
+    private static let log = AppLog(subsystem: "com.tunnelbahn.mac", category: "WGConfigRenderer")
     private let keychainService: KeychainService
     private let fileManager: FileManager
 
@@ -113,6 +113,6 @@ final class WireGuardConfigRenderer {
     }
 
     private func debugLog(_ message: String) {
-        Self.log.debug("\(message, privacy: .public)")
+        Self.log.debug("\(message)")
     }
 }

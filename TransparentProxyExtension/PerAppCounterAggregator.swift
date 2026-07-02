@@ -15,7 +15,7 @@ import os.log
 ///   `PerAppTransferStore.reset()` which clears the file but the in-memory totals here
 ///   reset on `stopProxy` because the provider instance is torn down.
 final class PerAppCounterAggregator {
-    private static let log = Logger(
+    private static let log = AppLog(
         subsystem: "com.tunnelbahn.mac.transparentproxy",
         category: "Aggregator"
     )
@@ -35,7 +35,7 @@ final class PerAppCounterAggregator {
         totals[signingID] = entry
 
         if didLogFirstByteFor.insert(signingID).inserted {
-            Self.log.notice("first bytes observed: signingID=\(signingID, privacy: .public) tx=\(entry.txBytes, privacy: .public) rx=\(entry.rxBytes, privacy: .public)")
+            Self.log.notice("first bytes observed: signingID=\(signingID) tx=\(entry.txBytes) rx=\(entry.rxBytes)")
         }
     }
 
@@ -49,7 +49,7 @@ final class PerAppCounterAggregator {
         totals[signingID] = entry
 
         if didLogFirstByteFor.insert(signingID).inserted {
-            Self.log.notice("first bytes observed: signingID=\(signingID, privacy: .public) tx=\(entry.txBytes, privacy: .public) rx=\(entry.rxBytes, privacy: .public)")
+            Self.log.notice("first bytes observed: signingID=\(signingID) tx=\(entry.txBytes) rx=\(entry.rxBytes)")
         }
     }
 
@@ -96,7 +96,7 @@ final class PerAppCounterAggregator {
         }
 
         for id in newUnknowns {
-            Self.log.notice("unknown signing identifier observed: \(id, privacy: .public)")
+            Self.log.notice("unknown signing identifier observed: \(id)")
         }
 
         return rolledUp

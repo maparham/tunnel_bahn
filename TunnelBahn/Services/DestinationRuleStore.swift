@@ -133,17 +133,25 @@ final class DestinationRuleStore: ObservableObject {
     ) {
         customRules = newCustomRules
         bulkGroups = newBulkGroups
-        // Carry over in-memory resolution state when domain IDs match.
+        // Domain rules live in two stores (this global store + the per-profile routing snapshot),
+        // and `replaceAll` runs on every connect/profile-load. Match the existing live rule by id OR
+        // domain and UNION the resolved IPs from both copies so an accumulated set is never lost when
+        // one source lags the other (never-remove). Without the union, applying a stale snapshot
+        // would shrink the enforced set below what the UI shows — the "displayed ≠ enforced" bug.
         domainRules = newDomainRules.map { incoming in
-            if let existing = domainRules.first(where: { $0.id == incoming.id }) {
-                var merged = incoming
-                merged.resolvedCidrs = existing.resolvedCidrs
-                merged.resolvedAt = existing.resolvedAt
-                merged.resolvedTTL = existing.resolvedTTL
-                merged.status = existing.status
-                return merged
+            guard let existing = domainRules.first(where: { $0.id == incoming.id || $0.domain == incoming.domain }) else {
+                return incoming
             }
-            return incoming
+            var merged = incoming
+            var combined = existing.resolvedCidrs
+            for cidr in incoming.resolvedCidrs where !combined.contains(cidr) {
+                combined.append(cidr)
+            }
+            merged.resolvedCidrs = combined
+            merged.resolvedAt = existing.resolvedAt ?? incoming.resolvedAt
+            merged.resolvedTTL = existing.resolvedTTL > 0 ? existing.resolvedTTL : incoming.resolvedTTL
+            merged.status = combined.isEmpty ? incoming.status : .resolved(cidrCount: combined.count)
+            return merged
         }
         save()
     }
@@ -194,22 +202,23 @@ final class DestinationRuleStore: ObservableObject {
 
     /// Maximum number of resolved CIDR strings kept per domain rule (merge path only).
     /// Older entries (head of list) are dropped first; newest-added entries survive.
-    static let resolvedCidrCap = 500
-
     func applyResolution(id: UUID, cidrs: [String], ttl: TimeInterval) {
         guard let index = domainRules.firstIndex(where: { $0.id == id }) else { return }
         var merged = domainRules[index].resolvedCidrs
         for cidr in cidrs where !merged.contains(cidr) {
             merged.append(cidr)
         }
-        // Enforce per-rule cap: keep the most recently added entries (tail of list).
-        if merged.count > Self.resolvedCidrCap {
-            merged = Array(merged.suffix(Self.resolvedCidrCap))
-        }
+        // Never evict: once an IP has resolved for a domain it stays in the enforced set for the
+        // rest of the session, even as the domain rotates to new IPs. A still-cached connection to
+        // an old IP keeps working, and reconnect re-applies the full accumulated set. The list may
+        // grow large — that's an accepted trade-off for never silently dropping a still-reachable
+        // destination. Only the explicit "Refresh resolved IPs" action (applyResolutionReplacing)
+        // resets the set.
         domainRules[index].resolvedCidrs = merged
         domainRules[index].resolvedAt = Date()
         domainRules[index].resolvedTTL = ttl
         domainRules[index].status = .resolved(cidrCount: merged.count)
+        save()  // persist so accumulated IPs survive app restarts (never-remove)
         objectWillChange.send()
     }
 
@@ -220,6 +229,7 @@ final class DestinationRuleStore: ObservableObject {
         domainRules[index].resolvedAt = Date()
         domainRules[index].resolvedTTL = ttl
         domainRules[index].status = .resolved(cidrCount: cidrs.count)
+        save()
         objectWillChange.send()
     }
 
@@ -308,11 +318,29 @@ final class DestinationRuleStore: ObservableObject {
         }
         if domainNamesEnabled {
             for rule in domainRules where rule.isEnabled {
-                guard case .resolved = rule.status else { continue }
+                // Include accumulated IPs regardless of transient status: a re-resolution in flight
+                // (.resolving) or a transient .failed must NOT drop already-known IPs from what's
+                // enforced (never-remove). Empty sets contribute nothing.
                 for cidr in rule.resolvedCidrs {
                     append(cidr)
                 }
             }
+        }
+        return out
+    }
+
+    /// Enabled domain rules' names (lowercased, deduped, order-preserving) for the proxy's SNI
+    /// matcher. Unlike the resolved IPs in `enabledFlattenedCidrs`, these are the *names* — the
+    /// proxy compares them against each TCP flow's TLS SNI to route by hostname.
+    /// `domainNamesEnabled` mirrors the same section toggle used by `enabledFlattenedCidrs`.
+    func enabledDomainNames(domainNamesEnabled: Bool = true) -> [String] {
+        guard domainNamesEnabled else { return [] }
+        var seen = Set<String>()
+        var out: [String] = []
+        for rule in domainRules where rule.isEnabled {
+            let name = rule.domain.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            guard !name.isEmpty, seen.insert(name).inserted else { continue }
+            out.append(name)
         }
         return out
     }

@@ -5,7 +5,7 @@ import SwiftUI
 
 @MainActor
 final class MenuBarController: NSObject, ObservableObject, NSMenuDelegate {
-    private static let menuBarLog = Logger(subsystem: "com.tunnelbahn.mac", category: "MenuBar")
+    private static let menuBarLog = AppLog(subsystem: "com.tunnelbahn.mac", category: "MenuBar")
     private enum RoutingModeMenuTag: Int {
         case fullTunnel = 40_001
         case appTunnel = 40_002
@@ -24,9 +24,15 @@ final class MenuBarController: NSObject, ObservableObject, NSMenuDelegate {
     private var connectProfileHandler: ((UUID) -> Void)?
     private var disconnectHandler: (() -> Void)?
     private var openHandler: (() -> Void)?
-    private var selectRoutingModeHandler: ((AppSettings.RoutingMode) -> Void)?
+    private var selectRoutingModeHandler: ((RoutingMode) -> Void)?
     private var menuRefreshTimer: Timer?
     private var isMenuOpen = false
+
+    /// Signature of the last menu built while closed. A closed menu is invisible, so we only pay for
+    /// a full `buildMenu()` when something that actually changes what the menu WILL show on next open
+    /// has changed. Excludes live rx/tx rates (cosmetic; refreshed via `refreshLiveRatesItem` on open
+    /// and the 0.5s timer). See P2.11/P2.12. `nil` forces a rebuild on the next closed refresh.
+    private var lastClosedMenuSignature: String?
     private weak var tunnelRatesMenuItem: NSMenuItem?
     private var currentState: VPNConnectionState = .disconnected
     private var currentEndpoint: String?
@@ -39,7 +45,7 @@ final class MenuBarController: NSObject, ObservableObject, NSMenuDelegate {
     private var selectedProfileID: UUID?
     private var activeProfileID: UUID?
     private var isBusy = false
-    private var routingMode: AppSettings.RoutingMode = .fullTunnel
+    private var routingMode: RoutingMode = .fullTunnel
     private var canEnableAppTunnelRouting = false
     private var enforceDestinationFiltering = false
     private var vpnShowsAsOn = false
@@ -55,7 +61,7 @@ final class MenuBarController: NSObject, ObservableObject, NSMenuDelegate {
         onConnectProfile: @escaping (UUID) -> Void,
         onDisconnect: @escaping () -> Void,
         onOpen: @escaping () -> Void,
-        onSelectRoutingMode: @escaping (AppSettings.RoutingMode) -> Void
+        onSelectRoutingMode: @escaping (RoutingMode) -> Void
     ) {
         debugLog("configure called")
         connectProfileHandler = onConnectProfile
@@ -96,7 +102,7 @@ final class MenuBarController: NSObject, ObservableObject, NSMenuDelegate {
         rxBytesPerSecond: Double,
         txBytesPerSecond: Double,
         tunnelModeLabel: String,
-        routingMode: AppSettings.RoutingMode,
+        routingMode: RoutingMode,
         canEnableAppTunnelRouting: Bool,
         enforceDestinationFiltering: Bool = false,
         destinationFilterSummary: String? = nil,
@@ -134,7 +140,7 @@ final class MenuBarController: NSObject, ObservableObject, NSMenuDelegate {
                 stopMenuRefreshTimer()
             }
         } else {
-            statusItem?.menu = buildMenu()
+            rebuildClosedMenuIfNeeded()
         }
     }
 
@@ -152,7 +158,7 @@ final class MenuBarController: NSObject, ObservableObject, NSMenuDelegate {
             syncRoutingModeMenuItems()
             syncProfileMenuItems()
         } else {
-            statusItem?.menu = buildMenu()
+            rebuildClosedMenuIfNeeded()
         }
         statusItem?.button?.toolTip = vpnToolTipText()
     }
@@ -228,6 +234,40 @@ final class MenuBarController: NSObject, ObservableObject, NSMenuDelegate {
 
     private func vpnAccessibilityDescription() -> String {
         vpnShowsAsOn ? "TunnelBahn, VPN on" : "TunnelBahn, VPN off"
+    }
+
+    /// Rebuild the tray menu ONLY if a structural input changed since the last closed rebuild.
+    /// `syncProfileMenuItems`/`syncRoutingModeMenuItems` (run on open) update existing items' state
+    /// but do NOT add/remove rows, so the menu must stay structurally current for the next open —
+    /// hence we still rebuild on real changes, just not on every per-tick stat emission.
+    private func rebuildClosedMenuIfNeeded() {
+        let signature = closedMenuSignature()
+        guard signature != lastClosedMenuSignature else { return }
+        lastClosedMenuSignature = signature
+        statusItem?.menu = buildMenu()
+    }
+
+    /// Everything that alters what the closed menu will render on next open. Deliberately OMITS
+    /// `currentRxRate`/`currentTxRate` — those are live-only (updated while open) and would otherwise
+    /// invalidate the signature ~12×/sec and defeat the dedup.
+    private func closedMenuSignature() -> String {
+        let profileSig = profiles.map { "\($0.id.uuidString):\($0.name)" }.joined(separator: ",")
+        return [
+            currentState.rawValue,
+            currentEndpoint ?? "",
+            currentPublicIP ?? "",
+            currentPublicIPLocation ?? "",
+            currentTunnelModeLabel,
+            String(describing: routingMode),
+            canEnableAppTunnelRouting ? "1" : "0",
+            enforceDestinationFiltering ? "1" : "0",
+            destinationFilterSummary ?? "",
+            showTrafficRates ? "1" : "0",
+            selectedProfileID?.uuidString ?? "",
+            activeProfileID?.uuidString ?? "",
+            isBusy ? "1" : "0",
+            profileSig,
+        ].joined(separator: "|")
     }
 
     private func buildMenu() -> NSMenu {
@@ -431,7 +471,7 @@ final class MenuBarController: NSObject, ObservableObject, NSMenuDelegate {
     }
 
     private func debugLog(_ message: String) {
-        Self.menuBarLog.debug("\(message, privacy: .public)")
+        Self.menuBarLog.debug("\(message)")
     }
 
     func menuWillOpen(_: NSMenu) {

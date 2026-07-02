@@ -98,6 +98,9 @@ public enum IPCIDRMatcher {
         var v6 = in6_addr()
         if inet_pton(AF_INET6, trimmed, &v6) == 1 {
             guard let oc = ipv6Octets(from: &v6) else { return false }
+            if let mappedV4 = ipv4FromMapped(oc) {
+                return ranges.contains { $0.containsLiteralIPv4(mappedV4) }
+            }
             return ranges.contains { $0.containsLiteralIPv6(oc) }
         }
         return false
@@ -113,6 +116,16 @@ public enum IPCIDRMatcher {
     private static func stripZone(_ ip: String) -> String {
         guard let pct = ip.firstIndex(of: "%") else { return ip }
         return String(ip[..<pct])
+    }
+
+    /// IPv4-mapped IPv6 (`::ffff:a.b.c.d`, RFC 4291 §2.5.5.2). AF_INET6 sockets (Java, Go, …)
+    /// reach IPv4 destinations through this form, so it must match IPv4 ranges — including the
+    /// private/LAN bypass, or a mapped LAN destination gets tunneled and black-holes.
+    private static func ipv4FromMapped(_ oc: IPv6Octets) -> UInt32? {
+        let b = oc.b
+        guard b.0 == 0, b.1 == 0, b.2 == 0, b.3 == 0, b.4 == 0, b.5 == 0,
+              b.6 == 0, b.7 == 0, b.8 == 0, b.9 == 0, b.10 == 0xFF, b.11 == 0xFF else { return nil }
+        return (UInt32(b.12) << 24) | (UInt32(b.13) << 16) | (UInt32(b.14) << 8) | UInt32(b.15)
     }
 
     private static func parseCIDR(_ raw: String) -> PreparedRange? {
@@ -293,14 +306,19 @@ public extension IPCIDRMatcher {
     /// NOTE: if DNS is ever redirected to the tunnel resolver (e.g. 10.2.0.1, itself inside 10/8),
     /// that rewrite must happen BEFORE this check so the redirected target isn't bounced to direct.
     static let localBypassRanges: [PreparedRange] = prepare([
+        "0.0.0.0/8",        // "this host/network" — 0.0.0.0 is a loopback-equivalent dest on macOS
         "10.0.0.0/8",
         "172.16.0.0/12",
         "192.168.0.0/16",
+        "100.64.0.0/10",    // RFC-6598 CGNAT / Tailscale — not routable through the WG peer
         "169.254.0.0/16",   // IPv4 link-local
         "127.0.0.0/8",      // loopback
+        "224.0.0.0/4",      // IPv4 multicast (mDNS/SSDP) — never a tunnelable unicast dest
+        "255.255.255.255/32", // limited broadcast
         "::1/128",          // IPv6 loopback
         "fc00::/7",         // IPv6 unique-local
         "fe80::/10",        // IPv6 link-local
+        "ff00::/8",         // IPv6 multicast
     ])
 
     /// True when `host` is an IPv4/IPv6 literal that falls in a private/local range (see

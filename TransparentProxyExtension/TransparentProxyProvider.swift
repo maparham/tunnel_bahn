@@ -31,8 +31,31 @@ public final class TransparentProxyProvider: NETransparentProxyProvider {
         queue.setSpecific(key: TransparentProxyProvider.flushQueueKey, value: ())
         return queue
     }()
+    /// Confined to `flushQueue` (created in `startFlushTimer`'s async block, cancelled in
+    /// `stopProxy`'s sync block) — it was previously an unsynchronized var touched from two queues.
     private var flushTimer: DispatchSourceTimer?
     private let resourceSampler = ProcessResourceSampler()
+
+    /// Bumped in both startProxy and stopProxy. Work scheduled by a previous session — a pending
+    /// `startFlushTimer`, an in-flight `flushOnce`, or a `setDestinations` appMessage — compares
+    /// its captured generation and bails instead of resurrecting destination state stopProxy just
+    /// cleared (`applyDestinationPayload` unions, never replaces, so a stale writer would leak the
+    /// previous profile's CIDRs into the next session).
+    private let sessionGenerationLock = NSLock()
+    private var sessionGeneration: UInt64 = 0
+
+    private func currentSessionGeneration() -> UInt64 {
+        sessionGenerationLock.lock()
+        defer { sessionGenerationLock.unlock() }
+        return sessionGeneration
+    }
+
+    private func bumpSessionGeneration() -> UInt64 {
+        sessionGenerationLock.lock()
+        defer { sessionGenerationLock.unlock() }
+        sessionGeneration &+= 1
+        return sessionGeneration
+    }
 
     // Keep relay objects alive for the lifetime of a flow. Without this, relays are
     // deallocated immediately after `handleNewFlow` returns, and no bytes are ever relayed/counted.
@@ -52,6 +75,10 @@ public final class TransparentProxyProvider: NETransparentProxyProvider {
     /// bound to `tunnelInterfaceName` so outbound connections exit via the WireGuard utun interface.
     private var enforceDestinationFiltering = false
     private var destinationRawCIDRs: [String] = []
+    /// TEMP INSTRUMENTATION (first-run domain-bypass diagnosis) — remove after diagnosis. The
+    /// extension process is reused across stop/start, so this instance counter distinguishes the
+    /// first activation (#1) from a reconnect (#2+) in a single log capture. Grep "[FIRSTRUN-DIAG]".
+    private var startProxyActivationCount = 0
     /// Domain-rule names (lowercased) for SNI routing. When non-empty and filtering is enforced,
     /// the proxy enters "SNI mode": it intercepts ALL routed-app TCP, peeks each flow's TLS SNI,
     /// and tunnels name/IP matches while sending the rest straight out en0. Empty = IP-only.
@@ -102,13 +129,14 @@ public final class TransparentProxyProvider: NETransparentProxyProvider {
 
     override public func startProxy(options: [String: Any]?, completionHandler: @escaping (Error?) -> Void) {
         Self.log.notice("startProxy invoked")
+        let generation = bumpSessionGeneration()
         // The relay client is a process-singleton; on a reconnect the proxy extension process
         // is reused while the tunnel extension recreates its UDS listener at the same path.
         // Without dropping the cached socket here, the next openFlow writes to a dead server-side
         // fd, the reply never arrives, and curl hangs forever.
         TransparentProxyRelayClient.shared.reset(reason: "startProxy")
         refreshRoutedSigningIdentifiers()
-        refreshDestinationConfig()
+        refreshDestinationConfig(generation: generation)
         // Reset the observed-competitor list on a fresh start. If the user removed the competing
         // proxy between connects, this prevents a stale warning from persisting forever.
         foreignProxyLock.lock()
@@ -117,7 +145,21 @@ public final class TransparentProxyProvider: NETransparentProxyProvider {
         persistObservedForeignProxySigningIDs([])
 
         let settings = NETransparentProxyNetworkSettings(tunnelRemoteAddress: "127.0.0.1")
-        settings.includedNetworkRules = buildIncludedNetworkRules()
+        let includeRules = buildIncludedNetworkRules()
+        settings.includedNetworkRules = includeRules
+
+        // TEMP INSTRUMENTATION (first-run domain-bypass diagnosis) — remove after diagnosis.
+        // Prints, per activation, the EXACT destination CIDRs and rule shape the OS is given. If
+        // activation #1 shows x.com's IPs + a matching includeRuleCount and sniMode=false, the rules
+        // are correct on first start (points to macOS-first-activation or CDN-anycast). If #1 lacks
+        // them but #2 has them, it's a host-side ordering gap. sniMode=true means x.com is caught by
+        // domain regardless of IPs (only happens in app-tunnel mode).
+        startProxyActivationCount += 1
+        let (diagCidrs, diagEnforce, _) = currentDestinationState()
+        let sniMode = diagEnforce && !destinationDomainNames.isEmpty
+        Self.log.notice(
+            "[FIRSTRUN-DIAG] activation #\(self.startProxyActivationCount) enforce=\(diagEnforce) sniMode=\(sniMode) includeRuleCount=\(includeRules.count) destCidrCount=\(diagCidrs.count) cidrs=[\(diagCidrs.prefix(24).joined(separator: ","))]"
+        )
 
         setTunnelNetworkSettings(settings) { [weak self] error in
             guard let self else { return }
@@ -126,7 +168,7 @@ public final class TransparentProxyProvider: NETransparentProxyProvider {
                 completionHandler(error)
                 return
             }
-            self.startFlushTimer()
+            self.startFlushTimer(generation: generation)
             Self.log.notice("startProxy completed")
             completionHandler(nil)
         }
@@ -134,9 +176,16 @@ public final class TransparentProxyProvider: NETransparentProxyProvider {
 
     override public func stopProxy(with reason: NEProviderStopReason, completionHandler: @escaping () -> Void) {
         Self.log.notice("stopProxy reason=\(reason.rawValue)")
-        flushTimer?.cancel()
-        flushTimer = nil
-        flushOnce()
+        // Bump FIRST: any flushOnce/appMessage still holding the old generation now fails its
+        // check and cannot re-populate the state cleared below. The sync hop serializes the
+        // cancel with `startFlushTimer`'s creation block, closing the start-completion race
+        // (a fast stop before setTunnelNetworkSettings completed left a live timer flushing).
+        let generation = bumpSessionGeneration()
+        flushQueue.sync {
+            flushTimer?.cancel()
+            flushTimer = nil
+        }
+        flushOnce(generation: generation)
         aggregator.clear()
         destinationAggregator.clear()
         // The extension process is reused across stop/start, and `applyDestinationPayload` now
@@ -173,6 +222,10 @@ public final class TransparentProxyProvider: NETransparentProxyProvider {
         switch cmd {
         case "setDestinations":
             let incoming = (obj["ranges"] as? [String]) ?? []
+            // Captured before the state snapshot: a stop that lands after this point bumps the
+            // generation, so `applyDestinationPayload`'s under-lock check rejects the write —
+            // a message racing a stop can't re-enable filtering on a stopped provider.
+            let generation = currentSessionGeneration()
             let snapshot = currentDestinationState()
             // Only apply once destination filtering is already active. If `enforce` is false the
             // proxy is either still starting (its providerConfiguration baseline hasn't run yet)
@@ -187,7 +240,7 @@ public final class TransparentProxyProvider: NETransparentProxyProvider {
             guard snapshot.enforce else {
                 return try? JSONSerialization.data(withJSONObject: ["ok": false, "reason": "filtering-inactive"])
             }
-            applyDestinationPayload(enforce: true, rawCIDRs: incoming, ifaceName: snapshot.iface, source: "appMessage")
+            applyDestinationPayload(enforce: true, rawCIDRs: incoming, ifaceName: snapshot.iface, source: "appMessage", generation: generation)
             let ack: [String: Any] = ["ok": true, "count": currentDestinationState().cidrs.count]
             return try? JSONSerialization.data(withJSONObject: ack)
         case "getStats":
@@ -592,7 +645,7 @@ public final class TransparentProxyProvider: NETransparentProxyProvider {
 
         var rules: [NENetworkRule] = []
         for cidr in cidrs {
-            let routingCIDR = Self.widenIPv4HostRoute(cidr)
+            let routingCIDR = Self.widenIPv4HostRoute(Self.explicitPrefixCIDR(cidr))
             let parts = routingCIDR.split(separator: "/")
             guard parts.count == 2, let prefix = Int(parts[1]) else { continue }
             let networkIP = String(parts[0])
@@ -616,7 +669,7 @@ public final class TransparentProxyProvider: NETransparentProxyProvider {
     private func udpInterceptRules(for cidrs: [String]) -> [NENetworkRule] {
         var rules: [NENetworkRule] = []
         for cidr in cidrs {
-            let routingCIDR = Self.widenIPv4HostRoute(cidr)
+            let routingCIDR = Self.widenIPv4HostRoute(Self.explicitPrefixCIDR(cidr))
             let parts = routingCIDR.split(separator: "/")
             guard parts.count == 2, let prefix = Int(parts[1]) else { continue }
             let endpoint = NWHostEndpoint(hostname: String(parts[0]), port: "0")
@@ -653,6 +706,21 @@ public final class TransparentProxyProvider: NETransparentProxyProvider {
         return nil
     }
 
+    /// Ensures a destination literal carries an explicit prefix. A bare IPv4/IPv6 literal (no `/n`)
+    /// is a host route: `/32` for v4, `/128` for v6. Without this, prefixless entries (which the
+    /// store accepts and shows as enabled in the UI) were dropped by the `parts.count == 2` guard in
+    /// `buildIncludedNetworkRules`/`udpInterceptRules` — enforced ≠ displayed, and the flow leaked
+    /// out the direct path. Non-literal / already-prefixed strings pass through unchanged.
+    private static func explicitPrefixCIDR(_ cidr: String) -> String {
+        let trimmed = cidr.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.contains("/") else { return trimmed }
+        var v4 = in_addr()
+        if inet_pton(AF_INET, trimmed, &v4) == 1 { return trimmed + "/32" }
+        var v6 = in6_addr()
+        if inet_pton(AF_INET6, trimmed, &v6) == 1 { return trimmed + "/128" }
+        return trimmed
+    }
+
     /// Widen resolved /32 host routes to /24 so CDN address rotation still matches intercept rules.
     private static func widenIPv4HostRoute(_ cidr: String) -> String {
         let parts = cidr.split(separator: "/")
@@ -665,26 +733,27 @@ public final class TransparentProxyProvider: NETransparentProxyProvider {
         return "\(octets.joined(separator: "."))/24"
     }
 
-    private func refreshDestinationConfig() {
+    private func refreshDestinationConfig(generation: UInt64) {
         if let config = runtimeConfigFromProvider() {
             applyDestinationPayload(
                 enforce: config.destinationRouting.enforceDestinationFiltering,
                 rawCIDRs: config.destinationRouting.ranges,
                 ifaceName: config.packetTunnelInterfaceName,
                 source: "providerConfiguration",
-                domainNames: config.destinationRouting.domainNames
+                domainNames: config.destinationRouting.domainNames,
+                generation: generation
             )
             return
         }
 
         guard let fileURL = SharedPaths.destinationRangesFileURL() else {
             Self.log.notice("refreshDestinationConfig fileURL nil")
-            applyDestinationPayload(enforce: false, rawCIDRs: [], ifaceName: nil, source: "none")
+            applyDestinationPayload(enforce: false, rawCIDRs: [], ifaceName: nil, source: "none", generation: generation)
             return
         }
         guard let data = try? Data(contentsOf: fileURL) else {
             Self.log.notice("refreshDestinationConfig: file missing/unreadable \(fileURL.lastPathComponent)")
-            applyDestinationPayload(enforce: false, rawCIDRs: [], ifaceName: nil, source: "none")
+            applyDestinationPayload(enforce: false, rawCIDRs: [], ifaceName: nil, source: "none", generation: generation)
             return
         }
         do {
@@ -694,21 +763,30 @@ public final class TransparentProxyProvider: NETransparentProxyProvider {
                 rawCIDRs: payload.ranges,
                 ifaceName: nil,
                 source: "sharedFile",
-                domainNames: payload.domainNames
+                domainNames: payload.domainNames,
+                generation: generation
             )
         } catch {
             Self.log.notice(
                 "refreshDestinationConfig decode failed \(error.localizedDescription)"
             )
-            applyDestinationPayload(enforce: false, rawCIDRs: [], ifaceName: nil, source: "none")
+            applyDestinationPayload(enforce: false, rawCIDRs: [], ifaceName: nil, source: "none", generation: generation)
         }
     }
 
     /// `domainNames == nil` leaves the SNI name set unchanged (used by the appMessage live-push,
     /// which only ever carries newly-resolved IPs — names are static for a session). A non-nil
     /// value replaces the set (lowercased).
-    private func applyDestinationPayload(enforce: Bool, rawCIDRs: [String], ifaceName: String?, source: String, domainNames: [String]? = nil) {
+    private func applyDestinationPayload(enforce: Bool, rawCIDRs: [String], ifaceName: String?, source: String, domainNames: [String]? = nil, generation: UInt64) {
         destinationLock.lock()
+        // Checked under `destinationLock` because `stopProxy` bumps the generation BEFORE taking
+        // this lock to clear the state: a stale writer either sees the new generation here and
+        // bails, or completed its write first and gets wiped by the clear — never union-after-clear.
+        guard generation == currentSessionGeneration() else {
+            destinationLock.unlock()
+            Self.log.notice("applyDestinationPayload: stale generation, dropped source=\(source)")
+            return
+        }
         // Union, never replace, within a session. Three writers race for this set — `startProxy`
         // (providerConfiguration baseline), the 1.5s `flushOnce` (re-reads the same baseline), and
         // host `appMessage` pushes (newly-resolved IPs) — and they can arrive in any order. A
@@ -748,6 +826,9 @@ public final class TransparentProxyProvider: NETransparentProxyProvider {
         settings.includedNetworkRules = buildIncludedNetworkRules(
             enforce: enforce, cidrs: merged, hasDomainNames: !newNames.isEmpty
         )
+        // Best-effort re-check: don't push rules built from pre-stop state onto a provider that
+        // stopped between the unlock above and here.
+        guard generation == currentSessionGeneration() else { return }
         setTunnelNetworkSettings(settings) { error in
             if let error {
                 Self.log.error("applyDestinationPayload setTunnelNetworkSettings failed: \(error.localizedDescription)")
@@ -755,19 +836,29 @@ public final class TransparentProxyProvider: NETransparentProxyProvider {
         }
     }
 
-    private func startFlushTimer() {
-        let timer = DispatchSource.makeTimerSource(queue: flushQueue)
-        timer.schedule(deadline: .now() + Self.flushInterval, repeating: Self.flushInterval)
-        timer.setEventHandler { [weak self] in
-            self?.flushOnce()
+    /// `generation` is captured at schedule time (startProxy entry): if a stop landed while the
+    /// async `setTunnelNetworkSettings` completion was in flight, the hop below sees a changed
+    /// generation and refuses to create the timer at all — no timer outlives its session.
+    private func startFlushTimer(generation: UInt64) {
+        flushQueue.async { [weak self] in
+            guard let self, generation == self.currentSessionGeneration() else { return }
+            self.flushTimer?.cancel()
+            let timer = DispatchSource.makeTimerSource(queue: self.flushQueue)
+            timer.schedule(deadline: .now() + Self.flushInterval, repeating: Self.flushInterval)
+            timer.setEventHandler { [weak self] in
+                self?.flushOnce(generation: generation)
+            }
+            timer.resume()
+            self.flushTimer = timer
         }
-        timer.resume()
-        flushTimer = timer
     }
 
-    private func flushOnce() {
+    private func flushOnce(generation: UInt64) {
+        // A tick already running when stopProxy fires must not re-read config into the
+        // destination state stopProxy is about to clear.
+        guard generation == currentSessionGeneration() else { return }
         refreshRoutedSigningIdentifiers()
-        refreshDestinationConfig()
+        refreshDestinationConfig(generation: generation)
         let rules = PerAppIdentityMap.loadActiveRules()
         let rolledUp = aggregator.rollup(rules: rules)
         let perDestination = destinationAggregator.rollupToRows(rules: rules)

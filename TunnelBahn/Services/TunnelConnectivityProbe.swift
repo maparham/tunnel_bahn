@@ -13,7 +13,7 @@ enum TunnelProbePhase: String {
 }
 
 enum TunnelConnectivityProbe {
-    private static let log = Logger(subsystem: "com.tunnelbahn.mac", category: "TunnelProbe")
+    private static let log = AppLog(subsystem: "com.tunnelbahn.mac", category: "TunnelProbe")
     /// Initial probe after connect: slow handshakes / routing convergence often need >2s.
     private static let warmupProbeTimeout: TimeInterval = 8
     private static let warmupAttempts = 8
@@ -25,18 +25,18 @@ enum TunnelConnectivityProbe {
     /// only if all attempts time out or error. Fires ipify + DNS diagnostics once after the final outcome.
     static func warmup(phase: TunnelProbePhase, comparePublicIP: String?) async -> ConnectivityProbeResult {
         Self.log.notice(
-            "[APPSPLIT_PROBE] warmup begin phase=\(phase.rawValue, privacy: .public)"
+            "[APPSPLIT_PROBE] warmup begin phase=\(phase.rawValue)"
         )
         for attempt in 1...warmupAttempts {
             let reachable = await probeGoogle204(phase: phase, timeoutInterval: warmupProbeTimeout)
             if reachable {
-                Self.log.notice("[APPSPLIT_PROBE] warmup ok attempt=\(attempt, privacy: .public)")
+                Self.log.notice("[APPSPLIT_PROBE] warmup ok attempt=\(attempt)")
                 Task.detached(priority: .utility) { await logDNSResolution(phase: phase, host: "www.google.com") }
                 Task.detached(priority: .utility) { await probeIpify(phase: phase, comparePublicIP: comparePublicIP) }
                 return .ok
             }
         }
-        Self.log.notice("[APPSPLIT_PROBE] warmup failed all attempts phase=\(phase.rawValue, privacy: .public)")
+        Self.log.notice("[APPSPLIT_PROBE] warmup failed all attempts phase=\(phase.rawValue)")
         Task.detached(priority: .utility) { await logDNSResolution(phase: phase, host: "www.google.com") }
         Task.detached(priority: .utility) { await probeIpify(phase: phase, comparePublicIP: comparePublicIP) }
         return .failed("No internet response via tunnel (endpoint may be unreachable)")
@@ -60,12 +60,12 @@ enum TunnelConnectivityProbe {
             let code = (response as? HTTPURLResponse)?.statusCode ?? -1
             let line =
                 "[APPSPLIT_PROBE] step=google204 phase=\(phase.rawValue) outcome=ok http=\(code) ms=\(elapsedMs)"
-            Self.log.notice("\(line, privacy: .public)")
+            Self.log.notice("\(line)")
             return true
         } catch {
             let line =
                 "[APPSPLIT_PROBE] step=google204 phase=\(phase.rawValue) outcome=fail error=\(error.localizedDescription)"
-            Self.log.error("\(line, privacy: .public)")
+            Self.log.error("\(line)")
             return false
         }
     }
@@ -88,11 +88,11 @@ enum TunnelConnectivityProbe {
             }
             let line =
                 "[APPSPLIT_PROBE] step=ipify phase=\(phase.rawValue) outcome=ok ip=\(ip) vs_publicIP=\(comparePublicIP ?? "nil") compare=\(match) ms=\(elapsedMs)"
-            Self.log.notice("\(line, privacy: .public)")
+            Self.log.notice("\(line)")
         } catch {
             let line =
                 "[APPSPLIT_PROBE] step=ipify phase=\(phase.rawValue) outcome=fail error=\(error.localizedDescription)"
-            Self.log.error("\(line, privacy: .public)")
+            Self.log.error("\(line)")
         }
     }
 
@@ -115,7 +115,7 @@ enum TunnelConnectivityProbe {
                 let err = String(cString: gai_strerror(status))
                 let line =
                     "[APPSPLIT_PROBE] step=dns_lookup phase=\(phase.rawValue) host=\(host) outcome=fail error=\(err)"
-                Self.log.error("\(line, privacy: .public)")
+                Self.log.error("\(line)")
                 return
             }
             var ips: [String] = []
@@ -132,7 +132,7 @@ enum TunnelConnectivityProbe {
             let joined = ips.prefix(4).joined(separator: ",")
             let line =
                 "[APPSPLIT_PROBE] step=dns_lookup phase=\(phase.rawValue) host=\(host) outcome=ok sample=\(joined)"
-            Self.log.notice("\(line, privacy: .public)")
+            Self.log.notice("\(line)")
         }.value
     }
 

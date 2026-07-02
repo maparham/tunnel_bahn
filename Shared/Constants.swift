@@ -49,6 +49,12 @@ enum AppConstants {
 }
 
 enum SharedPaths {
+    /// Per-process App Group container. NOTE: a root system extension resolves this to
+    /// `/var/root/Library/Group Containers/...`, the user host resolves it to
+    /// `/Users/<user>/...`, and the sandbox forbids the root extension from writing into the
+    /// user's container (EPERM) — so files written here by an extension do NOT reach the host.
+    /// Extension→host data must travel over `sendProviderMessage` IPC, not this container.
+    /// Safe for extension↔extension sharing (both root → same `/var/root` dir, e.g. `relay.sock`).
     static func appGroupContainer() -> URL? {
         FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: AppConstants.appGroupID)
     }
@@ -75,5 +81,19 @@ enum SharedPaths {
     /// competing proxy is shadowing app-tunnel routing.
     static func observedForeignProxySigningIDsFileURL() -> URL? {
         appGroupContainer()?.appendingPathComponent("observed-foreign-proxy-signing-ids.json")
+    }
+
+    /// UNIX domain socket file used as the sibling-extension IPC rendezvous point. The
+    /// packet-tunnel ext listens here; the transparent-proxy ext connects. Path stays well
+    /// inside the AF_UNIX `sun_path` 104-byte limit even on long usernames.
+    static func relaySocketURL() -> URL? {
+        appGroupContainer()?.appendingPathComponent("relay.sock")
+    }
+
+    /// Newline-delimited JSON log buffer written by host app + both system extensions.
+    /// Read by the in-app `LogsView` via `LogCaptureStore`. Truncated on host-app launch
+    /// so the buffer reflects "this session's logs"; rotated by user via the Clear button.
+    static func logsFileURL() -> URL? {
+        appGroupContainer()?.appendingPathComponent("logs.ndjson")
     }
 }

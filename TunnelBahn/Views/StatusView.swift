@@ -92,7 +92,7 @@ struct StatusView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
 
-            if appState.vpnManager.stats.perAppStatsCollectionActive {
+            if perAppTrafficSectionVisible {
                 perAppTrafficSection
             }
 
@@ -111,7 +111,7 @@ struct StatusView: View {
             Spacer()
         }
         .padding()
-        .onChange(of: appState.vpnManager.stats.perAppStatsCollectionActive) { _, active in
+        .onChange(of: perAppTrafficSectionVisible) { _, active in
             if !active {
                 showAllPerAppStats = false
                 expandedAppTrafficApps = []
@@ -119,6 +119,20 @@ struct StatusView: View {
                 hoveredDestinationRow = nil
                 copiedApp = nil
             }
+        }
+    }
+
+    /// No-flicker rule: gate the Tunnel Monitor on the settings-derived expectation
+    /// (the transparent proxy runs in every connected shape when the feature flag is on),
+    /// not on live `perAppStatsCollectionActive`, which resets during reconnects and
+    /// would make the section pop in and out. Only stable states hide it.
+    private var perAppTrafficSectionVisible: Bool {
+        guard AppConstants.isPerAppSplitTunnelEnabled else { return false }
+        switch appState.vpnManager.stats.state {
+        case .connected, .connecting, .reconnecting, .disconnecting:
+            return true
+        case .disconnected, .error:
+            return false
         }
     }
 
@@ -498,9 +512,11 @@ struct StatusView: View {
         }()
         let active = appState.vpnManager.stats.perAppSplitTunnelActive ? "App-Tunnel (selected apps only)" : "Full Tunnel (all traffic)"
         switch appState.vpnManager.stats.state {
-        case .connected, .connecting, .reconnecting, .disconnecting:
+        case .connected:
             return active
-        case .disconnected, .error:
+        case .connecting, .reconnecting, .disconnecting, .disconnected, .error:
+            // No-flicker rule: transient states derive the label from settings, not live
+            // stats — `perAppSplitTunnelActive` is not reported yet during connect.
             return planned
         }
     }

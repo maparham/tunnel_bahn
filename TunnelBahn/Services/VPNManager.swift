@@ -6,7 +6,7 @@ import OSLog
 
 @MainActor
 final class VPNManager: ObservableObject {
-    private static let osLog = Logger(subsystem: "com.tunnelbahn.mac", category: "VPN")
+    private static let osLog = AppLog(subsystem: "com.tunnelbahn.mac", category: "VPN")
 
     /// Per-process env: `TUNNELBAHN_VPN_TRACE_VERBOSE=1` enables per-rule NEAppRule dumps and full manager config logging.
     #if DEBUG
@@ -36,6 +36,8 @@ final class VPNManager: ObservableObject {
     private var lastTransferSnapshot: TransferSnapshot?
     private var lastPerAppAggregateSnapshot: TransferSnapshot?
     private let perAppStatsProxy = PerAppStatsProxyManager()
+    /// Built during connect and consumed when enabling the transparent proxy after the tunnel is up.
+    private var pendingTransparentProxyConfig: TransparentProxyRuntimeConfig?
     private let scopedBookmarks = ScopedBookmarkStore()
     private static let perAppRoutedSigningIDsDefaultsKey = "perAppRoutedSigningIdentifiers"
     private static let perAppRouteAllFlowsDefaultsKey = "perAppRouteAllIdentifiedFlows"
@@ -126,7 +128,7 @@ final class VPNManager: ObservableObject {
         }
     }
 
-    func connect(profile: WireGuardProfile, rules: [AppRule], destinationCidrStrings: [String]) async {
+    func connect(profile: WireGuardProfile, rules: [AppRule], destinationCidrStrings: [String], destinationDomainNames: [String] = []) async {
         if connectRunning || disconnectRunning {
             emitConnectSummaryLine(
                 outcome: "ignored",
@@ -147,6 +149,7 @@ final class VPNManager: ObservableObject {
             return
         }
         traceLog("connect requested profile=\(profile.name) rules=\(rules.count)")
+        emitScenarioSummary(profile: profile, rules: rules, destinationCidrStrings: destinationCidrStrings)
         connectCancelled = false
         connectRunning = true
         defer { connectRunning = false }
@@ -158,6 +161,10 @@ final class VPNManager: ObservableObject {
         // profile ID — otherwise switch detection always sees `profile.id` and skips the stop.
         let priorConnectedProfileID = stats.connectedProfileID ?? loadPersistedRuntimeProfile()?.id
         stats.connectedProfileID = profile.id
+        /// True once `configureManager` has saved preferences with `isEnabled`/`isOnDemandEnabled`
+        /// for THIS attempt. Gates the catch-path cleanup so a failure before configuration
+        /// (e.g. endpoint resolution) cannot disable a manager belonging to a healthy session.
+        var managerSavedEnabledThisAttempt = false
 
         do {
             try AppGroupStore.ensureSharedDirectories()
@@ -289,7 +296,17 @@ final class VPNManager: ObservableObject {
             /// (and optional host probe). Used for app-tunnel split **or** full-tunnel app-tunnel byte accounting.
             let useAppTunnelNEStack = hasAppTunnelSelection || (profileOkForAccounting && isFullTrafficAccountingShape)
 
-            Self.osLog.notice("[connect] routingMode=\(self.settings.routingMode.rawValue, privacy: .public) hasAppTunnelSelection=\(hasAppTunnelSelection, privacy: .public) profileOkForAccounting=\(profileOkForAccounting, privacy: .public) useAppTunnelNEStack=\(useAppTunnelNEStack, privacy: .public) requestedAppRules=\(requestedAppRules.count, privacy: .public)")
+            /// Full-tunnel mode with destination-CIDR filtering: activate the transparent proxy
+            /// to filter all apps' flows by destination CIDR, but keep the standard (non-per-app)
+            /// VPN manager so 0.0.0.0/0 → utun routes everything (including the proxy's own
+            /// relay connections) through the tunnel without needing per-app attribution.
+            let isFullTunnelDestFilterShape = AppConstants.isPerAppSplitTunnelEnabled
+                && !appTunnelModeSelected
+                && settings.enforceDestinationFiltering
+                && !destinationCidrStrings.isEmpty
+                && profileOkForAccounting
+
+            Self.osLog.notice("[connect] routingMode=\(self.settings.routingMode.rawValue) hasAppTunnelSelection=\(hasAppTunnelSelection) profileOkForAccounting=\(profileOkForAccounting) useAppTunnelNEStack=\(useAppTunnelNEStack) isFullTunnelDestFilterShape=\(isFullTunnelDestFilterShape) requestedAppRules=\(requestedAppRules.count)")
 
             #if DEBUG
             logConnectModeDecision(
@@ -304,7 +321,10 @@ final class VPNManager: ObservableObject {
             #endif
 
 
-            if useAppTunnelNEStack {
+            var destinationEnforce = false
+            var destinationRanges: [String] = []
+
+            if useAppTunnelNEStack || isFullTunnelDestFilterShape {
                 // Always stop the proxy before writing the destination routing file so that
                 // startProxy() always reads the current config. Without this, a same-profile
                 // reconnect leaves the proxy running with stale in-memory state (enforceFiltering
@@ -323,19 +343,34 @@ final class VPNManager: ObservableObject {
                 // proxy only relays flows whose destination is inside the tunnel. Flows to
                 // internet destinations are returned false → OS handles them natively via en0.
                 if !profileOkForAccounting {
-                    let allowedIPs = extensionProfile.peers.flatMap { $0.allowedIPs }
-                    persistDestinationRoutingFromHost(enforceFiltering: true, ranges: allowedIPs)
-                    traceLog("split-tunnel: proxy destination filter set to AllowedIPs (\(allowedIPs.count) CIDRs)")
+                    destinationRanges = extensionProfile.peers.flatMap { $0.allowedIPs }
+                    destinationEnforce = true
+                    persistDestinationRoutingFromHost(enforceFiltering: true, ranges: destinationRanges)
+                    traceLog("split-tunnel: proxy destination filter set to AllowedIPs (\(destinationRanges.count) CIDRs)")
                 } else {
+                    destinationEnforce = settings.enforceDestinationFiltering
+                    destinationRanges = destinationCidrStrings
                     persistDestinationRoutingFromHost(
-                        enforceFiltering: settings.enforceDestinationFiltering,
-                        ranges: destinationCidrStrings
+                        enforceFiltering: destinationEnforce,
+                        ranges: destinationRanges,
+                        domainNames: destinationDomainNames
                     )
                 }
+                pendingTransparentProxyConfig = makeTransparentProxyRuntimeConfig(
+                    appRules: requestedAppRules,
+                    routeAllIdentifiedFlows: !hasAppTunnelSelection,
+                    enforceDestinationFiltering: destinationEnforce,
+                    destinationRanges: destinationRanges,
+                    destinationDomainNames: destinationDomainNames
+                )
+                traceLog(
+                    "transparent proxy runtime config: signingIDs=\(pendingTransparentProxyConfig?.signingIdentifiers.count ?? 0) routeAll=\(!hasAppTunnelSelection) destRanges=\(destinationRanges.count) destDomains=\(destinationDomainNames.count) names=[\(destinationDomainNames.prefix(12).joined(separator: ","))]"
+                )
                 traceLog(
                     "VPN accounting stack: tunnel DNS servers=[\(extensionProfile.interface.dnsServers.joined(separator: ", "))]"
                 )
             } else {
+                pendingTransparentProxyConfig = nil
                 clearPersistedPerAppRoutedSigningIdentifiers()
                 traceLog("full-tunnel mode: destination-IP routing only (no app-tunnel accounting stack; missing default-route peer or split disabled)")
             }
@@ -352,33 +387,103 @@ final class VPNManager: ObservableObject {
                 )
             }
             
-            // Proxy signing ID is always in appRules when the NE stack is active. The proxy
-            // intercepts flows and decides per-flow whether to relay (in-AllowedIPs) or pass
-            // through (out-of-AllowedIPs). Apps not in tunnel appRules bypass the tunnel entirely.
+            // Destination split: selected apps stay OUT of NEAppRules so the transparent proxy
+            // intercepts their flows first; in-CIDR relay traffic reaches the VPN via the XPC
+            // bridge into the packet-tunnel extension (smoltcp → BoringTun), not NWConnection.
+            let destinationSplitActive = useAppTunnelNEStack && destinationEnforce && !destinationRanges.isEmpty
+            let putSelectedAppsOnTunnel = hasAppTunnelSelection && !destinationSplitActive
             var finalAppRules: [NEAppRule] = []
             if useAppTunnelNEStack {
                 let proxyRule = PerAppStatsProxyManager.extensionAppRule()
-                finalAppRules = [proxyRule]
-                if settings.includeHostAppInPerAppRulesForProbe, let hostRule = makeHostAppNEAppRule() {
+                if destinationSplitActive {
+                    var tunnelRules: [NEAppRule] = [proxyRule]
+                    if settings.includeHostAppInPerAppRulesForProbe, let hostRule = makeHostAppNEAppRule() {
+                        tunnelRules.append(hostRule)
+                    }
                     finalAppRules = NEAppRuleBuilder.dedupe(
-                        finalAppRules + [hostRule],
+                        tunnelRules,
                         log: traceLog,
                         verbose: Self.vpnTraceVerbose
                     )
+                    traceLog(
+                        "app-tunnel: destination-filtered XPC relay destCIDRs=\(destinationRanges.count) tunnelRules=\(finalAppRules.count) (proxy-only NEAppRules)"
+                    )
+                } else if putSelectedAppsOnTunnel {
+                    // app-tunnel with NO destination filter: route the selected apps THROUGH the
+                    // transparent proxy rather than the kernel per-app VPN, so their flows are
+                    // intercepted, relayed via the tunnel, AND counted for per-app stats. Keeping
+                    // them OUT of NEAppRules is what lets the proxy see them — the proxy's
+                    // includedNetworkRules are catch-all when filtering is off, so it intercepts
+                    // every flow and relays the routed (selected) apps while releasing the rest.
+                    // This mirrors the destination-split path; the only difference is catch-all vs
+                    // narrowed interception. Trade-off (chosen deliberately): the selected apps take
+                    // the userspace relay hop instead of the more efficient kernel NEAppRule, which
+                    // is the price of per-app byte attribution in this mode.
+                    var tunnelRules: [NEAppRule] = [proxyRule]
+                    if settings.includeHostAppInPerAppRulesForProbe, let hostRule = makeHostAppNEAppRule() {
+                        tunnelRules.append(hostRule)
+                    }
+                    finalAppRules = NEAppRuleBuilder.dedupe(
+                        tunnelRules,
+                        log: traceLog,
+                        verbose: Self.vpnTraceVerbose
+                    )
+                    traceLog("app-tunnel: selected apps via transparent proxy for stats (no destination filter)")
+                } else if hasAppTunnelSelection {
+                    var tunnelRules: [NEAppRule] = [proxyRule]
+                    if settings.includeHostAppInPerAppRulesForProbe, let hostRule = makeHostAppNEAppRule() {
+                        tunnelRules.append(hostRule)
+                    }
+                    finalAppRules = NEAppRuleBuilder.dedupe(
+                        tunnelRules,
+                        log: traceLog,
+                        verbose: Self.vpnTraceVerbose
+                    )
+                    traceLog("app-tunnel: proxy-only tunnel NEAppRules (no selected apps)")
+                } else {
+                    finalAppRules = [proxyRule]
+                    if settings.includeHostAppInPerAppRulesForProbe, let hostRule = makeHostAppNEAppRule() {
+                        finalAppRules = NEAppRuleBuilder.dedupe(
+                            finalAppRules + [hostRule],
+                            log: traceLog,
+                            verbose: Self.vpnTraceVerbose
+                        )
+                    }
                 }
                 traceLog("app-tunnel: tunnel NEAppRules count=\(finalAppRules.count)")
             }
 
-            let runtimeStateData = try makeRuntimeStateData(profile: extensionProfile)
-            try persistRuntimeState(data: runtimeStateData)
+            // In full_tunnel+filter shape, narrow the packet tunnel's includedRoutes to only
+            // the filter CIDRs so the kernel routes only those IPs through utun. Out-of-filter
+            // traffic falls back to en0 without needing any cleanup on disconnect or crash —
+            // the next connect rewrites the file with whatever shape is active then.
+            // DNS server IPs must also be included; they live inside the WireGuard virtual
+            // network (e.g. 10.2.0.1) and are unreachable if not routed through utun.
+            let tunnelIncludedRoutes: [String]? = isFullTunnelDestFilterShape
+                ? destinationCidrStrings + extensionProfile.interface.dnsServers.map { $0.contains(":") ? "\($0)/128" : "\($0)/32" }
+                : nil
+            let fileRuntimeData = try makeRuntimeStateData(
+                profile: extensionProfile,
+                includeSecrets: false,
+                appTunnelIncludedRoutes: tunnelIncludedRoutes
+            )
+            try persistRuntimeState(data: fileRuntimeData)
+            let tunnelRuntimeData = try makeRuntimeStateData(
+                profile: extensionProfile,
+                includeSecrets: true,
+                appTunnelIncludedRoutes: tunnelIncludedRoutes
+            )
             traceLog("runtime state persisted for profile=\(profile.name)")
             let appRules = useAppTunnelNEStack ? finalAppRules : []
             try await configureManager(
                 appRules: appRules,
-                runtimeStateData: runtimeStateData,
+                runtimeStateData: tunnelRuntimeData,
                 useAppTunnelNEStack: useAppTunnelNEStack,
-                hasDefaultRoute: profileHasDefaultRoute(profile: extensionProfile)
+                hasDefaultRoute: profileHasDefaultRoute(profile: extensionProfile),
+                destinationSplitActive: destinationSplitActive,
+                narrowedRoutes: isFullTunnelDestFilterShape
             )
+            managerSavedEnabledThisAttempt = true
 
             if connectCancelled {
                 await coordinatedDisconnect(waitForTunnelStop: false)
@@ -437,7 +542,9 @@ final class VPNManager: ObservableObject {
                     hasAppTunnelSelection: hasAppTunnelSelection,
                     useAppTunnelNEStack: useAppTunnelNEStack,
                     profileOkForAccounting: profileOkForAccounting,
-                    rulesForVPNManagerCount: rulesForVPNManager.count
+                    rulesForVPNManagerCount: rulesForVPNManager.count,
+                    destinationSplitActive: destinationSplitActive,
+                    isFullTunnelDestFilterShape: isFullTunnelDestFilterShape
                 )
             case .connected:
                 await applySuccessfulConnectPostTunnel(
@@ -446,7 +553,9 @@ final class VPNManager: ObservableObject {
                     hasAppTunnelSelection: hasAppTunnelSelection,
                     useAppTunnelNEStack: useAppTunnelNEStack,
                     profileOkForAccounting: profileOkForAccounting,
-                    rulesForVPNManagerCount: rulesForVPNManager.count
+                    rulesForVPNManagerCount: rulesForVPNManager.count,
+                    destinationSplitActive: destinationSplitActive,
+                    isFullTunnelDestFilterShape: isFullTunnelDestFilterShape
                 )
             }
         } catch {
@@ -460,6 +569,25 @@ final class VPNManager: ObservableObject {
             stats.connectedProfileID = nil
             stats.endpoint = nil
             traceLog("connect failed: \(message)")
+            // If configureManager already saved preferences with isEnabled/isOnDemandEnabled for
+            // this attempt (e.g. startVPNTunnel threw afterwards), the NEOnDemandRuleConnect rule
+            // stays on disk and macOS relaunches the broken tunnel on any network activity —
+            // the phantom connect/disconnect-every-19s bug. Best-effort disable, mirroring
+            // performDisconnect; only touches the manager this attempt configured, and (like the
+            // startup cleanup) only while the system tunnel is fully stopped so a still-live
+            // tunnel is never orphaned with disabled preferences.
+            if managerSavedEnabledThisAttempt, isTunnelFullyStopped(),
+               manager.isEnabled || manager.isOnDemandEnabled {
+                manager.isOnDemandEnabled = false
+                manager.isEnabled = false
+                do {
+                    try await manager.saveToPreferences()
+                    try await manager.loadFromPreferences()
+                    traceLog("connect failure cleanup: disabled saved config (isEnabled=false, isOnDemandEnabled=false)")
+                } catch {
+                    traceLog("connect failure cleanup: WARNING — failed to disable saved config: \(error.localizedDescription)")
+                }
+            }
             emitConnectSummaryLine(
                 outcome: "error",
                 profileName: profile.name,
@@ -480,6 +608,18 @@ final class VPNManager: ObservableObject {
     @MainActor
     func syncDestinationRoutingFromHostActivity(enforceFiltering: Bool, flattenedRangeStrings: [String]) {
         persistDestinationRoutingFromHost(enforceFiltering: enforceFiltering, ranges: flattenedRangeStrings)
+    }
+
+    /// Live-push the connected per-app-split profile's merged destination CIDRs to the running
+    /// proxy so a domain that resolved to a new IP mid-session (e.g. a CDN's second A record)
+    /// starts tunneling immediately, without a reconnect. The shared `destination-routing.json`
+    /// can't carry this (host and proxy are different uids → different App Group containers), so
+    /// this rides the provider-message channel instead. Reconnect correctness is already covered
+    /// by the rule store accumulating resolved IPs; this only closes the mid-session gap.
+    @MainActor
+    @discardableResult
+    func pushDestinationRangesToRunningProxy(enforce: Bool, ranges: [String]) async -> Bool {
+        await perAppStatsProxy.pushDestinationRanges(enforce: enforce, ranges: ranges)
     }
 
     private func profileHasDefaultRoute(profile: WireGuardProfile) -> Bool {
@@ -542,7 +682,9 @@ final class VPNManager: ObservableObject {
         hasAppTunnelSelection: Bool,
         useAppTunnelNEStack: Bool,
         profileOkForAccounting: Bool,
-        rulesForVPNManagerCount: Int
+        rulesForVPNManagerCount: Int,
+        destinationSplitActive: Bool,
+        isFullTunnelDestFilterShape: Bool = false
     ) async {
         // Mirror the grace from waitForTunnelConnectOutcome: NE can flicker to .disconnected
         // during forPerAppVPN manager reconfiguration transitions before settling into .connecting.
@@ -563,7 +705,9 @@ final class VPNManager: ObservableObject {
                     hasAppTunnelSelection: hasAppTunnelSelection,
                     useAppTunnelNEStack: useAppTunnelNEStack,
                     profileOkForAccounting: profileOkForAccounting,
-                    rulesForVPNManagerCount: rulesForVPNManagerCount
+                    rulesForVPNManagerCount: rulesForVPNManagerCount,
+                    destinationSplitActive: destinationSplitActive,
+                    isFullTunnelDestFilterShape: isFullTunnelDestFilterShape
                 )
                 return
             }
@@ -599,7 +743,9 @@ final class VPNManager: ObservableObject {
                 hasAppTunnelSelection: hasAppTunnelSelection,
                 useAppTunnelNEStack: useAppTunnelNEStack,
                 profileOkForAccounting: profileOkForAccounting,
-                rulesForVPNManagerCount: rulesForVPNManagerCount
+                rulesForVPNManagerCount: rulesForVPNManagerCount,
+                destinationSplitActive: destinationSplitActive,
+                isFullTunnelDestFilterShape: isFullTunnelDestFilterShape
             )
             return
         }
@@ -628,25 +774,51 @@ final class VPNManager: ObservableObject {
         hasAppTunnelSelection: Bool,
         useAppTunnelNEStack: Bool,
         profileOkForAccounting: Bool,
-        rulesForVPNManagerCount: Int
+        rulesForVPNManagerCount: Int,
+        destinationSplitActive: Bool,
+        isFullTunnelDestFilterShape: Bool = false
     ) async {
-        Self.osLog.notice("[connect] applySuccessfulConnectPostTunnel hasAppTunnelSelection=\(hasAppTunnelSelection, privacy: .public) useAppTunnelNEStack=\(useAppTunnelNEStack, privacy: .public) profileOkForAccounting=\(profileOkForAccounting, privacy: .public)")
+        Self.osLog.notice(
+            "[connect] applySuccessfulConnectPostTunnel hasAppTunnelSelection=\(hasAppTunnelSelection) useAppTunnelNEStack=\(useAppTunnelNEStack) profileOkForAccounting=\(profileOkForAccounting) destinationSplitActive=\(destinationSplitActive) isFullTunnelDestFilterShape=\(isFullTunnelDestFilterShape)"
+        )
+        let useTransparentProxy = useAppTunnelNEStack || isFullTunnelDestFilterShape
         stats.state = .connected
         stats.connectedAt = .now
         stats.connectedProfileID = profile.id
         stats.endpoint = extensionProfile.peers.first?.endpoint
         stats.perAppSplitTunnelActive = hasAppTunnelSelection && useAppTunnelNEStack
-        stats.perAppStatsCollectionActive = useAppTunnelNEStack
-        stats.tunnelHasDefaultRoute = profileOkForAccounting
+        stats.perAppStatsCollectionActive = useTransparentProxy
+        stats.tunnelHasDefaultRoute = profileOkForAccounting && !destinationSplitActive
 
-        if useAppTunnelNEStack {
+        if useTransparentProxy {
             PerAppTransferStore.reset()
-            Self.osLog.notice("[connect] calling perAppStatsProxy.enable()")
+            Self.osLog.notice("[connect] calling perAppStatsProxy.enable() destinationSplit=\(destinationSplitActive)")
             do {
-                try await perAppStatsProxy.enable()
+                guard var proxyConfig = pendingTransparentProxyConfig else {
+                    throw NSError(
+                        domain: "TunnelBahn.VPN",
+                        code: 10,
+                        userInfo: [NSLocalizedDescriptionKey: "Missing transparent proxy runtime configuration."]
+                    )
+                }
+                // Relay outbound connections must be bound to the utun interface because
+                // NE extension process NWConnections bypass per-app VPN routing — `setMetadata`
+                // propagates the source-app identity but does NOT redirect the socket onto utun.
+                // Needed both for destination-split (S4) and app-tunnel-without-filter (S3) shapes.
+                if let session = manager.connection as? NETunnelProviderSession {
+                    if let ifName = await sendProviderMessage(session, command: "tunnelInterfaceName") {
+                        proxyConfig.packetTunnelInterfaceName = ifName
+                        Self.osLog.notice("[connect] resolved tunnelInterfaceName=\(ifName)")
+                    } else {
+                        Self.osLog.notice("[connect] tunnelInterfaceName IPC returned nil — relay will use default route")
+                    }
+                    pendingTransparentProxyConfig = proxyConfig
+                }
+                try await perAppStatsProxy.enable(config: proxyConfig)
+                pendingTransparentProxyConfig = nil
                 Self.osLog.notice("[connect] perAppStatsProxy.enable() succeeded")
             } catch {
-                Self.osLog.notice("[connect] perAppStatsProxy.enable() failed: \(error.localizedDescription, privacy: .public)")
+                Self.osLog.notice("[connect] perAppStatsProxy.enable() failed: \(error.localizedDescription)")
                 traceLog("app-tunnel stats proxy enable failed: \(error.localizedDescription)")
                 stats.state = .error
                 stats.lastError = "App-tunnel accounting could not start: \(error.localizedDescription)"
@@ -688,7 +860,7 @@ final class VPNManager: ObservableObject {
             return .appTunnelHostExcluded
         }()
         let profileID = profile.id
-        let runProbe = settings.runTunnelConnectivityProbe && profileOkForAccounting
+        let runProbe = settings.runTunnelConnectivityProbe && profileOkForAccounting && !destinationSplitActive
 
         startStatsRefreshIfNeeded()
         shouldAutoReconnect = true
@@ -837,8 +1009,18 @@ final class VPNManager: ObservableObject {
         }
     }
     
-    private func configureManager(appRules: [NEAppRule], runtimeStateData: Data, useAppTunnelNEStack: Bool, hasDefaultRoute: Bool = false) async throws {
-        traceLog("configureManager started useAppTunnelNEStack=\(useAppTunnelNEStack) appRules=\(appRules.count) hasDefaultRoute=\(hasDefaultRoute)")
+    private func configureManager(
+        appRules: [NEAppRule],
+        runtimeStateData: Data,
+        useAppTunnelNEStack: Bool,
+        hasDefaultRoute: Bool = false,
+        destinationSplitActive: Bool = false,
+        narrowedRoutes: Bool = false
+    ) async throws {
+        traceLog(
+            "configureManager started useAppTunnelNEStack=\(useAppTunnelNEStack) appRules=\(appRules.count) " +
+            "hasDefaultRoute=\(hasDefaultRoute) destinationSplitActive=\(destinationSplitActive)"
+        )
         try await loadOrCreateTunnelManager(useAppTunnelNEStack: useAppTunnelNEStack)
 
         let proto = NETunnelProviderProtocol()
@@ -849,7 +1031,21 @@ final class VPNManager: ObservableObject {
             "profile": "active",
             "runtimeStateB64": runtimeStateB64,
         ]
-        if hasDefaultRoute {
+        // Per-app NEAppRules still need includeAllNetworks on default-route profiles so matched
+        // apps bind to the tunnel stack; destination split relies on utun includedRoutes (not this flag).
+        if useAppTunnelNEStack {
+            proto.excludeLocalNetworks = true
+            if hasDefaultRoute {
+                proto.includeAllNetworks = true
+                proto.enforceRoutes = false
+            } else {
+                proto.includeAllNetworks = false
+                proto.enforceRoutes = true
+            }
+        } else if hasDefaultRoute && !narrowedRoutes {
+            // narrowedRoutes=true means includedRoutes is already restricted to filter CIDRs;
+            // includeAllNetworks would override that and force everything through utun, defeating
+            // the split. Leave it false so the kernel respects the narrowed includedRoutes.
             proto.includeAllNetworks = true
             proto.excludeLocalNetworks = true
         } else {
@@ -873,9 +1069,11 @@ final class VPNManager: ObservableObject {
         }
         manager.isEnabled = true
 
+        let tunnelProto = manager.protocolConfiguration as? NETunnelProviderProtocol
         traceLog(
             "about to save: routingMethod=\(manager.routingMethod.rawValue) isOnDemandEnabled=\(manager.isOnDemandEnabled) " +
-            "onDemandRules=\(manager.onDemandRules?.count ?? 0) appRules=\(manager.appRules.count)"
+            "onDemandRules=\(manager.onDemandRules?.count ?? 0) appRules=\(manager.appRules.count) " +
+            "includeAllNetworks=\(tunnelProto?.includeAllNetworks ?? false) enforceRoutes=\(tunnelProto?.enforceRoutes ?? false)"
         )
 
         try await manager.saveToPreferences()
@@ -1098,9 +1296,47 @@ final class VPNManager: ObservableObject {
         traceLog("disconnect completed")
     }
 
-    private func makeRuntimeStateData(profile: WireGuardProfile) throws -> Data {
-        let payload = RuntimeState(profile: profile)
+    private func makeRuntimeStateData(
+        profile: WireGuardProfile,
+        includeSecrets: Bool,
+        appTunnelIncludedRoutes: [String]? = nil
+    ) throws -> Data {
+        let secrets = includeSecrets ? try TunnelRuntimeState.resolveSecrets(for: profile) : nil
+        let payload = TunnelRuntimeState(
+            profile: profile,
+            secrets: secrets,
+            appTunnelIncludedRoutes: appTunnelIncludedRoutes
+        )
         return try JSONEncoder().encode(payload)
+    }
+
+    private func makeTransparentProxyRuntimeConfig(
+        appRules: [NEAppRule],
+        routeAllIdentifiedFlows: Bool,
+        enforceDestinationFiltering: Bool,
+        destinationRanges: [String],
+        destinationDomainNames: [String]
+    ) -> TransparentProxyRuntimeConfig {
+        TransparentProxyRuntimeConfig(
+            signingIdentifiers: routeAllIdentifiedFlows ? [] : signingIdentifiers(from: appRules),
+            routeAllIdentifiedFlows: routeAllIdentifiedFlows,
+            destinationRouting: DestinationRoutingFilePayload(
+                enforceDestinationFiltering: enforceDestinationFiltering,
+                ranges: destinationRanges,
+                domainNames: destinationDomainNames
+            )
+        )
+    }
+
+    private func signingIdentifiers(from appRules: [NEAppRule]) -> [String] {
+        var ids = Set<String>()
+        for rule in appRules {
+            let trimmed = rule.matchSigningIdentifier.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmed.isEmpty {
+                ids.insert(trimmed)
+            }
+        }
+        return Array(ids).sorted()
     }
 
     private func persistPerAppStatsRoutingConfig(appRules: [NEAppRule], routeAllIdentifiedFlows: Bool) {
@@ -1161,15 +1397,15 @@ final class VPNManager: ObservableObject {
         removeDestinationRoutingFile()
     }
 
-    private func persistDestinationRoutingFromHost(enforceFiltering: Bool, ranges: [String]) {
+    private func persistDestinationRoutingFromHost(enforceFiltering: Bool, ranges: [String], domainNames: [String] = []) {
         guard let fileURL = SharedPaths.destinationRangesFileURL() else {
             traceLog("WARNING: unable to locate destination routing App Group URL")
             return
         }
-        let payload = DestinationRoutingFilePayload(enforceDestinationFiltering: enforceFiltering, ranges: ranges)
+        let payload = DestinationRoutingFilePayload(enforceDestinationFiltering: enforceFiltering, ranges: ranges, domainNames: domainNames)
         do {
             try DestinationRoutingFileStore.write(payload, to: fileURL)
-            traceLog("destination routing file written enforce=\(enforceFiltering) rawRangeCount=\(ranges.count)")
+            traceLog("destination routing file written enforce=\(enforceFiltering) rawRangeCount=\(ranges.count) domainNames=\(domainNames.count)")
         } catch {
             traceLog("WARNING: destination routing write failed: \(error.localizedDescription)")
         }
@@ -1349,6 +1585,10 @@ final class VPNManager: ObservableObject {
         }
     }
 
+    /// Zeroes extension CPU/memory on disconnect. The live values can't come from
+    /// `ExtensionResourceStore` (the root extensions write it into a container this user host
+    /// can't read), so they're pulled over IPC by `refreshExtensionResourceStatsViaIPC()`; while
+    /// connected this leaves the last-fetched values in place so they don't flicker to zero.
     private func syncExtensionResourceStats() {
         guard stats.state == .connected || stats.state == .reconnecting else {
             stats.packetTunnelCPUUsage = 0
@@ -1358,12 +1598,33 @@ final class VPNManager: ObservableObject {
             stats.extensionStatsUpdatedAt = nil
             return
         }
-        let snapshot = ExtensionResourceStore.read()
-        stats.packetTunnelCPUUsage = snapshot.packetTunnelCPU
-        stats.packetTunnelMemoryUsage = snapshot.packetTunnelMemory
-        stats.transparentProxyCPUUsage = snapshot.transparentProxyCPU
-        stats.transparentProxyMemoryUsage = snapshot.transparentProxyMemory
-        stats.extensionStatsUpdatedAt = snapshot.lastUpdate == .distantPast ? nil : snapshot.lastUpdate
+    }
+
+    /// Pulls each extension's own CPU/memory over `sendProviderMessage` (packet tunnel via its
+    /// session, proxy via `PerAppStatsProxyManager`) and merges them. A nil reply from either
+    /// leaves that extension's previous values untouched.
+    private func refreshExtensionResourceStatsViaIPC() async {
+        guard stats.state == .connected || stats.state == .reconnecting else { return }
+        if let session = manager.connection as? NETunnelProviderSession,
+           let json = await sendProviderMessage(session, command: "resourceStats"),
+           let usage = Self.parseResourceUsage(json) {
+            stats.packetTunnelCPUUsage = usage.cpu
+            stats.packetTunnelMemoryUsage = usage.memory
+        }
+        if let usage = await perAppStatsProxy.fetchResourceUsage() {
+            stats.transparentProxyCPUUsage = usage.cpu
+            stats.transparentProxyMemoryUsage = usage.memory
+        }
+        stats.extensionStatsUpdatedAt = .now
+    }
+
+    private static func parseResourceUsage(_ json: String) -> (cpu: Double, memory: UInt64)? {
+        guard let data = json.data(using: .utf8),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let cpu = (obj["cpu"] as? NSNumber)?.doubleValue,
+              let memory = (obj["memory"] as? NSNumber)?.uint64Value
+        else { return nil }
+        return (cpu, memory)
     }
 
     private func syncResourceStatsFromMonitor() {
@@ -1379,7 +1640,7 @@ final class VPNManager: ObservableObject {
     private func loadPersistedRuntimeProfile() -> WireGuardProfile? {
         guard let url = SharedPaths.stateFileURL(),
               let data = try? Data(contentsOf: url),
-              let state = try? JSONDecoder().decode(RuntimeState.self, from: data)
+              let state = try? JSONDecoder().decode(TunnelRuntimeState.self, from: data)
         else {
             return nil
         }
@@ -1407,6 +1668,14 @@ final class VPNManager: ObservableObject {
     private func startPeriodicProbeIfNeeded(phase: TunnelProbePhase, profileID: UUID) {
         guard periodicProbeTask == nil else { return }
         periodicProbeTask = Task { @MainActor [weak self] in
+            // If the loop exits on its own (e.g. a transient non-connected state), clear the
+            // handle so the next `startPeriodicProbeIfNeeded` can restart the probe. A cancelled
+            // task must NOT clear it: `stopPeriodicProbe` already did, and a new task may own it.
+            defer {
+                if !Task.isCancelled {
+                    self?.periodicProbeTask = nil
+                }
+            }
             while !Task.isCancelled {
                 // Recheck quickly while no internet detected, slowly once confirmed ok.
                 let interval: Duration = self?.stats.connectivityProbeResult == .ok ? .seconds(60) : .seconds(5)
@@ -1450,10 +1719,13 @@ final class VPNManager: ObservableObject {
         stats.lastInboundAt = totals.lastInboundAt
         lastTransferSnapshot = TransferSnapshot(date: now, rxBytes: totals.rxBytes, txBytes: totals.txBytes)
 
-        // App-tunnel counters (transparent proxy accounting). Reading is non-blocking and
-        // tolerates a missing/corrupt file by returning `.empty`.
+        // App-tunnel counters (transparent proxy accounting). Pulled over `sendProviderMessage`
+        // because the proxy extension (root) and this host (user) resolve the App Group container
+        // to different directories and the sandbox blocks the root extension from writing into the
+        // user's container — so a shared file can't carry stats across the boundary. A nil reply
+        // (timeout / proxy not up) is tolerated by falling back to `.empty`.
         if stats.perAppStatsCollectionActive {
-            let snapshot = PerAppTransferStore.read()
+            let snapshot = await perAppStatsProxy.fetchStats() ?? .empty
             stats.perAppStats = snapshot.apps
             stats.perDestinationStats = snapshot.perDestination
             stats.perAppStatsUpdatedAt = snapshot.lastUpdate
@@ -1481,7 +1753,7 @@ final class VPNManager: ObservableObject {
             }
         }
         syncResourceStatsFromMonitor()
-        syncExtensionResourceStats()
+        await refreshExtensionResourceStatsViaIPC()
     }
 
     /// Reads the proxy extension's observed-foreign-proxy file and updates
@@ -1514,21 +1786,36 @@ final class VPNManager: ObservableObject {
 
     private func loadRuntimeConfiguration() async -> String? {
         guard let session = manager.connection as? NETunnelProviderSession else { return nil }
-        return await withCheckedContinuation { continuation in
+        return await sendProviderMessage(session, command: "runtimeConfiguration", timeoutSeconds: 8)
+    }
+
+    private func sendProviderMessage(
+        _ session: NETunnelProviderSession,
+        command: String,
+        timeoutSeconds: Double = 3
+    ) async -> String? {
+        await withCheckedContinuation { continuation in
             let race = ProviderMessageContinuationRace<String?>()
-            Task {
-                try? await Task.sleep(for: .seconds(8))
+            // Cancel the timeout once the real reply wins, otherwise every call leaves a task
+            // sleeping for the full timeout (they accumulate at the 2s stats cadence).
+            let timeoutTask = Task {
+                try? await Task.sleep(for: .seconds(timeoutSeconds))
                 race.resume(continuation, returning: nil)
             }
             do {
-                try session.sendProviderMessage(Data("runtimeConfiguration".utf8)) { data in
+                try session.sendProviderMessage(Data(command.utf8)) { data in
+                    // Resume first, then cancel: cancelling wakes the sleeping timeout task, and
+                    // doing so before firing would let it win the race with a spurious nil.
                     race.resume(continuation, returning: data.flatMap { String(data: $0, encoding: .utf8) })
+                    timeoutTask.cancel()
                 }
             } catch {
+                timeoutTask.cancel()
                 race.resume(continuation, returning: nil)
             }
         }
     }
+
 
     private static func parseTransferTotals(from runtimeConfiguration: String) -> (rxBytes: UInt64, txBytes: UInt64, lastInboundAt: Date?) {
         var rxBytes: UInt64 = 0
@@ -1593,11 +1880,11 @@ final class VPNManager: ObservableObject {
     }
 
     private func traceLog(_ message: String) {
-        Self.osLog.debug("\(message, privacy: .public)")
+        Self.osLog.debug("\(message)")
     }
 
     private func connectSummaryLog(_ message: String) {
-        Self.osLog.info("\(message, privacy: .public)")
+        Self.osLog.info("\(message)")
     }
 
     private func logConnectModeDecision(
@@ -1660,6 +1947,34 @@ final class VPNManager: ObservableObject {
         } else {
             traceLog("effective extension profile: \(profileSummary(profile))")
         }
+    }
+
+    /// Single-line, grep-friendly snapshot of the user's *intent* at connect time.
+    /// Print this BEFORE the connect dance so the log clearly shows what mode the user
+    /// asked for, regardless of how the manager interprets it later. Run:
+    ///   `log show --predicate 'subsystem == "com.tunnelbahn.mac"' --last 5m | grep APPSPLIT_SCENARIO`
+    private func emitScenarioSummary(
+        profile: WireGuardProfile,
+        rules: [AppRule],
+        destinationCidrStrings: [String]
+    ) {
+        let tunnelRules = rules.filter { $0.action == .routeVPN }
+        let bypassRules = rules.filter { $0.action == .bypass }
+        let safeProfile = profile.name.replacingOccurrences(of: " ", with: "_")
+        let cidrPreview = destinationCidrStrings.prefix(8).joined(separator: ",")
+        let cidrSuffix = destinationCidrStrings.count > 8 ? "+\(destinationCidrStrings.count - 8)more" : ""
+        let parts = [
+            "[APPSPLIT_SCENARIO]",
+            "profile=\(safeProfile)",
+            "routingMode=\(settings.routingMode.rawValue)",
+            "enforceDestinationFiltering=\(settings.enforceDestinationFiltering)",
+            "destCIDRcount=\(destinationCidrStrings.count)",
+            "destCIDRs=[\(cidrPreview)\(cidrSuffix)]",
+            "ruleCount=\(rules.count)",
+            "tunnelRules=\(tunnelRules.count)",
+            "bypassRules=\(bypassRules.count)",
+        ]
+        connectSummaryLog(parts.joined(separator: " "))
     }
 
     /// Single-line summary for log triage. Run: `/usr/bin/log stream ... | grep APPSPLIT_CONNECT_SUMMARY`
@@ -1745,12 +2060,13 @@ final class VPNManager: ObservableObject {
     /// developer-targeted copy reaches end users and no subprocess is spawned on the main actor.
     #if DEBUG
     private static func packetTunnelExtensionLaunchHint() -> String? {
-        guard let pluginsURL = Bundle.main.builtInPlugInsURL else { return nil }
-        let appex = pluginsURL.appendingPathComponent("PacketTunnelExtension.appex", isDirectory: true)
-        guard FileManager.default.fileExists(atPath: appex.path) else {
-            return "Packet tunnel extension is missing from this app bundle. Rebuild TunnelBahn from Xcode."
+        let sysex = Bundle.main.bundleURL
+            .appendingPathComponent("Contents/Library/SystemExtensions", isDirectory: true)
+            .appendingPathComponent("\(AppConstants.packetTunnelProviderBundleIdentifier).systemextension", isDirectory: true)
+        guard FileManager.default.fileExists(atPath: sysex.path) else {
+            return "Packet tunnel system extension is missing from this app bundle. Rebuild TunnelBahn from Xcode."
         }
-        guard let codesignOutput = runCodesignVerbose(at: appex.path) else { return nil }
+        guard let codesignOutput = runCodesignVerbose(at: sysex.path) else { return nil }
         if codesignOutput.contains("Apple Distribution"), !codesignOutput.contains("Apple Development") {
             return """
             VPN extension is signed with Apple Distribution. macOS will not launch it for local \
@@ -1795,10 +2111,6 @@ private final class ProviderMessageContinuationRace<T>: @unchecked Sendable {
         finished = true
         continuation.resume(returning: value)
     }
-}
-
-private struct RuntimeState: Codable {
-    let profile: WireGuardProfile
 }
 
 private struct ParsedEndpoint {

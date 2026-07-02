@@ -4,7 +4,7 @@ import OSLog
 
 @MainActor
 final class SystemExtensionManager: NSObject, ObservableObject {
-    private nonisolated static let osLog = Logger(subsystem: "com.tunnelbahn.mac", category: "SystemExtensions")
+    private nonisolated static let osLog = AppLog(subsystem: "com.tunnelbahn.mac", category: "SystemExtensions")
 
     private let extensionIDs = [
         AppConstants.packetTunnelProviderBundleIdentifier,
@@ -26,7 +26,7 @@ final class SystemExtensionManager: NSObject, ObservableObject {
             )
             request.delegate = self
             OSSystemExtensionManager.shared.submitRequest(request)
-            Self.osLog.info("submitted activation request: \(id, privacy: .public)")
+            Self.osLog.info("submitted activation request: \(id)")
         }
     }
 }
@@ -37,7 +37,7 @@ extension SystemExtensionManager: OSSystemExtensionRequestDelegate {
         didFinishWithResult result: OSSystemExtensionRequest.Result
     ) {
         MainActor.assumeIsolated {
-            Self.osLog.info("\(request.identifier, privacy: .public) activation result=\(result.rawValue)")
+            Self.osLog.info("\(request.identifier) activation result=\(result.rawValue)")
             pendingApprovalIDs.remove(request.identifier)
             needsUserApproval = !pendingApprovalIDs.isEmpty
         }
@@ -48,7 +48,7 @@ extension SystemExtensionManager: OSSystemExtensionRequestDelegate {
         didFailWithError error: Error
     ) {
         MainActor.assumeIsolated {
-            Self.osLog.error("\(request.identifier, privacy: .public) activation failed: \(error.localizedDescription, privacy: .public)")
+            Self.osLog.error("\(request.identifier) activation failed: \(error.localizedDescription)")
             pendingApprovalIDs.remove(request.identifier)
             needsUserApproval = !pendingApprovalIDs.isEmpty
         }
@@ -56,7 +56,7 @@ extension SystemExtensionManager: OSSystemExtensionRequestDelegate {
 
     nonisolated func requestNeedsUserApproval(_ request: OSSystemExtensionRequest) {
         MainActor.assumeIsolated {
-            Self.osLog.info("\(request.identifier, privacy: .public) needs user approval in System Settings → General → Login Items & Extensions")
+            Self.osLog.info("\(request.identifier) needs user approval in System Settings → General → Login Items & Extensions")
             pendingApprovalIDs.insert(request.identifier)
             needsUserApproval = true
         }
@@ -67,7 +67,7 @@ extension SystemExtensionManager: OSSystemExtensionRequestDelegate {
         actionForReplacingExtension existing: OSSystemExtensionProperties,
         withExtension ext: OSSystemExtensionProperties
     ) -> OSSystemExtensionRequest.ReplacementAction {
-        Self.osLog.info("replacing \(request.identifier, privacy: .public) \(existing.bundleShortVersion, privacy: .public) → \(ext.bundleShortVersion, privacy: .public)")
+        Self.osLog.info("replacing \(request.identifier) \(existing.bundleShortVersion) → \(ext.bundleShortVersion)")
         return .replace
     }
 }

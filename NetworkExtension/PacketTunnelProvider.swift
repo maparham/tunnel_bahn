@@ -3,55 +3,117 @@ import Darwin
 import NetworkExtension
 import os.log
 
-final class PacketTunnelProvider: NEPacketTunnelProvider {
+public final class PacketTunnelProvider: NEPacketTunnelProvider {
     private var adapter: BoringTunAdapter?
-    private let logger = Logger(subsystem: "com.tunnelbahn.mac.networkextension", category: "PacketTunnelProvider")
-    private let resourceSampleQueue = DispatchQueue(label: "com.tunnelbahn.mac.networkextension.resourcesample", qos: .utility)
+    private var relayServer: PacketTunnelRelayServer?
+    private let logger = AppLog(subsystem: "com.tunnelbahn.mac.networkextension", category: "PacketTunnelProvider")
+    // Tagged with `resourceSampleQueueKey` so `sampleResources()` can detect when it is already
+    // running on this queue and call the sampler directly instead of dispatching `sync` onto
+    // itself (which would deadlock).
+    private static let resourceSampleQueueKey = DispatchSpecificKey<Void>()
+    private let resourceSampleQueue: DispatchQueue = {
+        let queue = DispatchQueue(label: "com.tunnelbahn.mac.networkextension.resourcesample", qos: .utility)
+        queue.setSpecific(key: PacketTunnelProvider.resourceSampleQueueKey, value: ())
+        return queue
+    }()
     private var resourceSampleTimer: DispatchSourceTimer?
+    private let resourceSampler = ProcessResourceSampler()
     private static let resourceSampleInterval: DispatchTimeInterval = .seconds(2)
 
-    override func startTunnel(options _: [String: NSObject]? = nil) async throws {
+    override public func startTunnel(options _: [String: NSObject]? = nil) async throws {
         logger.log("startTunnel invoked")
         try AppGroupStore.ensureSharedDirectories()
         let loadedRuntime = try loadRuntimeStateWithSource()
         let runtime = loadedRuntime.state
-        logger.log("runtime state source: \(loadedRuntime.source.rawValue, privacy: .public)")
+        logger.log("runtime state source: \(loadedRuntime.source.rawValue)")
         logRuntimeProfileSummary(runtime.profile, source: loadedRuntime.source.rawValue)
+        if let routes = runtime.appTunnelIncludedRoutes, !routes.isEmpty {
+            logger.notice("destination app-tunnel included routes count=\(routes.count)")
+        }
         adapter = BoringTunAdapter(provider: self)
         do {
-            try await adapter?.start(with: runtime.profile)
+            try await adapter?.start(
+                with: runtime.profile,
+                secrets: runtime.secrets,
+                appTunnelIncludedRoutes: runtime.appTunnelIncludedRoutes
+            )
         } catch {
-            logger.error("startTunnel failed: \(error.localizedDescription, privacy: .public)")
+            logger.error("startTunnel failed: \(error.localizedDescription)")
             throw error
         }
         if let runtimeConfiguration = await adapter?.runtimeConfiguration() {
-            logger.log("wireguard runtimeConfiguration after start:\n\(runtimeConfiguration, privacy: .public)")
+            logger.log("wireguard runtimeConfiguration after start:\n\(runtimeConfiguration)")
         } else {
             logger.error("wireguard runtimeConfiguration unavailable after start")
         }
         let endpointSummary = runtime.profile.peers.first?.endpoint ?? "nil"
         logger.notice(
-            "[APPSPLIT_EXT_SUMMARY] outcome=started source=\(loadedRuntime.source.rawValue, privacy: .public) profile=\(runtime.profile.name, privacy: .public) peers=\(runtime.profile.peers.count) endpoint=\(endpointSummary, privacy: .public)"
+            "[APPSPLIT_EXT_SUMMARY] outcome=started source=\(loadedRuntime.source.rawValue) profile=\(runtime.profile.name) peers=\(runtime.profile.peers.count) endpoint=\(endpointSummary)"
         )
+        if let adapter, let tunnelIPv4 = Self.primaryIPv4Address(from: runtime.profile) {
+            if let relay = SmoltcpRelayBridge(tunnelIPv4: tunnelIPv4) {
+                adapter.attachRelayBridge(relay)
+                if let server = PacketTunnelRelayServer(relayBridge: relay, packetQueue: adapter.relayPacketQueue) {
+                    relayServer = server
+                    server.start()
+                    logger.notice("smoltcp relay + UNIX-socket bridge started tunnelIP=\(tunnelIPv4)")
+                } else {
+                    logger.error("PacketTunnelRelayServer init failed (socket URL unavailable)")
+                }
+            } else {
+                logger.error("SmoltcpRelayBridge init failed for tunnelIP=\(tunnelIPv4)")
+            }
+        }
         logger.log("startTunnel completed adapter started")
         startResourceSampler()
     }
 
-    override func stopTunnel(with _: NEProviderStopReason) async {
+    override public func stopTunnel(with _: NEProviderStopReason) async {
         resourceSampleTimer?.cancel()
         resourceSampleTimer = nil
+        relayServer?.stop()
+        relayServer = nil
         await adapter?.stop()
         adapter = nil
     }
 
-    override func handleAppMessage(_ messageData: Data) async -> Data? {
+    private static func primaryIPv4Address(from profile: WireGuardProfile) -> String? {
+        profile.interface.addresses
+            .first(where: { $0.contains(".") && $0.contains("/") })
+            .flatMap { $0.split(separator: "/").first }
+            .map(String.init)
+    }
+
+    override public func handleAppMessage(_ messageData: Data) async -> Data? {
         let command = String(data: messageData, encoding: .utf8) ?? ""
         if command == "runtimeConfiguration" {
             guard let runtime = await adapter?.runtimeConfiguration() else { return nil }
             return runtime.data(using: .utf8)
         }
+        if command == "tunnelInterfaceName" {
+            do {
+                let loadedRuntime = try loadRuntimeStateWithSource()
+                if let name = Self.interfaceName(matchingTunnelAddressIn: loadedRuntime.state.profile) {
+                    return name.data(using: .utf8)
+                }
+            } catch {
+                logger.error("tunnelInterfaceName lookup failed: \(error.localizedDescription)")
+            }
+            return nil
+        }
         if command == "diagnostics" {
             return await diagnosticsPayload().data(using: .utf8)
+        }
+        if command == "resourceStats" {
+            // The host can't read this extension's resource file across the uid boundary, so it
+            // pulls our own CPU/memory over IPC instead. Reuses the same sampler as the timer path
+            // so the host sees the smoothed time-delta value, not a divergent snapshot.
+            let sample = sampleResources()
+            let payload: [String: Any] = [
+                "cpu": sample.cpuPercent,
+                "memory": sample.memoryBytes,
+            ]
+            return try? JSONSerialization.data(withJSONObject: payload)
         }
         return "TunnelBahn Network Extension active".data(using: .utf8)
     }
@@ -99,7 +161,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         return lines.joined(separator: "\n")
     }
 
-    private func loadRuntimeState() throws -> RuntimeState {
+    private func loadRuntimeState() throws -> TunnelRuntimeState {
         try loadRuntimeStateWithSource().state
     }
 
@@ -114,7 +176,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         do {
             let data = try Data(contentsOf: stateURL)
             logger.log("loaded runtime state from app group file")
-            let state = try JSONDecoder().decode(RuntimeState.self, from: data)
+            let state = try JSONDecoder().decode(TunnelRuntimeState.self, from: data)
             return LoadedRuntimeState(state: state, source: .appGroupFile)
         } catch {
             // If the App Group state file is missing (common during early install / dev builds),
@@ -124,10 +186,10 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
                let data = Data(base64Encoded: b64)
             {
                 logger.log("loaded runtime state from providerConfiguration")
-                let state = try JSONDecoder().decode(RuntimeState.self, from: data)
+                let state = try JSONDecoder().decode(TunnelRuntimeState.self, from: data)
                 return LoadedRuntimeState(state: state, source: .providerConfiguration)
             }
-            logger.error("failed to load runtime state: \(error.localizedDescription, privacy: .public)")
+            logger.error("failed to load runtime state: \(error.localizedDescription)")
             throw error
         }
     }
@@ -143,65 +205,29 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
     }
 
     private func sampleAndPublishExtensionResources() {
-        let cpu = Self.readCPUUsagePercent()
-        let memory = Self.readResidentMemoryBytes()
+        // Runs on `resourceSampleQueue` (via the sample timer).
+        let sample = sampleResources()
         var merged = ExtensionResourceStore.read()
-        merged.packetTunnelCPU = cpu
-        merged.packetTunnelMemory = memory
+        merged.packetTunnelCPU = sample.cpuPercent
+        merged.packetTunnelMemory = sample.memoryBytes
         merged.lastUpdate = .now
         merged.schemaVersion = ExtensionResourceStats.currentSchemaVersion
         do {
             try ExtensionResourceStore.write(merged)
         } catch {
-            logger.error("failed to write extension resource stats: \(error.localizedDescription, privacy: .public)")
+            logger.error("failed to write extension resource stats: \(error.localizedDescription)")
         }
     }
 
-    private static func readResidentMemoryBytes() -> UInt64 {
-        var info = mach_task_basic_info()
-        var count = mach_msg_type_number_t(MemoryLayout<mach_task_basic_info>.stride / MemoryLayout<natural_t>.stride)
-        let kr: kern_return_t = withUnsafeMutablePointer(to: &info) {
-            $0.withMemoryRebound(to: integer_t.self, capacity: Int(count)) {
-                task_info(
-                    mach_task_self_,
-                    task_flavor_t(MACH_TASK_BASIC_INFO),
-                    $0,
-                    &count
-                )
-            }
+    /// Serializes `resourceSampler` on `resourceSampleQueue`. The sampler carries time-delta state
+    /// between calls and is not thread-safe, while the `resourceStats` IPC reply arrives on a
+    /// different queue than the sample timer — funneling both through one queue keeps the smoothed
+    /// value coherent.
+    private func sampleResources() -> ProcessResourceSampler.Sample {
+        if DispatchQueue.getSpecific(key: Self.resourceSampleQueueKey) != nil {
+            return resourceSampler.sample()
         }
-        guard kr == KERN_SUCCESS else { return 0 }
-        return UInt64(info.resident_size)
-    }
-
-    private static func readCPUUsagePercent() -> Double {
-        var threadList: thread_act_array_t?
-        var threadCount: mach_msg_type_number_t = 0
-        let task = mach_task_self_
-        guard task_threads(task, &threadList, &threadCount) == KERN_SUCCESS, let threads = threadList else {
-            return 0
-        }
-        defer {
-            let address = vm_address_t(UInt(bitPattern: threads))
-            let byteCount = vm_size_t(Int(threadCount) * MemoryLayout<thread_t>.stride)
-            vm_deallocate(task, address, byteCount)
-        }
-
-        var total: Double = 0
-        for index in 0..<Int(threadCount) {
-            var threadInfo = thread_basic_info()
-            var threadInfoCount = mach_msg_type_number_t(THREAD_INFO_MAX)
-            let kr = withUnsafeMutablePointer(to: &threadInfo) {
-                $0.withMemoryRebound(to: integer_t.self, capacity: Int(threadInfoCount)) {
-                    thread_info(threads[index], thread_flavor_t(THREAD_BASIC_INFO), $0, &threadInfoCount)
-                }
-            }
-            guard kr == KERN_SUCCESS else { continue }
-            if threadInfo.flags & Int32(TH_FLAGS_IDLE) == 0 {
-                total += Double(threadInfo.cpu_usage) / Double(TH_USAGE_SCALE) * 100.0
-            }
-        }
-        return total
+        return resourceSampleQueue.sync { resourceSampler.sample() }
     }
 
     private func logRuntimeProfileSummary(_ profile: WireGuardProfile, source: String) {
@@ -209,24 +235,47 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         let dns = profile.interface.dnsServers.joined(separator: ", ")
         let mtu = profile.interface.mtu.map(String.init) ?? "nil"
         logger.log(
-            "runtime profile summary source=\(source, privacy: .public) name=\(profile.name, privacy: .public) addresses=[\(addresses, privacy: .public)] dns=[\(dns, privacy: .public)] mtu=\(mtu, privacy: .public) peers=\(profile.peers.count)"
+            "runtime profile summary source=\(source) name=\(profile.name) addresses=[\(addresses)] dns=[\(dns)] mtu=\(mtu) peers=\(profile.peers.count)"
         )
         for (index, peer) in profile.peers.enumerated() {
             let allowedJoined = peer.allowedIPs.joined(separator: ", ")
             let keepaliveStr = peer.persistentKeepalive.map(String.init) ?? "nil"
             logger.log(
-                "runtime peer[\(index)] endpoint=\(peer.endpoint, privacy: .public) allowedIPs=\(allowedJoined, privacy: .public) keepalive=\(keepaliveStr, privacy: .public)"
+                "runtime peer[\(index)] endpoint=\(peer.endpoint) allowedIPs=\(allowedJoined) keepalive=\(keepaliveStr)"
             )
         }
     }
-}
 
-private struct RuntimeState: Codable {
-    let profile: WireGuardProfile
+    /// Finds the utun interface that carries the tunnel's primary IPv4 address.
+    private static func interfaceName(matchingTunnelAddressIn profile: WireGuardProfile) -> String? {
+        guard let v4CIDR = profile.interface.addresses.first(where: { $0.contains(".") && $0.contains("/") }),
+              let address = v4CIDR.split(separator: "/").first.map(String.init),
+              !address.isEmpty
+        else {
+            return nil
+        }
+
+        var ifaddr: UnsafeMutablePointer<ifaddrs>?
+        guard getifaddrs(&ifaddr) == 0, let first = ifaddr else { return nil }
+        defer { freeifaddrs(ifaddr) }
+
+        var cursor: UnsafeMutablePointer<ifaddrs>? = first
+        while let ptr = cursor {
+            defer { cursor = ptr.pointee.ifa_next }
+            guard let sa = ptr.pointee.ifa_addr, sa.pointee.sa_family == UInt8(AF_INET) else { continue }
+            var host = [CChar](repeating: 0, count: Int(NI_MAXHOST))
+            let len = socklen_t(sa.pointee.sa_len)
+            guard getnameinfo(sa, len, &host, socklen_t(host.count), nil, 0, NI_NUMERICHOST) == 0 else { continue }
+            if String(cString: host) == address {
+                return String(cString: ptr.pointee.ifa_name)
+            }
+        }
+        return nil
+    }
 }
 
 private struct LoadedRuntimeState {
-    let state: RuntimeState
+    let state: TunnelRuntimeState
     let source: RuntimeStateSource
 }
 
