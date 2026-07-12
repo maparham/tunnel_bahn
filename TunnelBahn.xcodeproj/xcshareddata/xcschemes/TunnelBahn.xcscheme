@@ -81,12 +81,21 @@
          runnableDebuggingMode = "0">
          <BuildableReference
             BuildableIdentifier = "primary"
+            BlueprintIdentifier = "F1B81DFB16C0AC3C70771F60"
+            BuildableName = "TunnelBahn.app"
+            BlueprintName = "TunnelBahn"
+            ReferencedContainer = "container:TunnelBahn.xcodeproj">
+         </BuildableReference>
+      </BuildableProductRunnable>
+      <MacroExpansion>
+         <BuildableReference
+            BuildableIdentifier = "primary"
             BlueprintIdentifier = "A5DFE5D3B5175D2D358E833E"
             BuildableName = "com.tunnelbahn.mac.networkextension.systemextension"
             BlueprintName = "PacketTunnelExtension"
             ReferencedContainer = "container:TunnelBahn.xcodeproj">
          </BuildableReference>
-      </BuildableProductRunnable>
+      </MacroExpansion>
    </LaunchAction>
    <ProfileAction
       buildConfiguration = "Release"
