@@ -348,7 +348,13 @@ public final class TransparentProxyProvider: NETransparentProxyProvider {
         // tunneled flow black-holes. Decline the flow so the OS routes it directly. TCP carries its
         // destination at flow-open (checked here); UDP's remote isn't known until the first datagram,
         // so it's filtered per-datagram in UDPFlowRelay instead.
-        if let literal = literalRemoteHostname(from: flow), IPCIDRMatcher.isLocalLiteral(literal) {
+        //
+        // EXCEPTION (see IPCIDRMatcher.shouldBypassLocal): a routable-private destination the user
+        // explicitly configured to tunnel is NOT bypassed — with WireGuard-to-a-remote-LAN the peer
+        // *is* the gateway to those ranges (e.g. tunnel 192.168.88.0/24 to reach a router behind
+        // the WG server). Loopback/link-local/multicast can never be overridden.
+        if let literal = literalRemoteHostname(from: flow),
+           IPCIDRMatcher.shouldBypassLocal(literal, tunnelRanges: preparedRanges) {
             Self.log.notice("[APPSPLIT_FLOW] decision=bypass-local signingID=\(signingID) remote=\(literal)")
             return false
         }
@@ -430,6 +436,12 @@ public final class TransparentProxyProvider: NETransparentProxyProvider {
                 routeThroughTunnel: routeThroughTunnel,
                 tunnelInterfaceName: ifaceName,
                 queue: flowQueue,
+                tunnelRanges: { [weak self] in
+                    guard let self else { return [] }
+                    self.destinationLock.lock()
+                    defer { self.destinationLock.unlock() }
+                    return self.cachedPreparedRanges
+                },
                 onTx: { [weak self] in self?.aggregator.addTx($0, signingID: signingID) },
                 onRx: { [weak self] in self?.aggregator.addRx($0, signingID: signingID) },
                 onClose: { [weak self] in

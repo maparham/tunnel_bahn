@@ -23,6 +23,10 @@ final class UDPFlowRelay {
     private let routeThroughTunnel: Bool
     private let tunnelInterfaceName: String?
     private let queue: DispatchQueue
+    /// Live snapshot of the user's configured tunnel destination ranges (CIDRs + resolved domain
+    /// IPs). A closure, not a value: resolved-domain IPs are live-pushed mid-session, and UDP
+    /// decides per-datagram, so each decision must see the current set.
+    private let tunnelRanges: () -> [IPCIDRMatcher.PreparedRange]
     private let onTx: (UInt64) -> Void
     private let onRx: (UInt64) -> Void
     private let onClose: () -> Void
@@ -43,6 +47,7 @@ final class UDPFlowRelay {
         routeThroughTunnel: Bool,
         tunnelInterfaceName: String?,
         queue: DispatchQueue,
+        tunnelRanges: @escaping () -> [IPCIDRMatcher.PreparedRange],
         onTx: @escaping (UInt64) -> Void,
         onRx: @escaping (UInt64) -> Void,
         onClose: @escaping () -> Void
@@ -52,6 +57,7 @@ final class UDPFlowRelay {
         self.routeThroughTunnel = routeThroughTunnel
         self.tunnelInterfaceName = tunnelInterfaceName
         self.queue = queue
+        self.tunnelRanges = tunnelRanges
         self.onTx = onTx
         self.onRx = onRx
         self.onClose = onClose
@@ -110,7 +116,12 @@ final class UDPFlowRelay {
         // on one) can't be reached through the WireGuard peer, so it must go direct even when the
         // flow is otherwise routed — otherwise DNS and LAN traffic black-hole. UDP's remote is only
         // known here (per datagram), which is why this can't be decided up in handleNewFlow.
-        let useTunnel = routeThroughTunnel && !IPCIDRMatcher.isLocalLiteral(legacyEndpoint.hostname)
+        // Same predicate as the TCP flow-open check (IPCIDRMatcher.shouldBypassLocal): a
+        // routable-private destination the user explicitly configured to tunnel is not bypassed.
+        // tunnelRanges() (a lock-guarded live read) is only evaluated for local-literal remotes,
+        // via the predicate's autoclosure.
+        let useTunnel = routeThroughTunnel
+            && !IPCIDRMatcher.shouldBypassLocal(legacyEndpoint.hostname, tunnelRanges: tunnelRanges())
         if useTunnel {
             sendViaTunnel(datagram: datagram, to: legacyEndpoint, key: key)
         } else {

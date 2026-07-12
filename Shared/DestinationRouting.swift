@@ -326,4 +326,34 @@ public extension IPCIDRMatcher {
     static func isLocalLiteral(_ host: String) -> Bool {
         literalMatches(host, ranges: localBypassRanges)
     }
+
+    /// Subset of `localBypassRanges` a user may legitimately override by listing a destination
+    /// CIDR: routable private space that a remote LAN behind the WG peer can actually host
+    /// (RFC-1918, CGNAT, IPv6 ULA). Loopback, link-local, multicast, broadcast, and 0/8 stay
+    /// unconditionally bypassed — no peer can ever route those back, so even an explicit rule
+    /// (e.g. a catch-all 0.0.0.0/0 destination CIDR) must not tunnel them.
+    static let overridablePrivateRanges: [PreparedRange] = prepare([
+        "10.0.0.0/8",
+        "172.16.0.0/12",
+        "192.168.0.0/16",
+        "100.64.0.0/10",
+        "fc00::/7",
+    ])
+
+    /// Shared bypass predicate for the transparent proxy's TCP flow-open and UDP per-datagram
+    /// routing decisions (the single source of truth — do not hand-roll this composition at call
+    /// sites). A private/local destination exits directly UNLESS the user explicitly configured
+    /// it for tunneling (`tunnelRanges`) AND it lives in overridable (routable-private) space —
+    /// with WireGuard-to-a-remote-LAN the peer *is* the gateway to those ranges.
+    ///
+    /// `tunnelRanges` is an autoclosure so callers whose snapshot is expensive (e.g. a
+    /// lock-guarded live read per UDP datagram) only pay for it when `host` is actually local.
+    static func shouldBypassLocal(
+        _ host: String,
+        tunnelRanges: @autoclosure () -> [PreparedRange]
+    ) -> Bool {
+        guard isLocalLiteral(host) else { return false }
+        return !(literalMatches(host, ranges: overridablePrivateRanges)
+            && literalMatches(host, ranges: tunnelRanges()))
+    }
 }
