@@ -499,7 +499,16 @@ final class TCPFlowRelay {
                         self.finishDueToFailure(underlying: writeError)
                         return
                     }
-                    self.relayRemoteToApp()
+                    // The final segment can arrive together with the close signal (data +
+                    // isComplete in one callback). Honor it here — re-arming another receive
+                    // instead would let a trailing RST-after-FIN convert this fully-delivered
+                    // transfer into an error-close of the app flow.
+                    if isComplete {
+                        Self.log.debug("remote read complete (with final data) signingID=\(self.signingID)")
+                        self.finishSuccessfully()
+                    } else {
+                        self.relayRemoteToApp()
+                    }
                 }
                 return
             }

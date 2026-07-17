@@ -130,6 +130,12 @@ public final class TransparentProxyProvider: NETransparentProxyProvider {
     override public func startProxy(options: [String: Any]?, completionHandler: @escaping (Error?) -> Void) {
         Self.log.notice("startProxy invoked")
         let generation = bumpSessionGeneration()
+        // The provider instance is reused across stop/start, and stopProxy does not cancel
+        // in-flight relays — a late onTx/onRx byte callback can land AFTER stopProxy's clear()
+        // and re-insert a dead session's bytes. Re-clear here so this session's first flush
+        // reports only its own traffic.
+        aggregator.clear()
+        destinationAggregator.clear()
         // The relay client is a process-singleton; on a reconnect the proxy extension process
         // is reused while the tunnel extension recreates its UDS listener at the same path.
         // Without dropping the cached socket here, the next openFlow writes to a dead server-side

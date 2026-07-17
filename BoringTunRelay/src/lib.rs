@@ -149,6 +149,10 @@ pub struct TunnelbahnRelayBridge {
     /// Flow IDs whose remote peer closed and whose pending_rx was fully delivered; drained by
     /// `tunnelbahn_relay_drain_closed` (same poll-then-drain pattern as `pending_rx`).
     closed_flows: Vec<u64>,
+    /// Reusable scratch buffers for the per-poll hot path (flow-id snapshot and TCP recv),
+    /// avoiding a heap allocation per poll / per received segment.
+    flow_ids_scratch: Vec<u64>,
+    rx_scratch: Vec<u8>,
 }
 
 impl TunnelbahnRelayBridge {
@@ -188,27 +192,33 @@ impl TunnelbahnRelayBridge {
     }
 
     fn pump_all_tx(&mut self) {
-        let flow_ids: Vec<u64> = self.flows.keys().copied().collect();
-        for flow_id in flow_ids {
+        let mut flow_ids = std::mem::take(&mut self.flow_ids_scratch);
+        flow_ids.clear();
+        flow_ids.extend(self.flows.keys().copied());
+        for flow_id in flow_ids.iter().copied() {
             self.pump_tx(flow_id);
         }
+        self.flow_ids_scratch = flow_ids;
     }
 
     fn collect_tcp_rx(&mut self) {
-        let flow_ids: Vec<u64> = self.flows.keys().copied().collect();
-        for flow_id in flow_ids {
+        let mut flow_ids = std::mem::take(&mut self.flow_ids_scratch);
+        flow_ids.clear();
+        flow_ids.extend(self.flows.keys().copied());
+        for flow_id in flow_ids.iter().copied() {
             let Some(entry) = self.flows.get_mut(&flow_id) else {
                 continue;
             };
             let handle = entry.handle;
             let socket = self.sockets.get_mut::<tcp::Socket>(handle);
             while socket.can_recv() {
-                let mut buf = vec![0u8; 8192];
-                if let Ok(n) = socket.recv_slice(&mut buf) {
-                    buf.truncate(n);
-                    if !buf.is_empty() {
-                        entry.pending_rx.push_back(buf);
+                // recv into the persistent scratch, copying only the delivered bytes into an
+                // owned Vec — avoids an 8 KiB zero-filled allocation per received segment.
+                if let Ok(n) = socket.recv_slice(&mut self.rx_scratch) {
+                    if n == 0 {
+                        break;
                     }
+                    entry.pending_rx.push_back(self.rx_scratch[..n].to_vec());
                 } else {
                     break;
                 }
@@ -229,6 +239,7 @@ impl TunnelbahnRelayBridge {
                 self.closed_flows.push(flow_id);
             }
         }
+        self.flow_ids_scratch = flow_ids;
     }
 
     fn alloc_port(&mut self) -> Option<u16> {
@@ -267,6 +278,8 @@ impl TunnelbahnRelayBridge {
             next_port: EPHEMERAL_PORT_MIN,
             started_at: StdInstant::now(),
             closed_flows: Vec::new(),
+            flow_ids_scratch: Vec::new(),
+            rx_scratch: vec![0u8; 8192],
         }
     }
 
@@ -542,7 +555,13 @@ pub unsafe extern "C" fn tunnelbahn_relay_poll_tx_ip(
     if out.is_null() || out_len.is_null() {
         return -1;
     }
-    bridge.poll_stack();
+    // Only run the (expensive) stack poll when the tx queue is empty: one poll fills the queue
+    // with everything currently egressable, so the caller's drain loop pops packet-by-packet
+    // without re-running iface.poll/pump/collect once per packet. When the queue drains, the
+    // next call polls again and returns 0 if nothing new emerged, ending the loop.
+    if bridge.device.tx_queue.is_empty() {
+        bridge.poll_stack();
+    }
     // Peek before popping: popping first and then failing the capacity check would drop the
     // packet and corrupt the TCP stream. On -2 the required size is reported via out_len so
     // the caller can grow its buffer and retry; the packet stays queued.

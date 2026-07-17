@@ -61,6 +61,11 @@ final class TransparentProxyRelayClient {
     // breaks the P1 deadlock: a full send buffer no longer blocks `ioQueue`, so the read source can
     // still run and drain the peer. All three are touched only under `stateLock`.
     private var writeBuffer = Data()
+    /// Consumed prefix of `writeBuffer` already accepted by the kernel. Writing from an advancing
+    /// offset and compacting lazily avoids an O(remaining) memmove per partial write
+    /// (`removeFirst(n)` on every EAGAIN-paced iteration made draining a full buffer quadratic).
+    /// Under `stateLock`.
+    private var writeOffset = 0
     /// `sendPayload` completions held while `writeBuffer` is above the high-water mark (backpressure).
     /// Fired `true` once the buffer drains below the low-water mark, `false` on teardown. Under `stateLock`.
     private var pausedSendCompletions: [(Bool) -> Void] = []
@@ -314,6 +319,7 @@ final class TransparentProxyRelayClient {
         writeSource?.cancel()  // defensive: drop any source still armed from a prior connection
         writeSource = nil
         writeBuffer.removeAll(keepingCapacity: true)
+        writeOffset = 0
         stateLock.unlock()
     }
 
@@ -345,27 +351,40 @@ final class TransparentProxyRelayClient {
     }
 
     private func consumeFrames() {
-        while true {
-            // Parse under the lock (decode copies out what it needs) instead of snapshotting the
-            // whole buffer per frame, which was O(n²) under bulk transfer.
-            stateLock.lock()
-            let result = RelayWireFrame.parse(readBuffer)
-            if case let .frame(_, used) = result {
-                readBuffer.removeFirst(used)
-            }
-            stateLock.unlock()
+        // Parse every complete frame in one pass under the lock, advancing an O(1) slice cursor
+        // (parse is startIndex-aware), then compact the buffer once. The previous per-frame
+        // `removeFirst(used)` memmoved the remaining bytes down once per frame — O(frames·bytes)
+        // for a single 64 KiB read full of small frames. Decoded frames own copies of their
+        // payloads, so dispatching after the compaction is safe.
+        stateLock.lock()
+        var consumed = 0
+        var frames: [RelayWireFrame.Frame] = []
+        var malformedReason: String?
+        parseLoop: while true {
+            let result = RelayWireFrame.parse(readBuffer[(readBuffer.startIndex + consumed)...])
             switch result {
-            case let .frame(frame, _):
-                handle(frame: frame)
+            case let .frame(frame, used):
+                frames.append(frame)
+                consumed += used
             case .needMoreData:
-                return
+                break parseLoop
             case let .malformed(reason):
-                // No resync is possible past a bad frame — fail the link closed and reconnect
-                // rather than waiting forever on an unparseable stream.
-                Self.log.error("relay client: malformed frame (\(reason)) — resetting link")
-                tearDown(reason: "malformed frame: \(reason)")
-                return
+                malformedReason = reason
+                break parseLoop
             }
+        }
+        if consumed > 0 {
+            readBuffer.removeFirst(consumed)
+        }
+        stateLock.unlock()
+        for frame in frames {
+            handle(frame: frame)
+        }
+        if let malformedReason {
+            // No resync is possible past a bad frame — fail the link closed and reconnect
+            // rather than waiting forever on an unparseable stream.
+            Self.log.error("relay client: malformed frame (\(malformedReason)) — resetting link")
+            tearDown(reason: "malformed frame: \(malformedReason)")
         }
     }
 
@@ -423,7 +442,7 @@ final class TransparentProxyRelayClient {
             var resumable: [(Bool) -> Void] = []
             if teardownReason == nil {
                 if let completion {
-                    if self.writeBuffer.count >= Self.writeHighWater {
+                    if self.pendingWriteBytesLocked >= Self.writeHighWater {
                         self.pausedSendCompletions.append(completion)
                     } else {
                         fireNow = completion
@@ -447,7 +466,7 @@ final class TransparentProxyRelayClient {
     /// we're below `writeLowWater`, so the high/low hysteresis avoids thrashing read pause/resume.
     /// Precondition: `stateLock` held.
     private func takeResumableCompletionsLocked() -> [(Bool) -> Void] {
-        guard writeBuffer.count < Self.writeLowWater, !pausedSendCompletions.isEmpty else { return [] }
+        guard pendingWriteBytesLocked < Self.writeLowWater, !pausedSendCompletions.isEmpty else { return [] }
         let c = pausedSendCompletions
         pausedSendCompletions.removeAll()
         return c
@@ -472,16 +491,25 @@ final class TransparentProxyRelayClient {
     private func drainWriteBufferLocked() -> String? {
         guard socketFD >= 0 else { return nil }
         let fd = socketFD
-        while !writeBuffer.isEmpty {
+        while writeOffset < writeBuffer.count {
             let n = writeBuffer.withUnsafeBytes { (buf: UnsafeRawBufferPointer) -> Int in
                 guard let base = buf.baseAddress else { return 0 }
-                return write(fd, base, writeBuffer.count)
+                return write(fd, base + writeOffset, writeBuffer.count - writeOffset)
             }
             if n > 0 {
-                writeBuffer.removeFirst(n)
+                writeOffset += n
+                // Compact lazily: free everything once drained, or shed a large consumed prefix;
+                // never memmove per partial write (that made a full-buffer drain quadratic).
+                if writeOffset == writeBuffer.count {
+                    writeBuffer.removeAll(keepingCapacity: true)
+                    writeOffset = 0
+                } else if writeOffset >= Self.writeLowWater {
+                    writeBuffer.removeFirst(writeOffset)
+                    writeOffset = 0
+                }
             } else if n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK) {
-                if writeBuffer.count > Self.maxWriteBuffer {
-                    return "write buffer overflow \(writeBuffer.count)B — peer not draining"
+                if pendingWriteBytesLocked > Self.maxWriteBuffer {
+                    return "write buffer overflow \(pendingWriteBytesLocked)B — peer not draining"
                 }
                 armWriteSourceLocked(fd: fd)
                 return nil
@@ -494,6 +522,9 @@ final class TransparentProxyRelayClient {
         disarmWriteSourceLocked()
         return nil
     }
+
+    /// Bytes buffered but not yet accepted by the kernel. Precondition: `stateLock` held.
+    private var pendingWriteBytesLocked: Int { writeBuffer.count - writeOffset }
 
     /// Arms an on-demand write source (resumed immediately) so we get a callback when the socket is
     /// writable again. Cancelled in `disarmWriteSourceLocked` once drained — so it is never held
@@ -534,6 +565,7 @@ final class TransparentProxyRelayClient {
         pausedSendCompletions.removeAll()
         readBuffer.removeAll(keepingCapacity: true)
         writeBuffer.removeAll(keepingCapacity: true)
+        writeOffset = 0
         stateLock.unlock()
 
         src?.cancel()

@@ -144,7 +144,7 @@ struct AppsView: View {
                                     .foregroundStyle(.blue)
                                     .frame(maxWidth: .infinity, alignment: .leading)
                             } else {
-                                List(selectedAppRules, id: \.appPath) { rule in
+                                List(selectedAppRules, id: \.id) { rule in
                                     HStack(spacing: 12) {
                                         VStack(alignment: .leading) {
                                             Text(rule.displayName)

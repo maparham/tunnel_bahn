@@ -55,9 +55,17 @@ enum DomainResolver {
             let queue = DispatchQueue(label: "dns.resolve.\(domain)", qos: .userInitiated)
             DNSServiceSetDispatchQueue(ctx.sdRef, queue)
 
-            // Hard timeout — cancelled once finalize() is called.
+            // Hard timeout — cancelled once finalize() is called. Runs on the same serial queue
+            // as the callbacks, so reading ctx state here is race-free. A partial answer (one
+            // family collected, the other silently never terminal) succeeds with what we have
+            // rather than discarding usable records as a timeout failure.
             ctx.timeoutWork = DispatchWorkItem { [weak ctx] in
-                ctx?.finalize(with: .failure(DomainResolverError.timeout))
+                guard let ctx else { return }
+                if ctx.cidrs.isEmpty {
+                    ctx.finalize(with: .failure(DomainResolverError.timeout))
+                } else {
+                    ctx.finalize(with: .success(DomainResolutionResult(cidrs: ctx.cidrs, ttl: ctx.clampedTTL)))
+                }
             }
             queue.asyncAfter(deadline: .now() + queryTimeout, execute: ctx.timeoutWork!)
         }
@@ -84,6 +92,7 @@ private let addrInfoCallback: DNSServiceGetAddrInfoReply = { _, flags, _, errCod
         }
     } else if let addressPtr {
         let family = Int32(addressPtr.pointee.sa_family)
+        ctx.answeredFamilies.insert(family)
         if family == AF_INET {
             addressPtr.withMemoryRebound(to: sockaddr_in.self, capacity: 1) { sin in
                 var addr = sin.pointee.sin_addr
@@ -110,16 +119,20 @@ private let addrInfoCallback: DNSServiceGetAddrInfoReply = { _, flags, _, errCod
     let moreComingMask = DNSServiceFlags(kDNSServiceFlagsMoreComing)
     let moreComing = (flags & moreComingMask) != 0
     if !moreComing {
-        if !ctx.cidrs.isEmpty {
-            let rawTTL = ctx.minTTL == UInt32.max ? UInt32(DomainResolver.minTTL) : ctx.minTTL
-            let clamped = min(max(TimeInterval(rawTTL), DomainResolver.minTTL), DomainResolver.maxTTL)
-            ctx.finalize(with: .success(DomainResolutionResult(cidrs: ctx.cidrs, ttl: clamped)))
-        } else if ctx.negativeFamilies.count >= 2 {
-            ctx.finalize(with: .failure(DomainResolverError.noAddressesFound))
+        // moreComing==0 only means "nothing else queued right now", NOT "query complete" — the
+        // two families answer as separate record streams, and finalizing on the first family's
+        // positive answer silently drops the other family's records (e.g. a cached A landing
+        // before the AAAA network answer → the domain's IPv6 destinations never get routed).
+        // Finalize only once BOTH families have reached a terminal state (a positive record or
+        // NoSuchRecord); otherwise leave the query open for the other family or the timeout.
+        let terminalFamilies = ctx.answeredFamilies.union(ctx.negativeFamilies)
+        if terminalFamilies.contains(AF_INET) && terminalFamilies.contains(AF_INET6) {
+            if !ctx.cidrs.isEmpty {
+                ctx.finalize(with: .success(DomainResolutionResult(cidrs: ctx.cidrs, ttl: ctx.clampedTTL)))
+            } else {
+                ctx.finalize(with: .failure(DomainResolverError.noAddressesFound))
+            }
         }
-        // else: no records yet but one family hasn't answered — a negative answer can land with
-        // moreComing unset before the other family's positive answer arrives. Leave the query
-        // open; a later callback or the timeout finalizes it.
     }
 }
 
@@ -130,9 +143,17 @@ private final class DNSQueryContext {
     var cidrs: [String] = []
     /// Address families (AF_INET/AF_INET6) that answered NoSuchRecord.
     var negativeFamilies: Set<Int32> = []
+    /// Address families that delivered at least one positive record.
+    var answeredFamilies: Set<Int32> = []
     var minTTL: UInt32 = UInt32.max
     var timeoutWork: DispatchWorkItem?
     private(set) var done = false
+
+    /// Collected minimum TTL clamped to the resolver's [minTTL, maxTTL] policy window.
+    var clampedTTL: TimeInterval {
+        let rawTTL = minTTL == UInt32.max ? UInt32(DomainResolver.minTTL) : minTTL
+        return min(max(TimeInterval(rawTTL), DomainResolver.minTTL), DomainResolver.maxTTL)
+    }
 
     private let continuation: CheckedContinuation<DomainResolutionResult, Error>
     private let lock = NSLock()

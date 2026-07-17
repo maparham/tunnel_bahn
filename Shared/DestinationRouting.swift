@@ -143,8 +143,11 @@ public enum IPCIDRMatcher {
 
         var v4 = in_addr()
         if inet_pton(AF_INET, ipPart, &v4) == 1 {
-            let pbNumeric = Swift.min(prefixBits.map(Int.init) ?? 32, 32)
-            let pb = UInt8(pbNumeric)
+            // The guard above only bounds the prefix to the IPv6 max (128); an IPv4 literal with
+            // a prefix > 32 (e.g. "1.2.3.4/40") is invalid input and must be rejected, not
+            // silently clamped to a /32 host route.
+            if let pb = prefixBits, pb > 32 { return nil }
+            let pb = prefixBits ?? 32
             let net = maskedIPv4(UInt32(bigEndian: v4.s_addr), pb)
             return PreparedRange(kind: .v4(network: net, prefixBits: pb))
         }

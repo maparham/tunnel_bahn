@@ -607,13 +607,18 @@ final class BoringTunAdapter: @unchecked Sendable {
         first = res
     }
 
-    private func handleTunPacket(_ packet: Data) {
+    private func handleTunPacket(_ packet: Data, fromRelay: Bool = false) {
         guard let tunnel, isRunning else { return }
         guard !packet.isEmpty else { return }
         // Drop packets whose destination is outside AllowedIPs. With per-app VPN sourceApplication
         // routing, the kernel forces all matched-app traffic to utun regardless of the routing table,
         // so we must enforce AllowedIPs here rather than relying on kernel routes.
-        if !isAllowedOutbound(packet) {
+        // Relay-origin packets are exempt: the transparent proxy already made the authoritative
+        // tunnel/direct decision for that flow (which legitimately includes SNI/domain-matched
+        // destinations OUTSIDE the resolved CIDR ranges — the CDN/anycast case), so re-adjudicating
+        // by destination here would black-hole those flows. The filter's scope is kernel
+        // packetFlow reads only.
+        if !fromRelay, !isAllowedOutbound(packet) {
             if destinationSplitFilterActive {
                 droppedOutboundCount &+= 1
                 if droppedOutboundCount == 1 || droppedOutboundCount % 100 == 0 {
@@ -667,7 +672,7 @@ final class BoringTunAdapter: @unchecked Sendable {
             Self.log.notice("[APPSPLIT_DIAG] relay_poll n=\(self.diagRelayPollLogCount) packets=\(packets.count)")
         }
         for packet in packets {
-            handleTunPacket(packet)
+            handleTunPacket(packet, fromRelay: true)
         }
     }
 

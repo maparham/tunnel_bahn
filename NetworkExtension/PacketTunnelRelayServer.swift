@@ -42,6 +42,9 @@ final class PacketTunnelRelayServer {
     // `DispatchSource`. All three are touched only on `ioQueue` (every caller funnels through it),
     // so no lock is needed — this replaces the old `writeLock`.
     private var writeBuffer = Data()
+    /// Consumed prefix of `writeBuffer` already accepted by the kernel. Writing from an advancing
+    /// offset and compacting lazily avoids an O(remaining) memmove per partial write. On `ioQueue`.
+    private var writeOffset = 0
     /// Armed (created + resumed) only while a write is blocked on EAGAIN; cancelled and cleared the
     /// moment the buffer drains. Kept strictly on-demand — never held suspended-at-rest — because
     /// releasing a *suspended* dispatch source traps (`_dispatch_queue_xref_dispose.cold.1`, seen in
@@ -173,6 +176,7 @@ final class PacketTunnelRelayServer {
         writeSource?.cancel()  // defensive: drop any source still armed from a prior client
         writeSource = nil
         writeBuffer.removeAll(keepingCapacity: true)
+        writeOffset = 0
     }
 
     private func drainSocket() {
@@ -196,20 +200,36 @@ final class PacketTunnelRelayServer {
     }
 
     private func consumeFrames() {
+        // Parse with an O(1) slice cursor (parse is startIndex-aware) and compact once — the
+        // previous per-frame `removeFirst(used)` memmoved the remaining buffer down once per
+        // frame, quadratic over a 64 KiB read full of small frames. Decoded frames own copies
+        // of their payloads, so dispatching after the compaction is safe.
+        var consumed = 0
+        var frames: [RelayWireFrame.Frame] = []
+        var malformedReason: String?
         loop: while true {
-            switch RelayWireFrame.parse(readBuffer) {
+            switch RelayWireFrame.parse(readBuffer[(readBuffer.startIndex + consumed)...]) {
             case let .frame(frame, used):
-                readBuffer.removeFirst(used)
-                handle(frame: frame)
+                frames.append(frame)
+                consumed += used
             case .needMoreData:
                 break loop
             case let .malformed(reason):
-                // No resync is possible past a bad frame; drop the client and let it reconnect
-                // with a fresh stream rather than wedging with an ever-growing buffer.
-                Self.log.error("relay server: malformed frame (\(reason)) — dropping client")
-                closeClient()
+                malformedReason = reason
                 break loop
             }
+        }
+        if consumed > 0 {
+            readBuffer.removeFirst(consumed)
+        }
+        for frame in frames {
+            handle(frame: frame)
+        }
+        if let malformedReason {
+            // No resync is possible past a bad frame; drop the client and let it reconnect
+            // with a fresh stream rather than wedging with an ever-growing buffer.
+            Self.log.error("relay server: malformed frame (\(malformedReason)) — dropping client")
+            closeClient()
         }
     }
 
@@ -315,16 +335,26 @@ final class PacketTunnelRelayServer {
     private func drainWriteBuffer() {
         guard clientFD >= 0 else { return }
         let fd = clientFD
-        while !writeBuffer.isEmpty {
+        while writeOffset < writeBuffer.count {
             let n = writeBuffer.withUnsafeBytes { (buf: UnsafeRawBufferPointer) -> Int in
                 guard let base = buf.baseAddress else { return 0 }
-                return write(fd, base, writeBuffer.count)
+                return write(fd, base + writeOffset, writeBuffer.count - writeOffset)
             }
             if n > 0 {
-                writeBuffer.removeFirst(n)
+                writeOffset += n
+                // Compact lazily: free everything once drained, or shed a large consumed prefix;
+                // never memmove per partial write (that made a full-buffer drain quadratic).
+                if writeOffset == writeBuffer.count {
+                    writeBuffer.removeAll(keepingCapacity: true)
+                    writeOffset = 0
+                } else if writeOffset >= 512 * 1024 {
+                    writeBuffer.removeFirst(writeOffset)
+                    writeOffset = 0
+                }
             } else if n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK) {
-                if writeBuffer.count > Self.maxWriteBuffer {
-                    Self.log.error("relay server: write buffer overflow \(self.writeBuffer.count)B — dropping client")
+                let pending = writeBuffer.count - writeOffset
+                if pending > Self.maxWriteBuffer {
+                    Self.log.error("relay server: write buffer overflow \(pending)B — dropping client")
                     closeClient()
                     return
                 }
@@ -333,7 +363,7 @@ final class PacketTunnelRelayServer {
             } else if n < 0 && errno == EINTR {
                 continue
             } else {
-                Self.log.error("relay server: write failed errno=\(errno) buffered=\(self.writeBuffer.count)")
+                Self.log.error("relay server: write failed errno=\(errno) buffered=\(self.writeBuffer.count - self.writeOffset)")
                 closeClient()
                 return
             }
@@ -378,6 +408,7 @@ final class PacketTunnelRelayServer {
         }
         readBuffer.removeAll(keepingCapacity: true)
         writeBuffer.removeAll(keepingCapacity: true)
+        writeOffset = 0
     }
 
     private func teardown() {

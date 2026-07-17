@@ -46,11 +46,14 @@ int tunnelbahn_relay_open_tcp(TunnelbahnRelayBridge *bridge,
 
 void tunnelbahn_relay_close(TunnelbahnRelayBridge *bridge, uint64_t flow_id);
 
-/// Tristate. 1 = bytes accepted into smoltcp's tx buffer. 0 = handshake still in
-/// progress (SynSent / SynReceived); caller should retry briefly. -1 = flow missing
-/// or socket is in a terminal state (Closed / Closing / FinWait* / TimeWait / LastAck /
-/// Listen) and will never accept more bytes; caller should push a flowClosedPush back
-/// to the proxy rather than retry.
+/// Tristate. 1 = bytes accepted (buffered/sent), room remains. 0 = bytes WERE accepted
+/// (none dropped — do NOT resend them) but the flow's pending tx crossed the backpressure
+/// high-water mark; caller must PAUSE feeding this link (pause UDS reads) until smoltcp
+/// drains. Pre-handshake (SynSent / SynReceived) bytes are buffered and return 1 unless
+/// the high-water mark is crossed. -1 = flow missing, per-flow tx cap exceeded, or socket
+/// is in a terminal state (Closed / Closing / FinWait* / TimeWait / LastAck / Listen) and
+/// will never accept more bytes; caller should push a flowClosedPush back to the proxy
+/// rather than retry.
 int tunnelbahn_relay_send_tcp(TunnelbahnRelayBridge *bridge,
                               uint64_t flow_id,
                               const uint8_t *data,

@@ -199,7 +199,14 @@ final class AppState: ObservableObject {
         installRoutingSnapshot(profileRoutingStore.snapshot(for: profileID), for: profileID, syncDestinationRouting: false)
     }
 
+    /// True while the live settings hold `tunnelbahn://test` overrides (see
+    /// `connectProfileForTest`). Blocks snapshot persistence so the debounced save publisher
+    /// can't write the pinned test values into the profile's stored snapshot. Cleared whenever
+    /// a snapshot is (re)installed into the live stores.
+    private var testSettingsPinned = false
+
     private func installRoutingSnapshot(_ snapshot: ProfileRoutingSnapshot, for profileID: UUID, syncDestinationRouting: Bool) {
+        testSettingsPinned = false
         loadedProfileID = profileID
         settings.routingMode = snapshot.routingMode
         appRuleStore.replaceAll(snapshot.appRules)
@@ -228,6 +235,9 @@ final class AppState: ObservableObject {
     }
 
     private func saveSnapshot(for profileID: UUID) {
+        // Live state currently holds tunnelbahn://test overrides — persisting it would
+        // permanently rewrite the user's profile snapshot with pinned test values.
+        guard !testSettingsPinned else { return }
         let bulkListsEnabled = settings.destinationBulkListsEnabled
         let customRangesEnabled = settings.destinationCustomRangesEnabled
         let domainNamesEnabled = settings.destinationDomainNamesEnabled
@@ -310,6 +320,11 @@ final class AppState: ObservableObject {
             await vpnManager.disconnectAndWait()
             profileStore.select(id: profile.id)
             prepareLiveRoutingForConnect(profileID: profile.id)
+            // Pin BEFORE mutating settings: the mutations below fire the 500ms-debounced save
+            // publisher, which would otherwise persist these test overrides into the profile's
+            // stored snapshot. The pin clears when the next snapshot is installed (profile
+            // switch, next connect, or the post-disconnect re-apply).
+            testSettingsPinned = true
             settings.routingMode = routingMode
             settings.enforceDestinationFiltering = enforceDestinationFiltering
             domainResolutionCoordinator.cancelInFlight()
