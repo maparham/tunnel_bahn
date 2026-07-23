@@ -24,7 +24,7 @@ final class PacketTunnelRelayServer {
 
     private let socketPath: String
     private let packetQueue: DispatchQueue
-    private let relayBridge: SmoltcpRelayBridge
+    private let relayBridge: RelayFlowTransport
 
     private let ioQueue = DispatchQueue(label: "com.tunnelbahn.mac.networkextension.relay.io", qos: .userInitiated)
     private var listenFD: Int32 = -1
@@ -51,7 +51,7 @@ final class PacketTunnelRelayServer {
     /// `PacketTunnelRelayServer.deinit`). A resumed-or-cancelled source is always safe to release.
     private var writeSource: DispatchSourceWrite?
 
-    init?(relayBridge: SmoltcpRelayBridge, packetQueue: DispatchQueue) {
+    init?(relayBridge: RelayFlowTransport, packetQueue: DispatchQueue) {
         guard let url = SharedPaths.relaySocketURL() else {
             Self.log.error("relaySocketURL is nil — cannot start relay server")
             return nil

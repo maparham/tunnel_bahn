@@ -2,7 +2,7 @@ import Foundation
 import os.log
 
 /// Swift wrapper around the smoltcp relay FFI (runs only on `BoringTunAdapter`'s packet queue).
-final class SmoltcpRelayBridge: @unchecked Sendable {
+final class SmoltcpRelayBridge: RelayFlowTransport, @unchecked Sendable {
     private static let log = AppLog(subsystem: "com.tunnelbahn.mac.networkextension", category: "RelayBridge")
 
     private var handle: OpaquePointer?
@@ -107,12 +107,6 @@ final class SmoltcpRelayBridge: @unchecked Sendable {
     func close(flowID: UInt64) {
         guard let handle else { return }
         tunnelbahn_relay_close(handle, flowID)
-    }
-
-    enum SendResult {
-        case ok          // bytes accepted into smoltcp's tx buffer
-        case transient   // bytes accepted, but tx queue crossed the high-water mark — pause feeding
-        case permanent   // flow missing or socket in terminal state; do not retry
     }
 
     func sendTCP(flowID: UInt64, data: Data) -> SendResult {

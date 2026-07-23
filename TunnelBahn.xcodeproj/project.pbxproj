@@ -107,6 +107,7 @@
 		AEC2773FCCE9A9B8592DFE0B /* PerAppIdentityMap.swift in Sources */ = {isa = PBXBuildFile; fileRef = 925B86B12D5DC6FCBB010E74 /* PerAppIdentityMap.swift */; };
 		AF68F76B1E84C2E0A8EF3BB1 /* RoutingAction.swift in Sources */ = {isa = PBXBuildFile; fileRef = 50CB7F447B0157775A81E1F0 /* RoutingAction.swift */; };
 		AF818DB11B0B8DC2DE23EE6C /* NEAppRuleBuilder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5C79F57236D533D1E1A9AD5D /* NEAppRuleBuilder.swift */; };
+		B07E67D4623CD026D62CCC0D /* RelayFlowTransport.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA4697EAC901C64656CC48F7 /* RelayFlowTransport.swift */; };
 		B17C8112B943366E3D5C89EC /* AppLog.swift in Sources */ = {isa = PBXBuildFile; fileRef = C555A6EC9D28808AD8B285BE /* AppLog.swift */; };
 		B2CAC96BE280F102E188C71D /* ConnectionStats.swift in Sources */ = {isa = PBXBuildFile; fileRef = 147A18331F2C2E8D4BE615DC /* ConnectionStats.swift */; };
 		B40A7DCDB267889652D38A80 /* BackupService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 27DBB6DD415B2907CC6D69B1 /* BackupService.swift */; };
@@ -289,6 +290,7 @@
 		F7E43092154982D7DF581773 /* PerAppStatsProxyManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PerAppStatsProxyManager.swift; sourceTree = "<group>"; };
 		F86BBF39930242EB8FF86F54 /* StatusView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StatusView.swift; sourceTree = "<group>"; };
 		F88247F5F75B562B2174478C /* RelayOutboundBridge.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = RelayOutboundBridge.m; sourceTree = "<group>"; };
+		FA4697EAC901C64656CC48F7 /* RelayFlowTransport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RelayFlowTransport.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -385,6 +387,7 @@
 				575EA7FA92707A3BE5CF97E1 /* PacketTunnelProvider.swift */,
 				28D71ABF54C747293AA24B64 /* PacketTunnelRelayServer.swift */,
 				0827F61A21C5BB1DB6246BCA /* PrivacyInfo.xcprivacy */,
+				FA4697EAC901C64656CC48F7 /* RelayFlowTransport.swift */,
 				7280270F66534C0574E7B2C9 /* SmoltcpRelayBridge.swift */,
 				B31514E0B7A74ECBCB1CC0B0 /* SSHLinkSmoke.swift */,
 				E65D4530F40941166A0943E7 /* tunnelbahn_relay_ffi.h */,
@@ -796,6 +799,7 @@
 				7FE46529E271AA701B21343B /* PerAppTransferStore.swift in Sources */,
 				481F5086AA8C8D7AE27BA080 /* ProcessResourceSampler.swift in Sources */,
 				9C96C74B7E5F615BDED14A8D /* ProfileRoutingSnapshot.swift in Sources */,
+				B07E67D4623CD026D62CCC0D /* RelayFlowTransport.swift in Sources */,
 				90E609CF0B7509F6FC46372E /* RelayWireFrame.swift in Sources */,
 				1DD70115E16E2BF47ADE14CB /* RoutingAction.swift in Sources */,
 				1C8009F824AED9AC87F76376 /* RoutingMode.swift in Sources */,
