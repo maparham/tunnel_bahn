@@ -32,6 +32,43 @@ final class SSHFlowTransport: RelayFlowTransport, @unchecked Sendable {
     private var channel: Channel?
     private var groupShutDown = false
 
+    // MARK: Per-flow channel state (Task 5)
+
+    /// State for one relay flow → one `direct-tcpip` child channel.
+    ///
+    /// A flow exists in `flows` from the synchronous `openTCP` call until it is closed (locally via
+    /// `close`, or remotely via `channelInactive`/error). Because the child channel is created
+    /// asynchronously (a full SSH-server round-trip), payloads from the proxy can arrive via `sendTCP`
+    /// *before* the channel is active. Those early bytes are buffered in `pending` and flushed, in
+    /// order, once the channel opens.
+    private final class Flow {
+        var channel: Channel?
+        var pending: [Data] = []
+        var pendingBytes = 0
+        /// Set when the flow was closed before its channel finished opening, so the create-completion
+        /// path closes the freshly-created child instead of leaking it.
+        var closed = false
+    }
+
+    /// Guards `flows`. Touched from both the relay server's `packetQueue` (via `openTCP`/`sendTCP`/
+    /// `close`) and the SSH event loop (child-channel create completion, `channelInactive`, errors).
+    private let flowsLock = NSLock()
+    private var flows: [UInt64: Flow] = [:]
+
+    /// While a flow's channel is still connecting, buffered bytes above this soft threshold make
+    /// `sendTCP` return `.transient` so the relay server pauses UDS reads. Once the channel is active,
+    /// real backpressure comes from the child channel's SSH-window-based `isWritable` instead.
+    private static let pendingSoftWaterMark = 128 * 1024
+
+    /// Hard fail-closed ceiling on bytes buffered while a flow's channel is still connecting.
+    /// `.transient` only paces the relay (pause/resume) — it does not bound *cumulative* bytes — so if
+    /// the SSH server's onward connect to the destination stalls (unreachable/filtered dest) while the
+    /// source app keeps uploading, `pending` would grow without limit and OOM the NetworkExtension.
+    /// Past this cap we reject with `.permanent`, tearing down the source flow rather than buffering
+    /// forever. Mirrors `SmoltcpRelayBridge`'s per-flow buffer cap (see PacketTunnelRelayServer.swift
+    /// where `.permanent` documents "the per-flow buffer cap was hit").
+    private static let pendingHardCap = 4 * 1024 * 1024
+
     private static let log = AppLog(subsystem: "com.tunnelbahn.mac", category: "SSHFlowTransport")
 
     /// - Parameters:
@@ -127,16 +164,171 @@ final class SSHFlowTransport: RelayFlowTransport, @unchecked Sendable {
         try? group.syncShutdownGracefully()
     }
 
-    // MARK: RelayFlowTransport — per-flow channels arrive in Task 5
+    // MARK: RelayFlowTransport — per-flow `direct-tcpip` channels (Task 5)
 
-    // Task 5: open a `direct-tcpip` child channel on `channel` for this flow.
-    func openTCP(flowID: UInt64, remoteHost: String, remotePort: UInt16) -> Bool { false }
+    /// Opens a `direct-tcpip` child channel to `remoteHost:remotePort`.
+    ///
+    /// Returns `true` synchronously once the create has been enqueued (mirroring
+    /// `SmoltcpRelayBridge.openTCP`, whose flow likewise exists immediately while completion is
+    /// async). Returns `false` only if there is no live SSH connection. A *create* failure surfaces
+    /// asynchronously as `onFlowClosed(flowID, …)`.
+    ///
+    /// Called on the relay server's `packetQueue`. The child channel and all `flows` mutations that
+    /// depend on it happen on the SSH event loop; `flows` itself is guarded by `flowsLock`.
+    func openTCP(flowID: UInt64, remoteHost: String, remotePort: UInt16) -> Bool {
+        guard let channel = channel else { return false }
 
-    // Task 5: write into the flow's `direct-tcpip` child channel with backpressure hysteresis.
-    func sendTCP(flowID: UInt64, data: Data) -> SendResult { .permanent }
+        // Register the flow synchronously so `sendTCP`/`close` racing in right behind us find it and
+        // buffer/mark rather than seeing an "unknown flow" and tearing it down.
+        let flow = Flow()
+        flowsLock.lock()
+        flows[flowID] = flow
+        flowsLock.unlock()
 
-    // Task 5: close the flow's `direct-tcpip` child channel.
-    func close(flowID: UInt64) {}
+        // The originator address is informational metadata in the direct-tcpip request; the local
+        // wildcard is the conventional value and never fails to construct.
+        let originator = (try? SocketAddress(ipAddress: "0.0.0.0", port: 0))
+            ?? (try! SocketAddress(unixDomainSocketPath: "/"))
+
+        // `NIOSSHHandler.createChannel` must run on the parent channel's event loop.
+        // `pipeline.handler(type:)` completes on that loop, so the whole open runs there.
+        channel.pipeline.handler(type: NIOSSHHandler.self).whenComplete { [weak self] result in
+            guard let self = self else { return }
+            switch result {
+            case .failure(let error):
+                self.removeAndReportClosed(flowID: flowID, reason: "SSH handler unavailable: \(error)")
+            case .success(let sshHandler):
+                let target = SSHChannelType.DirectTCPIP(targetHost: remoteHost,
+                                                        targetPort: Int(remotePort),
+                                                        originatorAddress: originator)
+                let openPromise = channel.eventLoop.makePromise(of: Channel.self)
+                sshHandler.createChannel(openPromise, channelType: .directTCPIP(target)) { childChannel, _ in
+                    let handler = SSHChannelHandler(
+                        flowID: flowID,
+                        onData: { [weak self] fid, data in self?.onPayloadFromFlow?(fid, data) },
+                        onClose: { [weak self] fid, reason in
+                            self?.removeAndReportClosed(flowID: fid, reason: reason)
+                        })
+                    return childChannel.pipeline.addHandler(handler)
+                }
+                openPromise.futureResult.whenComplete { openResult in
+                    switch openResult {
+                    case .success(let childChannel):
+                        self.activateFlow(flowID: flowID, childChannel: childChannel)
+                    case .failure(let error):
+                        self.removeAndReportClosed(flowID: flowID, reason: "channel open failed: \(error)")
+                    }
+                }
+            }
+        }
+        return true
+    }
+
+    /// Writes `data` into the flow's child channel, applying window-based backpressure.
+    ///
+    /// - `.ok`: bytes accepted and the child channel is writable (SSH window has room).
+    /// - `.transient`: bytes accepted but the child channel is not writable — the relay server pauses
+    ///   UDS reads until it recovers. While the channel is still connecting, this is driven by the
+    ///   `pendingHighWaterMark` on the buffered bytes instead.
+    /// - `.permanent`: the flow is unknown or already closed; the relay tears down the source flow.
+    ///
+    /// Called on the relay server's `packetQueue`. `Channel.writeAndFlush` and `Channel.isWritable`
+    /// are both thread-safe, so we only need `flowsLock` around the map lookup.
+    func sendTCP(flowID: UInt64, data: Data) -> SendResult {
+        flowsLock.lock()
+        guard let flow = flows[flowID], !flow.closed else {
+            flowsLock.unlock()
+            return .permanent
+        }
+        if let childChannel = flow.channel {
+            flowsLock.unlock()
+            var buffer = childChannel.allocator.buffer(capacity: data.count)
+            buffer.writeBytes(data)
+            childChannel.writeAndFlush(SSHChannelData(type: .channel, data: .byteBuffer(buffer)),
+                                       promise: nil)
+            // Window-based backpressure: the child channel's `isWritable` is governed by the SSH
+            // outbound flow-control window (and the parent's writability). Observed with a one-call
+            // latency across the packetQueue → event-loop hop, which the relay's resume hysteresis
+            // tolerates.
+            return childChannel.isWritable ? .ok : .transient
+        } else {
+            // Channel still connecting: buffer in order to flush on activation.
+            // Hard fail-closed ceiling first: `.transient` only paces the relay, it does not bound
+            // cumulative bytes, so a stalled onward connect could otherwise grow `pending` until OOM.
+            // Past the cap we reject with `.permanent` (never silently dropping) so the relay tears
+            // the source flow down.
+            if flow.pendingBytes + data.count > Self.pendingHardCap {
+                flowsLock.unlock()
+                return .permanent
+            }
+            flow.pending.append(data)
+            flow.pendingBytes += data.count
+            let overSoftMark = flow.pendingBytes >= Self.pendingSoftWaterMark
+            flowsLock.unlock()
+            return overSoftMark ? .transient : .ok
+        }
+    }
+
+    /// Closes the flow's child channel and forgets the flow. Idempotent and race-safe against a
+    /// concurrent remote close: whichever of `close`/`channelInactive` runs first removes the flow,
+    /// and the other becomes a no-op.
+    func close(flowID: UInt64) {
+        flowsLock.lock()
+        guard let flow = flows.removeValue(forKey: flowID) else {
+            flowsLock.unlock()
+            return
+        }
+        flow.closed = true
+        let childChannel = flow.channel
+        flowsLock.unlock()
+
+        // If the channel is still connecting, `flow.closed` is now moot (we already removed it), so
+        // `activateFlow` will find no entry and close the freshly-created child itself.
+        childChannel?.close(promise: nil)
+    }
+
+    /// Runs on the SSH event loop when a child channel becomes active. Attaches it to the flow and
+    /// flushes any bytes buffered while it was connecting, preserving order.
+    private func activateFlow(flowID: UInt64, childChannel: Channel) {
+        flowsLock.lock()
+        guard let flow = flows[flowID], !flow.closed else {
+            // Flow was closed while the channel was still opening — drop the orphan child.
+            flowsLock.unlock()
+            childChannel.close(promise: nil)
+            return
+        }
+        flow.channel = childChannel
+        let pending = flow.pending
+        flow.pending = []
+        flow.pendingBytes = 0
+        flowsLock.unlock()
+
+        // Flush OUTSIDE the lock. An on-loop `writeAndFlush` runs synchronously and, if the parent
+        // socket errors, can cascade parent-close → child `channelInactive`/`errorCaught` →
+        // `removeAndReportClosed` → `flowsLock.lock()` on THIS thread; the non-recursive NSLock would
+        // self-deadlock. Ordering is still preserved: a concurrent `sendTCP` that takes the lock after
+        // this unlock now sees `flow.channel` set and issues a *cross-thread* (eventLoop.execute-
+        // deferred) write that cannot run until this call returns, so its bytes land after these
+        // flushed ones. `childChannel` is retained locally, so a racing `close()` is safe.
+        for chunk in pending {
+            var buffer = childChannel.allocator.buffer(capacity: chunk.count)
+            buffer.writeBytes(chunk)
+            childChannel.writeAndFlush(SSHChannelData(type: .channel, data: .byteBuffer(buffer)),
+                                       promise: nil)
+        }
+    }
+
+    /// Removes the flow and reports `onFlowClosed` exactly once. If the flow was already removed
+    /// (e.g. by a local `close`), the report is suppressed — a local close is not surfaced back as a
+    /// remote close.
+    private func removeAndReportClosed(flowID: UInt64, reason: String?) {
+        flowsLock.lock()
+        let existed = flows.removeValue(forKey: flowID) != nil
+        flowsLock.unlock()
+        if existed {
+            onFlowClosed?(flowID, reason)
+        }
+    }
 
     // MARK: Host-key fingerprint
 
