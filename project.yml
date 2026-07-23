@@ -13,6 +13,10 @@ settings:
     CODE_SIGN_STYLE: Automatic
     DEVELOPMENT_TEAM: 92G3VZAPVG
     ENABLE_HARDENED_RUNTIME: YES
+packages:
+  swift-nio-ssh:
+    url: https://github.com/apple/swift-nio-ssh.git
+    exactVersion: 0.14.1
 targets:
   TunnelBahn:
     type: application
@@ -60,6 +64,9 @@ targets:
           CODE_SIGN_ENTITLEMENTS: NetworkExtension/NetworkExtension.debug.entitlements
         Release:
           CODE_SIGN_ENTITLEMENTS: NetworkExtension/NetworkExtension.entitlements
+    dependencies:
+      - package: swift-nio-ssh
+        product: NIOSSH
     preBuildScripts:
       - name: Build BoringTunBridge (universal)
         script: |
@@ -112,5 +119,9 @@ schemes:
         TransparentProxyExtension: all
     run:
       config: Debug
-      targets:
-        - TunnelBahn
+      executable: TunnelBahn
+      macroExpansion: PacketTunnelExtension
+    profile:
+      config: Release
+      executable: TunnelBahn
+      macroExpansion: PacketTunnelExtension

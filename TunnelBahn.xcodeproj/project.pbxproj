@@ -51,6 +51,7 @@
 		428F287EAFBF9878D30436DC /* KeychainService.swift in Sources */ = {isa = PBXBuildFile; fileRef = B8E4AA7BE0C447E51BE149BC /* KeychainService.swift */; };
 		44FEDE52A398560A50C83822 /* TunnelRuntimeState.swift in Sources */ = {isa = PBXBuildFile; fileRef = EF79A94C669D258D9A8E381C /* TunnelRuntimeState.swift */; };
 		46393FE4FAE6A88E76231336 /* TunnelRuntimeState.swift in Sources */ = {isa = PBXBuildFile; fileRef = EF79A94C669D258D9A8E381C /* TunnelRuntimeState.swift */; };
+		46A990AE7F129B8A3F7C2CFB /* NIOSSH in Frameworks */ = {isa = PBXBuildFile; productRef = D322BA67DF9A1498480FF757 /* NIOSSH */; };
 		4817D2F3C9F3E41E833758FB /* BuildInfo.swift in Sources */ = {isa = PBXBuildFile; fileRef = CE3E1BCC9751C9C8054A99B9 /* BuildInfo.swift */; };
 		481F5086AA8C8D7AE27BA080 /* ProcessResourceSampler.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6D115DCEFD0728C235552677 /* ProcessResourceSampler.swift */; };
 		50C631D2E496E7A183B439C6 /* ExtensionResourceStats.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7FCEF79B779067B7D808572D /* ExtensionResourceStats.swift */; };
@@ -115,6 +116,7 @@
 		BACAD0D8374F49DBFB3D903E /* PerAppTransferStats.swift in Sources */ = {isa = PBXBuildFile; fileRef = F463C60E2BBFEA611BE9243A /* PerAppTransferStats.swift */; };
 		BB6EC204C7FC5589F969B2BF /* PacketTunnelRelayServer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 28D71ABF54C747293AA24B64 /* PacketTunnelRelayServer.swift */; };
 		BB703606DF596A4448F6C2F7 /* DestinationCidrRule.swift in Sources */ = {isa = PBXBuildFile; fileRef = E8DB280E40DE01D8F9752BFC /* DestinationCidrRule.swift */; };
+		BD04D8C1F2EE50C101B1BCF9 /* SSHLinkSmoke.swift in Sources */ = {isa = PBXBuildFile; fileRef = B31514E0B7A74ECBCB1CC0B0 /* SSHLinkSmoke.swift */; };
 		BD4371FA20777B5B5E85FACC /* ExtensionResourceStats.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7FCEF79B779067B7D808572D /* ExtensionResourceStats.swift */; };
 		BF6A0F8E4E3ADF9E7AB709C8 /* ConnectionStats.swift in Sources */ = {isa = PBXBuildFile; fileRef = 147A18331F2C2E8D4BE615DC /* ConnectionStats.swift */; };
 		BFABB3077F5AB679E5233108 /* AppRule.swift in Sources */ = {isa = PBXBuildFile; fileRef = C6AEA83BAE6A6F9B4EFA66D3 /* AppRule.swift */; };
@@ -250,6 +252,7 @@
 		A56B1DE7C326C9F499E31D20 /* AppState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppState.swift; sourceTree = "<group>"; };
 		B01EC846F951388033018FDA /* TunnelConnectivityProbe.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TunnelConnectivityProbe.swift; sourceTree = "<group>"; };
 		B2B47182EE791A9342A1CFFB /* TransparentProxyRuntimeConfig.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TransparentProxyRuntimeConfig.swift; sourceTree = "<group>"; };
+		B31514E0B7A74ECBCB1CC0B0 /* SSHLinkSmoke.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SSHLinkSmoke.swift; sourceTree = "<group>"; };
 		B3B3A483CAA076196A178605 /* ProfileDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProfileDetailView.swift; sourceTree = "<group>"; };
 		B4ECCB8AADB792D2100AF34B /* ProfileRoutingStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProfileRoutingStore.swift; sourceTree = "<group>"; };
 		B7EB0419ECF06147A8E40DD9 /* DomainResolver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DomainResolver.swift; sourceTree = "<group>"; };
@@ -281,6 +284,17 @@
 		F86BBF39930242EB8FF86F54 /* StatusView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StatusView.swift; sourceTree = "<group>"; };
 		F88247F5F75B562B2174478C /* RelayOutboundBridge.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = RelayOutboundBridge.m; sourceTree = "<group>"; };
 /* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		D44B9A7E1E5E13337839BBA5 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				46A990AE7F129B8A3F7C2CFB /* NIOSSH in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
 		04B002D86C2C2BD736D21385 = {
@@ -365,6 +379,7 @@
 				28D71ABF54C747293AA24B64 /* PacketTunnelRelayServer.swift */,
 				0827F61A21C5BB1DB6246BCA /* PrivacyInfo.xcprivacy */,
 				7280270F66534C0574E7B2C9 /* SmoltcpRelayBridge.swift */,
+				B31514E0B7A74ECBCB1CC0B0 /* SSHLinkSmoke.swift */,
 				E65D4530F40941166A0943E7 /* tunnelbahn_relay_ffi.h */,
 				8BF2A5ECBAD86AFA7F85F69B /* tunnelbahn_wg_ffi.h */,
 			);
@@ -516,6 +531,7 @@
 				38674DB07192F9A57E19A166 /* Generate BuildInfo (git stamp) */,
 				4A88AAB3F15969BEF41F008D /* Sources */,
 				D2213451C650ABB9F6C76E85 /* Resources */,
+				D44B9A7E1E5E13337839BBA5 /* Frameworks */,
 				9AA5A45FA954757AE50567E2 /* Auto-bump build number (force sysext redeploy) */,
 			);
 			buildRules = (
@@ -524,6 +540,7 @@
 			);
 			name = PacketTunnelExtension;
 			packageProductDependencies = (
+				D322BA67DF9A1498480FF757 /* NIOSSH */,
 			);
 			productName = PacketTunnelExtension;
 			productReference = 9B3CB79223DD6D3B708B633B /* PacketTunnelExtension.systemextension */;
@@ -583,6 +600,9 @@
 			);
 			mainGroup = 04B002D86C2C2BD736D21385;
 			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				7236814EB4405D5299E48972 /* XCRemoteSwiftPackageReference "swift-nio-ssh" */,
+			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = AEAF18816FC1DA996B5E4FAE /* Products */;
 			projectDirPath = "";
@@ -771,6 +791,7 @@
 				90E609CF0B7509F6FC46372E /* RelayWireFrame.swift in Sources */,
 				1DD70115E16E2BF47ADE14CB /* RoutingAction.swift in Sources */,
 				1C8009F824AED9AC87F76376 /* RoutingMode.swift in Sources */,
+				BD04D8C1F2EE50C101B1BCF9 /* SSHLinkSmoke.swift in Sources */,
 				0C581364B33F6F61D5722E55 /* SharedLogWriter.swift in Sources */,
 				C6AED97768F4BEE81DD7E5C8 /* SmoltcpRelayBridge.swift in Sources */,
 				7AF4E8122C1AB7A331158962 /* TransparentProxyRuntimeConfig.swift in Sources */,
@@ -1187,6 +1208,25 @@
 			defaultConfigurationName = Debug;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		7236814EB4405D5299E48972 /* XCRemoteSwiftPackageReference "swift-nio-ssh" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/apple/swift-nio-ssh.git";
+			requirement = {
+				kind = exactVersion;
+				version = 0.14.1;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		D322BA67DF9A1498480FF757 /* NIOSSH */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 7236814EB4405D5299E48972 /* XCRemoteSwiftPackageReference "swift-nio-ssh" */;
+			productName = NIOSSH;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = 008ACF82343476CEB3BA09B5 /* Project object */;
 }
