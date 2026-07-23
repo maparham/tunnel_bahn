@@ -1302,10 +1302,20 @@ final class VPNManager: ObservableObject {
         appTunnelIncludedRoutes: [String]? = nil
     ) throws -> Data {
         let secrets = includeSecrets ? try TunnelRuntimeState.resolveSecrets(for: profile) : nil
+        let ssh: TunnelSSHParams? = (profile.transport == .ssh) ? profile.ssh.map {
+            TunnelSSHParams(
+                host: $0.host,
+                port: $0.port,
+                username: $0.username,
+                privateKeyRef: $0.privateKeyRef,
+                hostKeyFingerprint: $0.hostKeyFingerprint
+            )
+        } : nil
         let payload = TunnelRuntimeState(
             profile: profile,
             secrets: secrets,
-            appTunnelIncludedRoutes: appTunnelIncludedRoutes
+            appTunnelIncludedRoutes: appTunnelIncludedRoutes,
+            ssh: ssh
         )
         return try JSONEncoder().encode(payload)
     }

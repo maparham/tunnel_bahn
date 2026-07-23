@@ -43,6 +43,11 @@ struct WireGuardProfile: Codable, Identifiable, Hashable {
     var peers: [WireGuardPeer]
     var createdAt: Date
     var updatedAt: Date
+    /// Which egress transport this profile uses. Defaults to `.wireguard` for profiles
+    /// saved before SSH transport support existed (see the defaulting `init(from:)` below).
+    var transport: TransportKind
+    /// Present only when `transport == .ssh`.
+    var ssh: SSHProfile?
 
     init(
         id: UUID = UUID(),
@@ -50,7 +55,9 @@ struct WireGuardProfile: Codable, Identifiable, Hashable {
         interface: WireGuardInterface,
         peers: [WireGuardPeer],
         createdAt: Date = .now,
-        updatedAt: Date = .now
+        updatedAt: Date = .now,
+        transport: TransportKind = .wireguard,
+        ssh: SSHProfile? = nil
     ) {
         self.id = id
         self.name = name
@@ -58,6 +65,25 @@ struct WireGuardProfile: Codable, Identifiable, Hashable {
         self.peers = peers
         self.createdAt = createdAt
         self.updatedAt = updatedAt
+        self.transport = transport
+        self.ssh = ssh
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, name, interface, peers, createdAt, updatedAt, transport, ssh
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UUID.self, forKey: .id)
+        name = try container.decode(String.self, forKey: .name)
+        interface = try container.decode(WireGuardInterface.self, forKey: .interface)
+        peers = try container.decode([WireGuardPeer].self, forKey: .peers)
+        createdAt = try container.decode(Date.self, forKey: .createdAt)
+        updatedAt = try container.decode(Date.self, forKey: .updatedAt)
+        // Profiles saved before SSH transport support have no `transport` key on disk.
+        transport = try container.decodeIfPresent(TransportKind.self, forKey: .transport) ?? .wireguard
+        ssh = try container.decodeIfPresent(SSHProfile.self, forKey: .ssh)
     }
 
     /// First IPv4 interface address without CIDR prefix (for PF `route-to` on macOS).

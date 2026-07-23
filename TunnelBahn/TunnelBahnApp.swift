@@ -111,6 +111,9 @@ struct TunnelBahnApp: App {
                 }
                 .task {
                     traceLog("app startup task started")
+                    #if DEBUG
+                    DebugSelfChecks.run()
+                    #endif
                     sysExtManager.installExtensions()
                     appDelegate.vpnManager = appState.vpnManager
                     // Wire window delegate now that the SwiftUI window definitely exists.

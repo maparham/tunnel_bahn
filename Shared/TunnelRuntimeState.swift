@@ -9,6 +9,16 @@ struct TunnelSecrets: Codable, Equatable {
     let presharedKeys: [String: String]
 }
 
+/// SSH transport connection params carried to the extension. The private key itself is
+/// fetched from the shared Keychain by the extension (via `privateKeyRef`), not embedded here.
+struct TunnelSSHParams: Codable, Equatable {
+    let host: String
+    let port: UInt16
+    let username: String
+    let privateKeyRef: String
+    let hostKeyFingerprint: String?
+}
+
 struct TunnelRuntimeState: Codable {
     let profile: WireGuardProfile
     /// Populated only in providerConfiguration payloads; never persisted to vpn-state.json.
@@ -16,6 +26,9 @@ struct TunnelRuntimeState: Codable {
     /// When set, per-app tunnel utun `includedRoutes` and outbound filtering use these CIDRs
     /// instead of the peer AllowedIPs default-route shape (destination-filtered app-tunnel).
     let appTunnelIncludedRoutes: [String]?
+    /// Present when `profile.transport == .ssh`; mirrors `profile.ssh` so the packet-tunnel
+    /// extension has connection params without re-deriving them from the profile.
+    let ssh: TunnelSSHParams?
 }
 
 extension TunnelRuntimeState {
