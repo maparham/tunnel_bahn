@@ -94,9 +94,9 @@ packet-tunnel target. This is the first SPM dependency in the project
 
 - Unified profile list. Each profile carries `transport: .wireguard | .ssh`.
 - New SSH profile fields: host, port, username, **private key**
-  (ed25519/RSA), imported from file or pasted PEM, stored in Keychain via the
+  (ed25519 or ECDSA P-256/384/521; RSA unsupported by swift-nio-ssh), imported from file or pasted PEM, stored in Keychain via the
   existing `KeychainService`.
-- Auth: **private key only** for v1 (no password / keyboard-interactive / agent).
+- Auth: **private key only** for v1 — ed25519 or ECDSA (P-256/384/521). RSA is unsupported (swift-nio-ssh has no RSA key type). No password / keyboard-interactive / agent.
 - `ProfileEditorSheet` shows WG or SSH fields based on type.
 - Connect flow, status view, per-app stats, and routing/destination filters
   are unchanged — they sit above the transport.

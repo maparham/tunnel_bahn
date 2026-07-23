@@ -17,6 +17,9 @@ packages:
   swift-nio-ssh:
     url: https://github.com/apple/swift-nio-ssh.git
     exactVersion: 0.14.1
+  swift-nio:
+    url: https://github.com/apple/swift-nio.git
+    exactVersion: 2.101.3
 targets:
   TunnelBahn:
     type: application
@@ -67,6 +70,10 @@ targets:
     dependencies:
       - package: swift-nio-ssh
         product: NIOSSH
+      - package: swift-nio
+        product: NIOCore
+      - package: swift-nio
+        product: NIOPosix
     preBuildScripts:
       - name: Build BoringTunBridge (universal)
         script: |

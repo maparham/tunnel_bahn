@@ -13,7 +13,7 @@
 - Deployment target: macOS 14.0; Swift 5.10 (from `project.yml`).
 - **No builds unless the user explicitly asks** in that turn (standing rule). Verification of extension behavior is via the S1..SN scenario-probe workflow (set toggles + start tunnel via URL scheme, then STOP — the user runs probes), NOT xcodebuild.
 - **No subprocess / exec** in the system extension (sandboxed). SSH must be an embedded library.
-- Auth: **private key only** for v1 (ed25519/RSA). No password / keyboard-interactive / ssh-agent.
+- Auth: **private key only** for v1 — ed25519 and ECDSA (P-256/384/521) ONLY. RSA is impossible (swift-nio-ssh 0.14.1 NIOSSHPrivateKey has no RSA case); RSA input must throw an explicit unsupported error. No password / keyboard-interactive / ssh-agent.
 - Tunneled UDP is **dropped**; DNS forwarded over TCP:53 through SSH. No UDP egresses.
 - Host-key verification is **mandatory** (TOFU + Keychain, hard-fail on mismatch).
 - Bump build number on every extension change is handled by existing `tools/autobump-build-number.sh` postBuildScript — do not hand-edit build numbers.
@@ -360,7 +360,7 @@ struct SSHHostKeyStore {
 - [ ] **Step 5: Implement `SSHFlowTransport` connect + auth + host-key verify**
 
 Create `NetworkExtension/SSHFlowTransport.swift`. Use SwiftNIO SSH client bootstrap with:
-- a `NIOSSHClientUserAuthenticationDelegate` that offers the private key (`NIOSSHPrivateKey` parsed from the PEM; support ed25519 and RSA),
+- a `NIOSSHClientUserAuthenticationDelegate` that offers the private key (`NIOSSHPrivateKey` parsed from the PEM; support ed25519 and ECDSA P-256/384/521 — NOT RSA),
 - a `NIOSSHClientServerAuthenticationDelegate` whose `validateHostKey` computes the key's SHA-256 fingerprint and calls `hostKeyStore.verifyOrPin(...)`; fail the promise on mismatch (hard MITM fail).
 
 Sketch (confirm exact NIOSSH API names against the linked version):

@@ -12,7 +12,19 @@ enum DebugSelfChecks {
     static func run() {
         checkSSHProfileRoundTrips()
         checkLegacyProfileDefaultsToWireGuard()
+        checkHostKeyTOFU()
         log.notice("[DEBUG_SELF_CHECKS] all checks passed")
+    }
+
+    private static func checkHostKeyTOFU() {
+        // first-seen key is pinned and trusted
+        let s1 = SSHHostKeyStore(backing: InMemoryKV())
+        assert(s1.verifyOrPin(fingerprint: "AAAA", forHost: "h"))
+        assert(s1.fingerprint(forHost: "h") == "AAAA")
+        // matching key stays trusted
+        assert(s1.verifyOrPin(fingerprint: "AAAA", forHost: "h"))
+        // changed key is rejected
+        assert(!s1.verifyOrPin(fingerprint: "BBBB", forHost: "h"))
     }
 
     private static func checkSSHProfileRoundTrips() {
@@ -37,5 +49,13 @@ enum DebugSelfChecks {
         assert(decoded.transport == .wireguard, "legacy profile must default to .wireguard")
         assert(decoded.ssh == nil, "legacy profile must have no ssh block")
     }
+}
+
+/// In-memory `HostKeyBacking` double for the TOFU self-check. Must be a *class* (reference
+/// semantics) so writes persist across the value-type `SSHHostKeyStore`'s non-mutating `pin`.
+private final class InMemoryKV: HostKeyBacking {
+    private var storage: [String: String] = [:]
+    func get(_ key: String) -> String? { storage[key] }
+    func set(_ key: String, _ value: String) { storage[key] = value }
 }
 #endif
