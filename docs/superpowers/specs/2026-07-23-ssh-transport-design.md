@@ -81,14 +81,26 @@ packet-tunnel target. This is the first SPM dependency in the project
 
 ## UDP & DNS policy
 
-- **Tunneled UDP flows are dropped.** Browsers fall back to TCP; nothing leaks
-  outside the tunnel, preserving the split-tunnel no-leak guarantee. This is
-  largely already the behavior — the relay rejects UDP today.
-- **DNS-over-TCP.** Captured DNS queries are forwarded as a TCP:53
-  `direct-tcpip` channel through SSH so resolution still works with UDP
-  dropped. Where practical, destinations are handed to the SSH server as
-  **hostnames** so the server resolves them (remote DNS, no leak — same as
-  `ssh -D`).
+- **Tunneled UDP flows are dropped, explicitly.** Browsers fall back to TCP;
+  nothing leaks outside the tunnel, preserving the split-tunnel no-leak
+  guarantee. Implementation (see Task 7): the proxy's `UDPFlowRelay` normally
+  sends a matched app's tunneled UDP via `sendViaTunnel` →
+  `RelayOutboundConnection`, a path that depends on the WG utun. In SSH mode
+  there is no WG backing, so the proxy is made transport-aware (a
+  `dropTunneledUDP` flag in `TransparentProxyRuntimeConfig`) and **drops** any
+  would-be-tunneled UDP datagram rather than dialing that path — a
+  deterministic drop instead of relying on a utun-to-nowhere.
+- **DNS needs no special handling — it already works.** DNS to a local/LAN
+  system resolver is bypassed direct (`UDPFlowRelay` `shouldBypassLocal`), the
+  same in SSH mode as WG mode: the app resolves via the system resolver, gets
+  IPs, then opens TCP that SSH tunnels. No DNS-over-TCP translation is built.
+- **Deferred (v1 limitations, documented):** (a) DNS-over-TCP is not
+  implemented, so an app hardwired to a *remote* UDP resolver that itself
+  falls in the tunnel range won't resolve in SSH mode; (b) internal-only /
+  split-horizon names won't resolve remotely, because by flow-capture time the
+  app has already resolved the name to an IP — no hostname survives to hand the
+  SSH server. Both are inherent to this capture architecture, not SSH-specific
+  regressions.
 
 ## Profile model & UI
 

@@ -89,6 +89,14 @@ public final class TransparentProxyProvider: NETransparentProxyProvider {
     /// The WireGuard utun interface name (e.g. "utun3"), populated from
     /// `TransparentProxyRuntimeConfig.packetTunnelInterfaceName` on each config refresh.
     private var tunnelInterfaceName: String?
+    /// True when the active profile's transport is SSH. SSH forwards only TCP, so the
+    /// `UDPFlowRelay` tunnel path (which relies on the WG utun) has no backing in this mode;
+    /// populated from `TransparentProxyRuntimeConfig.dropTunneledUDP` in `refreshDestinationConfig`
+    /// (called at `startProxy` and re-affirmed every ~1.5s from `flushOnce`, always off the same
+    /// immutable connect-time `providerConfiguration`, so the value stays stable for the session)
+    /// and read alongside the other `destinationLock`-guarded fields in `handleNewFlow`. Defaults
+    /// false (WG behavior unchanged).
+    private var dropTunneledUDP = false
 
     /// Suffix match: `api.x.com` matches rule `x.com`; `notx.com` does not. `names` are lowercased.
     private static func sniMatches(_ host: String, names: [String]) -> Bool {
@@ -205,6 +213,7 @@ public final class TransparentProxyProvider: NETransparentProxyProvider {
         tunnelInterfaceName = nil
         destinationDomainNames = []
         cachedPreparedRanges = []
+        dropTunneledUDP = false
         destinationLock.unlock()
         completionHandler()
     }
@@ -322,6 +331,7 @@ public final class TransparentProxyProvider: NETransparentProxyProvider {
         let enforce = enforceDestinationFiltering
         let domainNames = destinationDomainNames
         let preparedRanges = cachedPreparedRanges
+        let dropUDP = dropTunneledUDP
         destinationLock.unlock()
         // SNI mode: filtering on AND domain rules present. `includedNetworkRules` is catch-all for
         // TCP in this mode, so we peek each routed TCP flow's TLS SNI and route by name; UDP stays
@@ -440,6 +450,7 @@ public final class TransparentProxyProvider: NETransparentProxyProvider {
                 flow: udp,
                 signingID: signingID,
                 routeThroughTunnel: routeThroughTunnel,
+                dropTunneledUDP: dropUDP,
                 tunnelInterfaceName: ifaceName,
                 queue: flowQueue,
                 tunnelRanges: { [weak self] in
@@ -753,6 +764,16 @@ public final class TransparentProxyProvider: NETransparentProxyProvider {
 
     private func refreshDestinationConfig(generation: UInt64) {
         if let config = runtimeConfigFromProvider() {
+            // Session-static (tied to the profile's transport, which cannot change mid-session):
+            // set directly here rather than threading through `applyDestinationPayload`, whose
+            // union-merge semantics exist for fields the appMessage live-push (line ~256) also
+            // writes with its own defaults — threading it through there would let that call's
+            // default `false` silently stomp a `true` set here on the very next mid-session push.
+            destinationLock.lock()
+            if generation == currentSessionGeneration() {
+                dropTunneledUDP = config.dropTunneledUDP
+            }
+            destinationLock.unlock()
             applyDestinationPayload(
                 enforce: config.destinationRouting.enforceDestinationFiltering,
                 rawCIDRs: config.destinationRouting.ranges,

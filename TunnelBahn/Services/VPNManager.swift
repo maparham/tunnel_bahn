@@ -361,7 +361,8 @@ final class VPNManager: ObservableObject {
                     routeAllIdentifiedFlows: !hasAppTunnelSelection,
                     enforceDestinationFiltering: destinationEnforce,
                     destinationRanges: destinationRanges,
-                    destinationDomainNames: destinationDomainNames
+                    destinationDomainNames: destinationDomainNames,
+                    dropTunneledUDP: profile.transport == .ssh
                 )
                 traceLog(
                     "transparent proxy runtime config: signingIDs=\(pendingTransparentProxyConfig?.signingIdentifiers.count ?? 0) routeAll=\(!hasAppTunnelSelection) destRanges=\(destinationRanges.count) destDomains=\(destinationDomainNames.count) names=[\(destinationDomainNames.prefix(12).joined(separator: ","))]"
@@ -1325,7 +1326,8 @@ final class VPNManager: ObservableObject {
         routeAllIdentifiedFlows: Bool,
         enforceDestinationFiltering: Bool,
         destinationRanges: [String],
-        destinationDomainNames: [String]
+        destinationDomainNames: [String],
+        dropTunneledUDP: Bool
     ) -> TransparentProxyRuntimeConfig {
         TransparentProxyRuntimeConfig(
             signingIdentifiers: routeAllIdentifiedFlows ? [] : signingIdentifiers(from: appRules),
@@ -1334,7 +1336,8 @@ final class VPNManager: ObservableObject {
                 enforceDestinationFiltering: enforceDestinationFiltering,
                 ranges: destinationRanges,
                 domainNames: destinationDomainNames
-            )
+            ),
+            dropTunneledUDP: dropTunneledUDP
         )
     }
 

@@ -21,6 +21,11 @@ final class UDPFlowRelay {
     private let flow: NEAppProxyUDPFlow
     private let signingID: String
     private let routeThroughTunnel: Bool
+    /// True in SSH-transport mode. SSH forwards only TCP, so the tunnel path
+    /// (`RelayOutboundConnection` → WG utun) has no backing in this mode; would-be-tunneled
+    /// datagrams are dropped instead of dialed. Never routes them via `sendViaDirect` — that would
+    /// leak the traffic outside the tunnel. See project memory: SSH transport UDP no-leak.
+    private let dropTunneledUDP: Bool
     private let tunnelInterfaceName: String?
     private let queue: DispatchQueue
     /// Live snapshot of the user's configured tunnel destination ranges (CIDRs + resolved domain
@@ -40,11 +45,15 @@ final class UDPFlowRelay {
     /// queues (NE flow callbacks vs the relay connection's queue). See `TCPFlowRelay.closeLock`.
     private let closeLock = NSLock()
     private var didCloseOnce = false
+    /// One-shot guard so the `[APPSPLIT_SSH] udp-drop` line logs once per flow, not once per
+    /// datagram (a dropped QUIC flow can retransmit at high rate).
+    private var loggedUDPDropOnce = false
 
     init(
         flow: NEAppProxyUDPFlow,
         signingID: String,
         routeThroughTunnel: Bool,
+        dropTunneledUDP: Bool,
         tunnelInterfaceName: String?,
         queue: DispatchQueue,
         tunnelRanges: @escaping () -> [IPCIDRMatcher.PreparedRange],
@@ -55,6 +64,7 @@ final class UDPFlowRelay {
         self.flow = flow
         self.signingID = signingID
         self.routeThroughTunnel = routeThroughTunnel
+        self.dropTunneledUDP = dropTunneledUDP
         self.tunnelInterfaceName = tunnelInterfaceName
         self.queue = queue
         self.tunnelRanges = tunnelRanges
@@ -122,6 +132,19 @@ final class UDPFlowRelay {
         // via the predicate's autoclosure.
         let useTunnel = routeThroughTunnel
             && !IPCIDRMatcher.shouldBypassLocal(legacyEndpoint.hostname, tunnelRanges: tunnelRanges())
+        if useTunnel && dropTunneledUDP {
+            // SSH transport: no WG utun backs the tunnel path, so a would-be-tunneled datagram
+            // is dropped here — deterministically, and WITHOUT falling through to sendViaDirect,
+            // which would leak it outside the tunnel. The local-resolver/LAN bypass path above
+            // (the `else` below) is untouched: only the tunnel branch is affected.
+            if !loggedUDPDropOnce {
+                loggedUDPDropOnce = true
+                Self.log.debug(
+                    "[APPSPLIT_SSH] udp-drop signingID=\(self.signingID) remote=\(legacyEndpoint.hostname):\(legacyEndpoint.port)"
+                )
+            }
+            return
+        }
         if useTunnel {
             sendViaTunnel(datagram: datagram, to: legacyEndpoint, key: key)
         } else {

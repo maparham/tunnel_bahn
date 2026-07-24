@@ -549,36 +549,45 @@ git commit -m "feat(ne): select SSH vs WG transport in startTunnel; SSH keepaliv
 
 ---
 
-## Task 7: DNS-over-TCP
+## Task 7: SSH-mode UDP policy — explicit drop of tunneled UDP (no leak)
+
+**Scope reshaped after code investigation** (see `.superpowers/sdd/task-7-findings`): DNS-over-TCP is NOT built. Rationale, verified in `TransparentProxyExtension/UDPFlowRelay.swift:115-129`: DNS to a local/LAN resolver already goes `sendViaDirect` (bypass) via `IPCIDRMatcher.shouldBypassLocal`, in SSH mode exactly as in WG mode — the app resolves via the system resolver, gets IPs, and opens TCP that SSH tunnels. So common-case DNS already works with no translation. The real, security-critical issue is different: a matched app's **tunneled UDP** (QUIC to a filter-matched public IP) currently takes the `sendViaTunnel` → `RelayOutboundConnection` path, which relies on the per-app-VPN/WG utun. In SSH mode there is no WG backing that utun, so that path is undefined (drop, leak, or the `UDPFlowRelay` release-in-callback UAF-churn class from project memory). Task 7 makes it an **explicit, deterministic drop** in SSH mode.
 
 **Files:**
-- Modify: `TransparentProxyExtension/UDPFlowRelay.swift` (or wherever UDP:53 is currently handled) and/or `TransparentProxyProvider.swift`
-- Modify: `NetworkExtension/SSHFlowTransport.swift` if resolution is delegated to the SSH server (hostname `direct-tcpip`)
+- Modify: `Shared/TransparentProxyRuntimeConfig.swift` — add a transport/`dropTunneledUDP` field so the proxy knows it is in SSH mode (the proxy currently only carries `routeThroughTunnel: Bool` and has no transport awareness).
+- Modify: the app-side builder of `TransparentProxyRuntimeConfig` (in `TunnelBahn/Services/VPNManager.swift` / wherever `proxyConfigB64` / `providerConfiguration` is assembled) — set the new field true when the active profile's `transport == .ssh`.
+- Modify: `TransparentProxyExtension/UDPFlowRelay.swift` — when the drop flag is set and the per-destination decision would be `useTunnel` (i.e. `routeThroughTunnel && !shouldBypassLocal(...)`), DROP the datagram instead of calling `sendViaTunnel`. Never call `sendViaDirect` for it (that would leak). Count it as a dropped/blocked datagram, do not tear the flow down abnormally.
 
 **Interfaces:**
-- Consumes: the flow-capture path in the proxy extension; `SSHFlowTransport.openTCP`.
-- Produces: DNS resolution that works while UDP is dropped in SSH mode.
+- Consumes: `TransportKind` (Task 2), `TransparentProxyRuntimeConfig`.
+- Produces: in SSH mode, tunneled UDP is dropped (QUIC falls back to TCP; nothing leaks); local-resolver DNS bypass is unchanged; the WG path is untouched (drop flag false in WG mode).
 
-**Decision to lock at implementation:** Prefer **remote resolution** — when a tunneled TCP flow's destination is known as a hostname, send the hostname (not a pre-resolved IP) as the `direct-tcpip` target so the SSH server resolves it (no DNS leak, no separate DNS path). Only add an explicit DNS-over-TCP forward for the residual case where the app issues its own DNS UDP query that would otherwise be dropped.
+- [ ] **Step 1: Plumb transport awareness into the proxy config**
 
-- [ ] **Step 1: Confirm where DNS is captured today**
+Add to `TransparentProxyRuntimeConfig` a field — prefer an explicit `dropTunneledUDP: Bool` (semantic, transport-agnostic) with a backward-compatible default of `false` (`decodeIfPresent ?? false`) so existing WG behavior is unchanged and legacy configs still decode. Set it in the app-side builder to `profile.transport == .ssh`.
 
-Read `TransparentProxyProvider.handleNewFlow` and `UDPFlowRelay.swift` to find how UDP:53 is currently treated in WG mode. Document it inline in the task (the plan executor records findings here).
+- [ ] **Step 2: Drop tunneled UDP in SSH mode**
 
-- [ ] **Step 2: In SSH mode, forward captured DNS as TCP:53**
+In `UDPFlowRelay.send(datagram:to:)` (around line 123), when `dropTunneledUDP` is true, replace the `useTunnel` branch so a would-be-tunneled datagram is dropped (log once per flow at debug with an `[APPSPLIT_SSH] udp-drop` tag; increment a dropped counter if one exists) rather than dialed via `RelayOutboundConnection`. Leave the `else`/`sendViaDirect` (bypass) path fully intact so local-resolver DNS and LAN traffic still work. Pass the flag into `UDPFlowRelay` via its `init(...)` (mirror how `routeThroughTunnel` is threaded, line 44-57) from wherever the relay is constructed in `TransparentProxyProvider`.
 
-For a captured UDP:53 flow in SSH mode: instead of dropping, translate each UDP DNS query datagram into a length-prefixed TCP DNS message (RFC 7766) over a `direct-tcpip` channel to `:53` on the resolver (the SSH server or a configured resolver), read the TCP response, strip the length prefix, and return it as the UDP reply datagram to the flow. Keep this isolated in a small `DNSOverTCPForwarder` helper.
+- [ ] **Step 3: Confirm the WG path is untouched**
 
-- [ ] **Step 3: Verify via scenario probe S-SSH-3 extended**
+Read-verify: with `dropTunneledUDP == false` (WG mode, and default for legacy configs), `send()` behaves exactly as before. Build: `xcodebuild -scheme TunnelBahn -configuration Debug build` → BUILD SUCCEEDED.
 
-Add a DNS probe: `dig` / `nslookup` a fresh domain while the SSH tunnel is up and UDP is dropped → resolution succeeds. (User runs it.)
+- [ ] **Step 4: Scenario probes (deferred to post-Task-8 live run, listed here)**
 
-- [ ] **Step 4: Commit**
+- S-SSH-UDP-drop: with the SSH tunnel up, `curl --http3 https://<filter-matched-host>` (QUIC/UDP) must fail/fall back and the plain-TCP `curl https://<same-host>` succeed via SSH; a packet check confirms no UDP egresses to the filter-matched host.
+- S-SSH-DNS: `dig`/`nslookup` a fresh domain resolves (via the unchanged local-resolver bypass).
+- Out-of-filter pair (per project rule): an out-of-filter host still egresses direct, proving the drop is scoped to tunneled destinations only.
+
+- [ ] **Step 5: Commit**
 
 ```bash
-git add TransparentProxyExtension/ NetworkExtension/SSHFlowTransport.swift
-git commit -m "feat: DNS-over-TCP forwarding for SSH transport (UDP dropped)"
+git add Shared/TransparentProxyRuntimeConfig.swift TransparentProxyExtension/UDPFlowRelay.swift TransparentProxyExtension/TransparentProxyProvider.swift TunnelBahn/Services/VPNManager.swift
+git commit -m "feat(proxy): drop tunneled UDP in SSH mode (no leak); DNS via existing bypass"
 ```
+
+**v1 limitations to document in Task 9:** (a) DNS-over-TCP is not implemented — an app hardwired to a *remote* UDP resolver that falls in the tunnel range won't resolve in SSH mode; (b) internal-only/split-horizon names don't resolve remotely because the app has already resolved to an IP by capture time (no hostname survives to hand the SSH server) — inherent to this architecture.
 
 ---
 
