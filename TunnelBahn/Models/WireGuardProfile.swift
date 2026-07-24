@@ -69,6 +69,11 @@ struct WireGuardProfile: Codable, Identifiable, Hashable {
         self.ssh = ssh
     }
 
+    // NOTE: `encode(to:)` below is the COMPILER-SYNTHESIZED implementation (this type only defines
+    // `CodingKeys` + a custom `init(from:)`, for the `transport`/`ssh` defaulting below). Synthesis
+    // encodes every stored property it can see, keyed by `CodingKeys` — so any NEW stored property
+    // added to this struct MUST also be added to `CodingKeys` or it will be silently dropped from
+    // persistence (no compile error, no runtime error — the field just never round-trips).
     private enum CodingKeys: String, CodingKey {
         case id, name, interface, peers, createdAt, updatedAt, transport, ssh
     }

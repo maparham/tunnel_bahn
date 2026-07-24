@@ -29,6 +29,12 @@ final class SSHFlowTransport: RelayFlowTransport, @unchecked Sendable {
 
     // MARK: Runtime
     private let group: EventLoopGroup
+    /// The authenticated SSH connection. Read on the relay `packetQueue` (`openTCP`), read/written
+    /// on the SSH event loop (`handleConnectionDrop`), and written from `dial()`/`stop()` — so ALL
+    /// access goes through `stateLock` (see the accessor helpers below). Never hold `stateLock` while
+    /// calling into NIO (`writeAndFlush`/`close`/`createChannel`) or while holding `flowsLock`: copy
+    /// the reference under `stateLock`, release the lock, then act on the local copy. This mirrors
+    /// `activateFlow`'s "copy under lock, flush outside lock" discipline for `flowsLock`.
     private var channel: Channel?
     private var groupShutDown = false
 
@@ -181,7 +187,7 @@ final class SSHFlowTransport: RelayFlowTransport, @unchecked Sendable {
             try? await channel.close().get()
             throw reason
         }
-        self.channel = channel
+        setChannel(channel)
         Self.log.notice("[APPSPLIT_SSH] auth success host=\(host) user=\(username)")
 
         // Arm the drop watcher. `closeFuture` fires exactly once for THIS channel; a later reconnect
@@ -197,13 +203,13 @@ final class SSHFlowTransport: RelayFlowTransport, @unchecked Sendable {
         stopping = true
         let task = reconnectTask
         reconnectTask = nil
+        let existingChannel = channel
+        channel = nil
         stateLock.unlock()
         task?.cancel()
 
-        if let channel = channel {
-            channel.close(promise: nil)
-            self.channel = nil
-        }
+        // Act on the copied reference outside `stateLock` — never call into NIO while holding it.
+        existingChannel?.close(promise: nil)
         shutdownGroup()
     }
 
@@ -215,11 +221,9 @@ final class SSHFlowTransport: RelayFlowTransport, @unchecked Sendable {
     /// ensures a reconnect loop is (or will be) running.
     private func handleConnectionDrop(closed: Channel?) {
         // Nil out the dead channel (M2) so `openTCP`'s `guard let channel` returns false during the
-        // gap instead of registering a flow that then fails async. Only clear it if it is still the
+        // gap instead of registering a flow that then fails async. Only clears it if it is still the
         // channel that dropped — never a newer re-dial's channel.
-        if let closed, self.channel === closed {
-            self.channel = nil
-        }
+        clearChannelIfMatches(closed)
         failAllFlows(reason: "ssh connection dropped")
 
         stateLock.lock()
@@ -313,6 +317,34 @@ final class SSHFlowTransport: RelayFlowTransport, @unchecked Sendable {
         return stopping
     }
 
+    /// Returns the current parent SSH channel (or `nil` if none is live), under `stateLock`. Callers
+    /// MUST NOT still be holding `stateLock` or `flowsLock` when they subsequently call into NIO on
+    /// the returned channel — copy it out, release, then act.
+    private func currentChannel() -> Channel? {
+        stateLock.lock(); defer { stateLock.unlock() }
+        return channel
+    }
+
+    /// Sets the parent SSH channel under `stateLock`. Used by `dial()` on a successful connect.
+    private func setChannel(_ newChannel: Channel?) {
+        stateLock.lock()
+        channel = newChannel
+        stateLock.unlock()
+    }
+
+    /// Clears `channel` under `stateLock`, but only if it is still the same instance that just
+    /// dropped — never a newer re-dial's channel. Returns the previous value in case the caller
+    /// still needs to act on it (currently unused, kept for parity with `setChannel`).
+    @discardableResult
+    private func clearChannelIfMatches(_ closed: Channel?) -> Channel? {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        guard let closed, channel === closed else { return nil }
+        let previous = channel
+        channel = nil
+        return previous
+    }
+
     /// Shuts down the event-loop group at most once. Safe to call from both the `start()` failure
     /// paths and `stop()`; a redundant call is swallowed.
     private func shutdownGroup() {
@@ -333,7 +365,7 @@ final class SSHFlowTransport: RelayFlowTransport, @unchecked Sendable {
     /// Called on the relay server's `packetQueue`. The child channel and all `flows` mutations that
     /// depend on it happen on the SSH event loop; `flows` itself is guarded by `flowsLock`.
     func openTCP(flowID: UInt64, remoteHost: String, remotePort: UInt16) -> Bool {
-        guard let channel = channel else { return false }
+        guard let channel = currentChannel() else { return false }
 
         // Register the flow synchronously so `sendTCP`/`close` racing in right behind us find it and
         // buffer/mark rather than seeing an "unknown flow" and tearing it down.
@@ -386,7 +418,7 @@ final class SSHFlowTransport: RelayFlowTransport, @unchecked Sendable {
     /// - `.ok`: bytes accepted and the child channel is writable (SSH window has room).
     /// - `.transient`: bytes accepted but the child channel is not writable — the relay server pauses
     ///   UDS reads until it recovers. While the channel is still connecting, this is driven by the
-    ///   `pendingHighWaterMark` on the buffered bytes instead.
+    ///   `pendingSoftWaterMark` on the buffered bytes instead.
     /// - `.permanent`: the flow is unknown or already closed; the relay tears down the source flow.
     ///
     /// Called on the relay server's `packetQueue`. `Channel.writeAndFlush` and `Channel.isWritable`
