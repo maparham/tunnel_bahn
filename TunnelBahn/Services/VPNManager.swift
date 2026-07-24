@@ -224,23 +224,28 @@ final class VPNManager: ObservableObject {
 
             let extensionProfile = try resolvePeerEndpointsForExtension(profile)
 
-            guard extensionProfile.peers.count == 1 else {
-                stats.state = .error
-                stats.lastError =
-                    "Only one WireGuard peer is supported. Remove extra peers or use separate profiles."
-                stats.connectedProfileID = nil
-                stats.endpoint = nil
-                emitConnectSummaryLine(
-                    outcome: "aborted",
-                    profileName: profile.name,
-                    reason: "multi_peer_not_supported",
-                    wantedAppTunnel: nil,
-                    neAppRuleCount: nil,
-                    routingMethod: nil,
-                    onDemand: nil,
-                    managerAppRuleCount: nil
-                )
-                return
+            // The single-peer requirement is WireGuard-specific. SSH profiles carry no WG
+            // peers (the SSH connection params travel via profile.ssh → TunnelSSHParams), so
+            // this guard only applies when the transport is WireGuard.
+            if profile.transport == .wireguard {
+                guard extensionProfile.peers.count == 1 else {
+                    stats.state = .error
+                    stats.lastError =
+                        "Only one WireGuard peer is supported. Remove extra peers or use separate profiles."
+                    stats.connectedProfileID = nil
+                    stats.endpoint = nil
+                    emitConnectSummaryLine(
+                        outcome: "aborted",
+                        profileName: profile.name,
+                        reason: "multi_peer_not_supported",
+                        wantedAppTunnel: nil,
+                        neAppRuleCount: nil,
+                        routingMethod: nil,
+                        onDemand: nil,
+                        managerAppRuleCount: nil
+                    )
+                    return
+                }
             }
 
             let appTunnelModeSelected = (settings.routingMode == .appTunnel)
@@ -308,6 +313,31 @@ final class VPNManager: ObservableObject {
 
             Self.osLog.notice("[connect] routingMode=\(self.settings.routingMode.rawValue) hasAppTunnelSelection=\(hasAppTunnelSelection) profileOkForAccounting=\(profileOkForAccounting) useAppTunnelNEStack=\(useAppTunnelNEStack) isFullTunnelDestFilterShape=\(isFullTunnelDestFilterShape) requestedAppRules=\(requestedAppRules.count)")
 
+            // SSH egress tunnels only the flows the transparent proxy captures. If neither the
+            // app-tunnel proxy stack nor the full-tunnel dest-filter proxy stack activates (e.g.
+            // full-tunnel mode with no app selection — SSH has no WireGuard default-route peer to
+            // satisfy `profileOkForAccounting`), there is nothing to feed the UDS→SSH relay and
+            // traffic would silently exit direct while the tunnel reports "connected". Fail loudly
+            // instead. v1: SSH requires App-Tunnel mode with at least one selected app.
+            if profile.transport == .ssh && !useAppTunnelNEStack && !isFullTunnelDestFilterShape {
+                stats.state = .error
+                stats.lastError =
+                    "SSH profiles require App-Tunnel mode. Switch this profile to App-Tunnel routing and select the apps to route through SSH."
+                stats.connectedProfileID = nil
+                stats.endpoint = nil
+                emitConnectSummaryLine(
+                    outcome: "aborted",
+                    profileName: profile.name,
+                    reason: "ssh_requires_app_tunnel",
+                    wantedAppTunnel: hasAppTunnelSelection,
+                    neAppRuleCount: requestedAppRules.count,
+                    routingMethod: nil,
+                    onDemand: nil,
+                    managerAppRuleCount: nil
+                )
+                return
+            }
+
             #if DEBUG
             logConnectModeDecision(
                 originalProfile: profile,
@@ -342,7 +372,7 @@ final class VPNManager: ObservableObject {
                 // For split-tunnel profiles, force destination filtering to AllowedIPs so the
                 // proxy only relays flows whose destination is inside the tunnel. Flows to
                 // internet destinations are returned false → OS handles them natively via en0.
-                if !profileOkForAccounting {
+                if !profileOkForAccounting && profile.transport == .wireguard {
                     destinationRanges = extensionProfile.peers.flatMap { $0.allowedIPs }
                     destinationEnforce = true
                     persistDestinationRoutingFromHost(enforceFiltering: true, ranges: destinationRanges)
@@ -786,7 +816,9 @@ final class VPNManager: ObservableObject {
         stats.state = .connected
         stats.connectedAt = .now
         stats.connectedProfileID = profile.id
-        stats.endpoint = extensionProfile.peers.first?.endpoint
+        stats.endpoint = profile.transport == .ssh
+            ? profile.ssh.map { "\($0.host):\($0.port)" }
+            : extensionProfile.peers.first?.endpoint
         stats.perAppSplitTunnelActive = hasAppTunnelSelection && useAppTunnelNEStack
         stats.perAppStatsCollectionActive = useTransparentProxy
         stats.tunnelHasDefaultRoute = profileOkForAccounting && !destinationSplitActive
@@ -1302,16 +1334,28 @@ final class VPNManager: ObservableObject {
         includeSecrets: Bool,
         appTunnelIncludedRoutes: [String]? = nil
     ) throws -> Data {
-        let secrets = includeSecrets ? try TunnelRuntimeState.resolveSecrets(for: profile) : nil
-        let ssh: TunnelSSHParams? = (profile.transport == .ssh) ? profile.ssh.map {
-            TunnelSSHParams(
-                host: $0.host,
-                port: $0.port,
-                username: $0.username,
-                privateKeyRef: $0.privateKeyRef,
-                hostKeyFingerprint: $0.hostKeyFingerprint
+        // WireGuard secrets (interface private key + preshared keys) only exist for WG profiles.
+        // SSH profiles carry no WG interface key; their credential travels via `ssh.privateKeyRef`
+        // (read by the extension), so resolving WG secrets here would fail with errSecItemNotFound.
+        let secrets = (includeSecrets && profile.transport == .wireguard)
+            ? try TunnelRuntimeState.resolveSecrets(for: profile) : nil
+        // Resolve the SSH private key app-side (uid 501 can read the Keychain) and embed the PEM in
+        // the runtime state — the root extension cannot read the user-context Keychain item across
+        // the uid boundary. Only include the secret material in the secrets-bearing payload.
+        let ssh: TunnelSSHParams?
+        if profile.transport == .ssh, let sshProfile = profile.ssh {
+            let pem = includeSecrets ? try KeychainService.shared.read(account: sshProfile.privateKeyRef) : nil
+            ssh = TunnelSSHParams(
+                host: sshProfile.host,
+                port: sshProfile.port,
+                username: sshProfile.username,
+                privateKeyRef: sshProfile.privateKeyRef,
+                privateKeyPEM: pem,
+                hostKeyFingerprint: sshProfile.hostKeyFingerprint
             )
-        } : nil
+        } else {
+            ssh = nil
+        }
         let payload = TunnelRuntimeState(
             profile: profile,
             secrets: secrets,
@@ -1565,7 +1609,9 @@ final class VPNManager: ObservableObject {
         if stats.state == .connected, stats.connectedProfileID == nil {
             if let runtimeProfile = loadPersistedRuntimeProfile() {
                 stats.connectedProfileID = runtimeProfile.id
-                stats.endpoint = runtimeProfile.peers.first?.endpoint
+                stats.endpoint = runtimeProfile.transport == .ssh
+                    ? runtimeProfile.ssh.map { "\($0.host):\($0.port)" }
+                    : runtimeProfile.peers.first?.endpoint
             }
         }
         if stats.state == .connected, stats.tunnelHasDefaultRoute, stats.publicIP == nil,

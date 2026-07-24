@@ -102,13 +102,16 @@ public final class PacketTunnelProvider: NEPacketTunnelProvider {
         // listener — the singleton-lifecycle hazard noted in project memory. Fresh instances below.
         teardownSSH()
 
-        // Fetch the private-key PEM from the shared Keychain access group. Absent key → clean throw.
-        let pem: String
-        do {
-            pem = try KeychainService.shared.read(account: params.privateKeyRef)
-        } catch {
-            logger.error("[APPSPLIT_SSH] private-key fetch failed ref=\(params.privateKeyRef): \(error.localizedDescription)")
-            throw error
+        // The private-key PEM is resolved app-side and carried in the runtime state (the root
+        // extension cannot read the user-context Keychain across the uid boundary — mirrors how the
+        // WireGuard key travels in TunnelSecrets). Absent material → clean throw.
+        guard let pem = params.privateKeyPEM, !pem.isEmpty else {
+            logger.error("[APPSPLIT_SSH] no private-key material in runtime state (ref=\(params.privateKeyRef))")
+            throw NSError(
+                domain: "com.tunnelbahn.mac.networkextension",
+                code: 1,
+                userInfo: [NSLocalizedDescriptionKey: "SSH private key material missing from runtime state."]
+            )
         }
 
         // Self-loop guard (verify + assert): the SSH carrier's own outbound TCP originates from THIS

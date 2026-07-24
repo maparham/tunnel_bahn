@@ -16,6 +16,12 @@ struct TunnelSSHParams: Codable, Equatable {
     let port: UInt16
     let username: String
     let privateKeyRef: String
+    /// The resolved private-key PEM, read from the Keychain **app-side** (uid 501) and carried in
+    /// the providerConfiguration payload — mirroring how `TunnelSecrets` carries the WireGuard key.
+    /// The root packet-tunnel extension (uid 0) cannot read the user-context Keychain item across
+    /// the uid boundary, so it must receive the material here rather than reading it itself. nil in
+    /// the non-secret (vpn-state.json) payload.
+    let privateKeyPEM: String?
     let hostKeyFingerprint: String?
 }
 
