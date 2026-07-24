@@ -43,7 +43,14 @@ struct ProfilesView: View {
                 original: profile,
                 onSave: { updated in
                     disconnectIfUsingProfile(id: updated.id)
-                    profileStore.update(updated)
+                    // Upsert: `update` only mutates an existing row, so a from-scratch profile (e.g.
+                    // "New SSH Profile") must go through `add`. Using `add` for existing edits is
+                    // avoided because it runs keychain cleanup that would delete a still-referenced key.
+                    if profileStore.profiles.contains(where: { $0.id == updated.id }) {
+                        profileStore.update(updated)
+                    } else {
+                        profileStore.add(updated)
+                    }
                     editingProfile = nil
                 },
                 onCancel: { editingProfile = nil }
@@ -118,7 +125,7 @@ struct ProfilesView: View {
 
     private var sidebar: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("WireGuard Profiles")
+            Text("Profiles")
                 .font(.title3.bold())
                 .padding(.horizontal, 16)
                 .padding(.top, 16)
@@ -134,6 +141,15 @@ struct ProfilesView: View {
                 }
                 .buttonStyle(.bordered)
             }
+            .padding(.horizontal, 16)
+
+            Button {
+                editingProfile = makeNewSSHProfile()
+            } label: {
+                Label("New SSH Profile", systemImage: "plus")
+            }
+            .buttonStyle(.bordered)
+            .instantTooltip("Create an SSH port-forwarding profile from scratch.")
             .padding(.horizontal, 16)
 
             if profileStore.profiles.isEmpty {
@@ -315,6 +331,9 @@ struct ProfilesView: View {
                         },
                         onExport: {
                             exportProfileAsConf(selectedProfile)
+                        },
+                        onResetHostKey: {
+                            resetHostKeyTrust(for: selectedProfile)
                         }
                     )
                 case .apps:
@@ -418,7 +437,7 @@ struct ProfilesView: View {
                 Text(profile.name)
                     .font(.headline)
                     .lineLimit(1)
-                Text(profile.peers.first?.endpoint ?? "No endpoint")
+                Text(profileSubtitle(profile))
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
@@ -474,6 +493,41 @@ struct ProfilesView: View {
     private func resetPasteState() {
         pastedProfileName = ""
         pastedConfig = ""
+    }
+
+    /// Sidebar subtitle: the SSH host for SSH-transport profiles, otherwise the WireGuard endpoint.
+    /// Driven by the stored `profile.transport`, never by live connection state (no-flicker rule).
+    private func profileSubtitle(_ profile: WireGuardProfile) -> String {
+        if profile.transport == .ssh {
+            let host = profile.ssh?.host ?? ""
+            return host.isEmpty ? "SSH" : host
+        }
+        return profile.peers.first?.endpoint ?? "No endpoint"
+    }
+
+    /// A blank SSH-transport template to open in the editor. `ssh` is deliberately `nil` so the editor
+    /// shows empty fields and requires a private key (a non-nil ref with no stored key would falsely
+    /// read as "a key is already stored"). The real `ssh` value + Keychain write happen on Save.
+    private func makeNewSSHProfile() -> WireGuardProfile {
+        WireGuardProfile(
+            name: "New SSH Profile",
+            interface: WireGuardInterface(privateKeyRef: "", addresses: [], dnsServers: [], mtu: nil),
+            peers: [],
+            transport: .ssh,
+            ssh: nil
+        )
+    }
+
+    /// Clears the pinned SSH host-key trust: the profile's surfaced pin (persisted) and the app-side
+    /// TOFU store entry. Best-effort — the authoritative pin held by the root extension in its own
+    /// App Group container is out of reach across the uid boundary (see host/extension uid boundary).
+    private func resetHostKeyTrust(for profile: WireGuardProfile) {
+        guard var ssh = profile.ssh else { return }
+        SSHHostKeyStore(backing: UserDefaultsHostKeyBacking()).clearPin(forHost: ssh.host)
+        ssh.hostKeyFingerprint = nil
+        var updated = profile
+        updated.ssh = ssh
+        profileStore.update(updated)
     }
 
     private func disconnectIfUsingProfile(id: UUID) {

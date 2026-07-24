@@ -94,15 +94,26 @@ final class ProfileStore: ObservableObject {
     /// at app startup after `load()`.
     func runKeychainIntegrityCheck() {
         profilesWithMissingKeys = profiles.filter { profile in
-            (try? keychainService.read(account: profile.interface.privateKeyRef)) == nil
+            (try? keychainService.read(account: connectKeyRef(for: profile))) == nil
         }
+    }
+
+    /// The Keychain account that must be readable for `profile` to connect: the SSH private key for
+    /// SSH-transport profiles, otherwise the WireGuard interface private key. SSH profiles carry an
+    /// inert WG `interface.privateKeyRef` (empty for from-scratch SSH profiles), so checking that
+    /// would spuriously flag every SSH profile as broken.
+    private func connectKeyRef(for profile: WireGuardProfile) -> String {
+        if profile.transport == .ssh, let ref = profile.ssh?.privateKeyRef {
+            return ref
+        }
+        return profile.interface.privateKeyRef
     }
 
     /// Returns true when the profile's private key can be read from the keychain right now.
     /// Use this as a connect-time guard to give an actionable error before the extension
     /// tries (and fails with -25300) to read the key itself.
     func hasValidPrivateKey(for profile: WireGuardProfile) -> Bool {
-        (try? keychainService.read(account: profile.interface.privateKeyRef)) != nil
+        (try? keychainService.read(account: connectKeyRef(for: profile))) != nil
     }
 
     private func save() {
@@ -132,7 +143,13 @@ final class ProfileStore: ObservableObject {
     private func cleanupKeychainSecrets(for profile: WireGuardProfile) {
         // Delete private key
         try? keychainService.delete(account: profile.interface.privateKeyRef)
-        
+
+        // Delete the SSH private key (best-effort). The ref is derived from the profile id and is
+        // unique to this profile, so removing it on delete/replace cannot clobber a key still in use.
+        if let sshKeyRef = profile.ssh?.privateKeyRef {
+            try? keychainService.delete(account: sshKeyRef)
+        }
+
         // Delete preshared keys from all peers
         for peer in profile.peers {
             if let presharedKeyRef = peer.presharedKeyRef {

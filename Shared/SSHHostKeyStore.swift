@@ -6,6 +6,7 @@ import Foundation
 protocol HostKeyBacking: AnyObject {
     func get(_ key: String) -> String?
     func set(_ key: String, _ value: String)
+    func remove(_ key: String)
 }
 
 /// Trust-on-first-use (TOFU) store for SSH server host-key fingerprints.
@@ -31,6 +32,17 @@ struct SSHHostKeyStore {
     /// Pin `fingerprint` for `host`, overwriting any existing pin.
     func pin(fingerprint fp: String, forHost host: String) {
         backing.set(storageKey(forHost: host), fp)
+    }
+
+    /// Clear any pinned fingerprint for `host` so the next connection re-establishes trust-on-first-use.
+    ///
+    /// Note: on the shipping configuration the packet-tunnel extension runs as root and resolves the
+    /// App Group defaults to a *different* container than the host app (see the host/extension uid
+    /// boundary), so a clear issued from the app process cannot reach the extension's own copy of the
+    /// pin. This clears whatever the calling process can see; a fully-authoritative reset that also
+    /// wipes the extension's copy would need a provider-message path (out of scope here).
+    func clearPin(forHost host: String) {
+        backing.remove(storageKey(forHost: host))
     }
 
     /// TOFU verification.
@@ -63,5 +75,9 @@ final class UserDefaultsHostKeyBacking: HostKeyBacking {
 
     func set(_ key: String, _ value: String) {
         defaults.set(value, forKey: key)
+    }
+
+    func remove(_ key: String) {
+        defaults.removeObject(forKey: key)
     }
 }

@@ -57,5 +57,6 @@ private final class InMemoryKV: HostKeyBacking {
     private var storage: [String: String] = [:]
     func get(_ key: String) -> String? { storage[key] }
     func set(_ key: String, _ value: String) { storage[key] = value }
+    func remove(_ key: String) { storage[key] = nil }
 }
 #endif

@@ -18,6 +18,9 @@ struct ProfileDetailView: View {
     let onEdit: () -> Void
     let onRename: (String) -> Void
     let onExport: () -> Void
+    /// Clears the pinned SSH host-key trust so the next connect re-establishes trust-on-first-use.
+    /// Only invoked for SSH-transport profiles. Defaults to a no-op for callers that don't supply it.
+    var onResetHostKey: () -> Void = {}
 
     @FocusState private var nameFieldFocused: Bool
     @State private var editingName = false
@@ -43,6 +46,30 @@ struct ProfileDetailView: View {
             VStack(alignment: .leading, spacing: 16) {
                 headerSection
 
+                if profile.transport == .ssh, let ssh = profile.ssh {
+                    sshServerSection(ssh)
+                    sshHostKeySection(ssh)
+                } else {
+                    wireGuardSections
+                }
+
+                if !splitTunnelWarnings.isEmpty && !leakRiskDismissed {
+                    splitTunnelWarningBanner
+                }
+            }
+            .padding(20)
+        }
+        .onAppear {
+            leakRiskDismissed = UserDefaults.standard.bool(forKey: leakRiskDefaultsKey)
+        }
+    }
+
+    /// The WireGuard interface / transfer / peer detail sections. Shown for WireGuard-transport
+    /// profiles; SSH-transport profiles show their own server + host-key sections instead. The choice
+    /// is driven by the stored `profile.transport`, never by live connection state (no-flicker rule).
+    @ViewBuilder
+    private var wireGuardSections: some View {
+        Group {
                 GroupBox("Interface") {
                     VStack(alignment: .leading, spacing: 10) {
                         DetailRow(
@@ -118,16 +145,79 @@ struct ProfileDetailView: View {
                         .padding(.top, 4)
                     }
                 }
+        }
+    }
 
-                if !splitTunnelWarnings.isEmpty && !leakRiskDismissed {
-                    splitTunnelWarningBanner
+    // MARK: SSH sections
+
+    private func sshServerSection(_ ssh: SSHProfile) -> some View {
+        GroupBox("SSH Server") {
+            VStack(alignment: .leading, spacing: 10) {
+                DetailRow(label: "Host", value: ssh.host, monospaced: true, copyable: true)
+                DetailRow(label: "Port", value: "\(ssh.port)")
+                DetailRow(label: "Username", value: ssh.username)
+                DetailRow(
+                    label: "Private key",
+                    value: ssh.privateKeyRef,
+                    monospaced: true,
+                    copyable: true
+                )
+            }
+            .padding(.top, 4)
+        }
+    }
+
+    /// Host-key trust (TOFU). The pinned fingerprint the connection actually validates against lives
+    /// in the root packet-tunnel extension's own App Group container, which the host app cannot read
+    /// across the uid boundary; `effectiveHostKeyFingerprint` therefore reflects whatever this process
+    /// can see (the profile field, or the app-side pin). The reset control is always offered so the
+    /// user can re-establish trust-on-first-use regardless.
+    private func sshHostKeySection(_ ssh: SSHProfile) -> some View {
+        GroupBox("Host Key") {
+            VStack(alignment: .leading, spacing: 10) {
+                if let fp = effectiveHostKeyFingerprint(for: ssh) {
+                    DetailRow(
+                        label: "Fingerprint",
+                        value: "SHA256:\(fp)",
+                        monospaced: true,
+                        copyable: true
+                    )
+                } else {
+                    HStack(alignment: .top, spacing: 10) {
+                        Text("Fingerprint:")
+                            .foregroundStyle(.secondary)
+                            .frame(width: 150, alignment: .trailing)
+                        Text("Trust on first use — pinned on first connect.")
+                            .foregroundStyle(.secondary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                }
+
+                HStack(alignment: .top, spacing: 10) {
+                    Text("")
+                        .frame(width: 150, alignment: .trailing)
+                    Button("Reset Host Key Trust", action: onResetHostKey)
+                        .instantTooltip(
+                            "TunnelBahn trusts this server's host key on first connect (trust-on-first-use) and "
+                            + "rejects any later change as a possible man-in-the-middle. Reset clears the pinned key "
+                            + "so the next connection re-establishes trust — use this only if you intentionally "
+                            + "changed the server's host key."
+                        )
+                    Spacer(minLength: 0)
                 }
             }
-            .padding(20)
+            .padding(.top, 4)
         }
-        .onAppear {
-            leakRiskDismissed = UserDefaults.standard.bool(forKey: leakRiskDefaultsKey)
+    }
+
+    /// The host-key fingerprint this process can observe: the profile's surfaced pin if present,
+    /// otherwise the app-side TOFU store. Returns `nil` when neither is readable (the usual case on
+    /// device, where the extension holds the authoritative pin in its own root container).
+    private func effectiveHostKeyFingerprint(for ssh: SSHProfile) -> String? {
+        if let pinned = ssh.hostKeyFingerprint, !pinned.isEmpty {
+            return pinned
         }
+        return SSHHostKeyStore(backing: UserDefaultsHostKeyBacking()).fingerprint(forHost: ssh.host)
     }
 
     private var splitTunnelWarningBanner: some View {

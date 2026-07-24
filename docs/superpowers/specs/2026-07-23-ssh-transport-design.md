@@ -1,7 +1,7 @@
 # SSH port-forwarding as a second egress transport
 
 **Date:** 2026-07-23
-**Status:** Approved (design)
+**Status:** Implemented
 
 ## Goal
 
@@ -115,15 +115,22 @@ packet-tunnel target. This is the first SPM dependency in the project
 
 ## Security & robustness (designed in, not optional)
 
-- **Host-key verification**: TOFU on first connect; server key fingerprint
-  stored in Keychain. Mismatch on reconnect is a hard failure (prevents silent
-  MITM).
+- **Host-key verification**: TOFU on first connect; the extension pins the
+  server key fingerprint (as-built: in the App Group defaults it owns).
+  Mismatch on reconnect is a hard failure (prevents silent MITM) — this always
+  holds. Caveat (as-built): the host app and the root extension resolve the App
+  Group to different containers, so the app's fingerprint surfacing and "Reset
+  trust" are best-effort (they touch the app-side copy, not the extension's).
+  An authoritative reset needs a `sendProviderMessage` IPC — a documented v1
+  limitation / planned follow-up, not shipped here.
 - **Self-loop guard**: the extension's own outbound TCP connection to the SSH
   server must not be diverted back into the proxy. The extension is not a
-  matched app so `handleNewFlow` won't divert it; assert/verify this.
-- **Keepalive + reconnect**: all flows share one SSH connection — keepalive
-  pings plus reconnect with teardown of orphaned channels, mirroring the
-  existing WG watchdog behavior.
+  matched app so `handleNewFlow` won't divert it (documented as an invariant).
+- **Reconnect**: all flows share one SSH connection — transport-level reconnect
+  with backoff and teardown of orphaned flows on drop, mirroring the WG
+  watchdog philosophy. As-built keepalive is TCP `SO_KEEPALIVE` + `closeFuture`
+  drop detection only; an application-level SSH keepalive is deferred
+  (`keepalive@openssh.com` is `internal` in swift-nio-ssh 0.14.1).
 
 ## Known limitation (v1, documented)
 
@@ -137,8 +144,11 @@ Extend the existing S1..SN scenario-probe workflow with an SSH profile:
 
 - In-filter TCP probe — reaches destination, tunneled via SSH.
 - Out-of-filter probe — proves the destination filter still narrows routing.
-- UDP-dropped probe — QUIC/UDP dropped, TCP fallback succeeds.
-- DNS-over-TCP probe — resolution works with UDP dropped.
+- UDP-dropped / no-leak probe — QUIC/UDP to a filter-matched host is dropped
+  (no UDP egress), TCP fallback succeeds; paired out-of-filter UDP still egresses
+  direct.
+- DNS probe — resolution still works via the existing local-resolver bypass
+  (no DNS-over-TCP was built).
 
 Per project convention: set toggles + start the tunnel via URL scheme, then
 stop — the user runs the probes.

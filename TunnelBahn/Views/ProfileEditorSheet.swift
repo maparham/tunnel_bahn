@@ -2,6 +2,8 @@ import SwiftUI
 import AppKit
 
 struct ProfileEditorSheet: View {
+    private static let log = AppLog(subsystem: "com.tunnelbahn.mac", category: "ProfileEditor")
+
     private let original: WireGuardProfile
     let onSave: (WireGuardProfile) -> Void
     let onCancel: () -> Void
@@ -13,6 +15,14 @@ struct ProfileEditorSheet: View {
     @State private var peerRows: [PeerEditRow]
     @State private var validationMessage: String?
 
+    // SSH transport editor state.
+    @State private var transport: TransportKind
+    @State private var sshHost: String
+    @State private var sshPort: String
+    @State private var sshUsername: String
+    /// New private-key text entered this session. Empty means "keep the existing stored key".
+    @State private var sshPastedKey: String = ""
+
     init(original: WireGuardProfile, onSave: @escaping (WireGuardProfile) -> Void, onCancel: @escaping () -> Void) {
         self.original = original
         self.onSave = onSave
@@ -21,6 +31,10 @@ struct ProfileEditorSheet: View {
         _addressesCSV = State(initialValue: original.interface.addresses.joined(separator: ", "))
         _dnsCSV = State(initialValue: original.interface.dnsServers.joined(separator: ", "))
         _mtuText = State(initialValue: original.interface.mtu.map(String.init) ?? "")
+        _transport = State(initialValue: original.transport)
+        _sshHost = State(initialValue: original.ssh?.host ?? "")
+        _sshPort = State(initialValue: original.ssh.map { String($0.port) } ?? "22")
+        _sshUsername = State(initialValue: original.ssh?.username ?? "")
         _peerRows = State(
             initialValue: original.peers.map { peer in
                 PeerEditRow(
@@ -44,11 +58,34 @@ struct ProfileEditorSheet: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
                     GroupBox("General") {
-                        TextField("Display name", text: $name)
-                            .textFieldStyle(.roundedBorder)
-                            .maxLength($name, WireGuardProfile.maxNameLength)
+                        VStack(alignment: .leading, spacing: 10) {
+                            TextField("Display name", text: $name)
+                                .textFieldStyle(.roundedBorder)
+                                .maxLength($name, WireGuardProfile.maxNameLength)
+
+                            Text("Transport")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            Picker("Transport", selection: $transport) {
+                                Text("WireGuard").tag(TransportKind.wireguard)
+                                Text("SSH").tag(TransportKind.ssh)
+                            }
+                            .pickerStyle(.segmented)
+                            .labelsHidden()
+                            .instantTooltip("Egress transport used to carry this profile's traffic.")
+                        }
+                        .padding(.top, 4)
                     }
 
+                    if transport == .ssh {
+                        SSHProfileEditorFields(
+                            host: $sshHost,
+                            port: $sshPort,
+                            username: $sshUsername,
+                            pastedKey: $sshPastedKey,
+                            hasStoredKey: original.ssh?.privateKeyRef != nil
+                        )
+                    } else {
                     GroupBox("Interface") {
                         VStack(alignment: .leading, spacing: 10) {
                             Text("Addresses (comma-separated)")
@@ -106,6 +143,7 @@ struct ProfileEditorSheet: View {
                             .padding(.top, 4)
                         }
                     }
+                    }
                 }
                 .padding(.vertical, 4)
             }
@@ -120,15 +158,17 @@ struct ProfileEditorSheet: View {
             HStack {
                 Spacer()
                 Button("Cancel", action: onCancel)
-                Button("Copy") {
-                    guard let built = buildProfile() else { return }
-                    do {
-                        let config = try WireGuardConfigRenderer.renderFullConfigString(profile: built)
-                        NSPasteboard.general.clearContents()
-                        NSPasteboard.general.setString(config, forType: .string)
-                        validationMessage = nil
-                    } catch {
-                        validationMessage = error.localizedDescription
+                if transport == .wireguard {
+                    Button("Copy") {
+                        guard let built = buildProfile() else { return }
+                        do {
+                            let config = try WireGuardConfigRenderer.renderFullConfigString(profile: built)
+                            NSPasteboard.general.clearContents()
+                            NSPasteboard.general.setString(config, forType: .string)
+                            validationMessage = nil
+                        } catch {
+                            validationMessage = error.localizedDescription
+                        }
                     }
                 }
                 Button("Save") {
@@ -150,6 +190,10 @@ struct ProfileEditorSheet: View {
         guard !trimmedName.isEmpty else {
             validationMessage = "Display name is required."
             return nil
+        }
+
+        if transport == .ssh {
+            return buildSSHProfile(name: trimmedName)
         }
 
         let addresses = splitCSV(addressesCSV)
@@ -225,6 +269,18 @@ struct ProfileEditorSheet: View {
             mtu: mtu
         )
 
+        // Transport switched SSH → WireGuard: the previously-stored SSH private key is now orphaned
+        // (the profile no longer references it). Best-effort delete AFTER all WG validation passes, so
+        // a late validation failure — or the user reverting to SSH — never wipes an in-use key. The
+        // ref is unique to this profile id, so this cannot clobber another profile's key.
+        if original.transport == .ssh, let orphanedRef = original.ssh?.privateKeyRef {
+            do {
+                try KeychainService.shared.delete(account: orphanedRef)
+            } catch {
+                Self.log.error("Failed to delete orphaned SSH key on SSH→WG switch: \(error.localizedDescription)")
+            }
+        }
+
         return WireGuardProfile(
             id: original.id,
             name: trimmedName,
@@ -232,6 +288,76 @@ struct ProfileEditorSheet: View {
             peers: builtPeers,
             createdAt: original.createdAt,
             updatedAt: .now
+        )
+    }
+
+    /// Builds an SSH-transport profile. The WireGuard `interface`/`peers` are carried over from the
+    /// original unchanged (inert for SSH but required by the model). The private key, when supplied,
+    /// is written to the shared-access-group Keychain under a stable ref derived from the profile id
+    /// — the same ref the packet-tunnel extension reads at connect time. Write happens LAST, only
+    /// after every validation passes, so a late failure can never orphan a key.
+    private func buildSSHProfile(name trimmedName: String) -> WireGuardProfile? {
+        let host = sshHost.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !host.isEmpty else {
+            validationMessage = "SSH host is required."
+            return nil
+        }
+
+        let username = sshUsername.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !username.isEmpty else {
+            validationMessage = "SSH username is required."
+            return nil
+        }
+
+        let portTrimmed = sshPort.trimmingCharacters(in: .whitespacesAndNewlines)
+        let portValue: UInt16
+        if portTrimmed.isEmpty {
+            portValue = 22
+        } else if let p = UInt16(portTrimmed), p > 0 {
+            portValue = p
+        } else {
+            validationMessage = "SSH port must be a number between 1 and 65535."
+            return nil
+        }
+
+        // Stable ref derived from the profile id so editing reuses the same Keychain account and
+        // `KeychainService.save`'s internal delete+add overwrites in place (no orphaned item).
+        let keyRef = original.ssh?.privateKeyRef ?? "ssh-key-\(original.id.uuidString)"
+
+        let newKey = sshPastedKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        let hasExistingKey = original.ssh?.privateKeyRef != nil
+        guard !newKey.isEmpty || hasExistingKey else {
+            validationMessage = "A private key is required. Import a file or paste the key."
+            return nil
+        }
+
+        // Write the PEM last, after all validation has passed.
+        if !newKey.isEmpty {
+            do {
+                try KeychainService.shared.save(newKey, account: keyRef)
+            } catch {
+                validationMessage = "Could not store private key: \(error.localizedDescription)"
+                return nil
+            }
+        }
+
+        let ssh = SSHProfile(
+            host: host,
+            port: portValue,
+            username: username,
+            privateKeyRef: keyRef,
+            hostKeyFingerprint: original.ssh?.hostKeyFingerprint
+        )
+
+        return WireGuardProfile(
+            id: original.id,
+            name: trimmedName,
+            interface: original.interface,
+            peers: original.peers,
+            createdAt: original.createdAt,
+            updatedAt: .now,
+            transport: .ssh,
+            ssh: ssh
         )
     }
 

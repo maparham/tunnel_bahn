@@ -627,29 +627,43 @@ git commit -m "feat(ui): SSH profile editor with Keychain-backed private key"
 
 ---
 
-## Task 9: Host-key trust surfacing + docs
+## Task 9: Host-key trust surfacing + UX polish + Keychain cleanup + docs
 
 **Files:**
-- Modify: `TunnelBahn/Views/ProfileDetailView.swift` or `StatusView.swift` (show pinned fingerprint / allow reset)
+- Modify: `TunnelBahn/Views/ProfileDetailView.swift` and/or `StatusView.swift` (show pinned fingerprint / allow reset)
+- Modify: `TunnelBahn/Views/ProfilesView.swift` (a "New SSH Profile" entry point + fix the sidebar row to show the SSH host for SSH profiles)
+- Modify: `TunnelBahn/Views/ProfileEditorSheet.swift` (delete the orphaned Keychain key when a profile's transport is switched SSH→WG)
+- Modify: the profile-delete path (`ProfilesView.swift` `profileStore.delete(id:)` call site / `ProfileStore`) — best-effort delete the SSH Keychain item on profile deletion
 - Modify: `README.md`, `CHANGELOG.md`, and the design doc status
 
 **Interfaces:**
-- Consumes: `hostKeyFingerprint` from the profile (persisted back in Task 6).
-- Produces: user-visible host-key state + a way to reset the pin (re-TOFU) if the server key legitimately rotates.
+- Consumes: `hostKeyFingerprint`/`ssh.privateKeyRef` from the profile; `KeychainService.shared.delete(account:)`.
+- Produces: user-visible host-key state + reset; a first-class way to create an SSH profile; no orphaned key material in the Keychain.
 
-- [ ] **Step 1: Show the pinned fingerprint**
+- [ ] **Step 1: Show the pinned fingerprint + reset**
 
-In the profile detail/status view, when the active profile is SSH and a `hostKeyFingerprint` is pinned, display it (SHA-256, base64) with an `.instantTooltip` explaining TOFU. Add a "Reset host key trust" action that clears the pin so the next connect re-pins.
+In the profile detail/status view, when the active profile is SSH and a `hostKeyFingerprint` is pinned, display it (it is stored as base64(SHA-256(host-key wire)) with NO `SHA256:` prefix — Task 4's format; render it clearly, optionally prefixed `SHA256:` for user familiarity but do NOT change the stored value) with an `.instantTooltip` explaining TOFU. Add a "Reset host key trust" action that clears the stored pin (`hostKeyFingerprint = nil` on the profile AND removes the App-Group-defaults entry the extension's `SSHHostKeyStore` wrote) so the next connect re-pins. Use `.instantTooltip`, not `.help()`.
 
-- [ ] **Step 2: Docs**
+- [ ] **Step 2: First-class "New SSH Profile" entry + sidebar row**
 
-Update `README.md` (SSH as an alternative transport, TCP-only, remote DNS), `CHANGELOG.md` (new feature entry), and flip the design doc `Status:` to `Implemented`. Note the HOL-blocking v1 limitation in README.
+In `ProfilesView`, add a way to create an SSH profile from scratch (e.g. a menu on the add/"+" control offering "New WireGuard Profile" / "New SSH Profile", or a segmented add) — today an SSH profile is only reachable by editing a WG profile and switching transport (Task 8 gap). Creating a new SSH profile opens the editor with `transport == .ssh` and empty SSH fields. Also fix the sidebar/list row so an SSH profile shows its SSH host (`ssh.host`), not the stale/empty WG endpoint. Do not gate row content on live connection state (no-flicker rule).
 
-- [ ] **Step 3: Commit**
+- [ ] **Step 3: Keychain cleanup (no orphaned key material)**
 
+- When the editor saves a profile whose transport changed SSH→WG (so `ssh` becomes nil), best-effort `KeychainService.shared.delete(account: <oldRef>)` for the previous `ssh.privateKeyRef` (guard: only if it won't clobber a key still referenced).
+- When a profile is deleted, if it was an SSH profile, best-effort delete its `ssh.privateKeyRef` Keychain item. (Confirm the WG delete path's existing behavior; mirror it — this is a pre-existing gap that now also applies to SSH keys.)
+Both are best-effort: a delete failure logs but does not block the save/delete.
+
+- [ ] **Step 4: Docs (reflect the AS-BUILT behavior, not the original plan text)**
+
+Update `README.md`: SSH as an alternative per-profile transport; **TCP-only** (tunneled UDP dropped, QUIC falls back to TCP); **DNS works via the existing local-resolver bypass** (NOT "remote DNS"); auth is **ed25519 or ECDSA P-256/384/521, RSA unsupported** (swift-nio-ssh has no RSA key type); host-key **TOFU** with pin + reset; **v1 limitations**: head-of-line blocking (one SSH connection multiplexes all flows), no DNS-over-TCP (an app hardwired to a remote UDP resolver in-filter won't resolve), no internal/split-horizon name resolution, no app-level SSH keepalive (idle-drop detection is TCP-keepalive-only). Update `CHANGELOG.md` with the feature entry. Flip the design doc `Status:` to `Implemented`.
+
+- [ ] **Step 5: Build + commit**
+
+Build: `xcodebuild -scheme TunnelBahn -configuration Debug build` → BUILD SUCCEEDED.
 ```bash
 git add TunnelBahn/Views/ README.md CHANGELOG.md docs/superpowers/specs/2026-07-23-ssh-transport-design.md
-git commit -m "feat(ui): surface SSH host-key trust; docs for SSH transport"
+git commit -m "feat(ui): SSH host-key trust surfacing, New-SSH-Profile entry, Keychain cleanup; docs"
 ```
 
 ---

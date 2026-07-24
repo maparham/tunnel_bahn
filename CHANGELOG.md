@@ -4,6 +4,37 @@ All notable changes to TunnelBahn are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project aims
 to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- **SSH as an alternative per-profile egress transport.** A profile can now tunnel
+  over SSH `direct-tcpip` port forwarding instead of WireGuard, selectable per
+  profile, sharing the same transport-agnostic per-app identity + destination-filter
+  routing layer. Create one via **New SSH Profile** in the sidebar, or switch an
+  existing profile's transport in the editor.
+  - **TCP-only:** tunneled UDP is dropped; QUIC/HTTP3 falls back to TCP. DNS keeps
+    working via the existing local-resolver bypass (not remote DNS).
+  - **Public-key auth, ed25519 or ECDSA (P-256/384/521) only** — RSA is unsupported.
+    Keys are stored in the Keychain (shared access group), never in the profile JSON.
+  - **Host-key trust-on-first-use (TOFU):** the server key is pinned by the extension
+    on first connect and any later change is rejected (this hard-fail always holds).
+    The profile detail view surfaces the pinned fingerprint and offers **Reset Host
+    Key Trust**; note that on the shipping root-extension configuration this clears
+    only the app's own record, so recovering from a genuine host-key rotation may
+    require reinstalling the extension (an authoritative IPC-based reset is a planned
+    follow-up).
+  - Known v1 limitations: single-connection head-of-line blocking, no DNS-over-TCP,
+    no internal/split-horizon name resolution, no app-level SSH keepalive
+    (idle-drop detection is TCP-keepalive-only), and best-effort (non-authoritative)
+    in-app host-key reset.
+
+### Fixed
+- SSH private-key material is no longer orphaned in the Keychain when a profile's
+  transport is switched SSH→WireGuard or when an SSH profile is deleted.
+- The keychain-integrity check and connect-time key guard are now transport-aware,
+  so SSH profiles are validated against their SSH key rather than the (inert)
+  WireGuard interface key.
+
 ## [0.1.0] - 2026-07-02
 
 First public release: a native macOS app for WireGuard per-application split

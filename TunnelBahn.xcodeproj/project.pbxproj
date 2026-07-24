@@ -10,6 +10,7 @@
 		014C2FCBF12405FEFD835E63 /* ProfileDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B3B3A483CAA076196A178605 /* ProfileDetailView.swift */; };
 		035FABFA0601E358F352C11B /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 832330F2308BBB09BCD44A43 /* Assets.xcassets */; };
 		0393E05DDE08CCC0854817CD /* PerAppStatsProxyManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = F7E43092154982D7DF581773 /* PerAppStatsProxyManager.swift */; };
+		03969EA8E0BD027CC8CD7AA5 /* SSHProfileEditorFields.swift in Sources */ = {isa = PBXBuildFile; fileRef = B3FDD1001554E22DBEDBA36F /* SSHProfileEditorFields.swift */; };
 		04F75B73723BE604E33D7CDA /* RelayWireFrame.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8172D2F62168E74984689F83 /* RelayWireFrame.swift */; };
 		0560454BB3AB3D5EBCE6A9BD /* TransparentProxyProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8DE7D4A99ABC9F1B9A4C3781 /* TransparentProxyProvider.swift */; };
 		057CA234CC37E1E816AB7C72 /* DestinationCidrTextParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = EA37C2FC678FE4A9923E9695 /* DestinationCidrTextParser.swift */; };
@@ -267,6 +268,7 @@
 		B01EC846F951388033018FDA /* TunnelConnectivityProbe.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TunnelConnectivityProbe.swift; sourceTree = "<group>"; };
 		B2B47182EE791A9342A1CFFB /* TransparentProxyRuntimeConfig.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TransparentProxyRuntimeConfig.swift; sourceTree = "<group>"; };
 		B3B3A483CAA076196A178605 /* ProfileDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProfileDetailView.swift; sourceTree = "<group>"; };
+		B3FDD1001554E22DBEDBA36F /* SSHProfileEditorFields.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SSHProfileEditorFields.swift; sourceTree = "<group>"; };
 		B4ECCB8AADB792D2100AF34B /* ProfileRoutingStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProfileRoutingStore.swift; sourceTree = "<group>"; };
 		B7EB0419ECF06147A8E40DD9 /* DomainResolver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DomainResolver.swift; sourceTree = "<group>"; };
 		B8E4AA7BE0C447E51BE149BC /* KeychainService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeychainService.swift; sourceTree = "<group>"; };
@@ -341,6 +343,7 @@
 				C101AA2BA46E11A0A4EC93C3 /* ProfilesView.swift */,
 				1D32AC00BFF4EF350D983C23 /* RoutingView.swift */,
 				5AF7FE9FDDCD675A8CF2918D /* SettingsView.swift */,
+				B3FDD1001554E22DBEDBA36F /* SSHProfileEditorFields.swift */,
 				F86BBF39930242EB8FF86F54 /* StatusView.swift */,
 			);
 			path = Views;
@@ -890,6 +893,7 @@
 				BA6E0347C24D21288C5F4393 /* RoutingView.swift in Sources */,
 				9545405E11A1B8499351536D /* SSHHostKeyStore.swift in Sources */,
 				19983D532895D0D988774F22 /* SSHProfile.swift in Sources */,
+				03969EA8E0BD027CC8CD7AA5 /* SSHProfileEditorFields.swift in Sources */,
 				10CB2FD77B078224A6E8E791 /* ScopedBookmarkStore.swift in Sources */,
 				34BA9126A5908F090CAC52A6 /* SettingsView.swift in Sources */,
 				3753C67B8BE9E2C47198C295 /* SharedLogWriter.swift in Sources */,
