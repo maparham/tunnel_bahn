@@ -32,6 +32,24 @@ final class SSHFlowTransport: RelayFlowTransport, @unchecked Sendable {
     private var channel: Channel?
     private var groupShutDown = false
 
+    // MARK: Lifecycle / reconnect state (guarded by `stateLock`)
+    private let stateLock = NSLock()
+    /// Set true by `stop()` before the channel is closed, so the `closeFuture` drop-handler can tell
+    /// an intentional teardown apart from an unexpected drop and skip reconnecting.
+    private var stopping = false
+    /// True while a reconnect loop is running, so overlapping `closeFuture` firings don't spawn
+    /// multiple concurrent loops.
+    private var reconnecting = false
+    /// Set when a drop arrives while a reconnect loop is still in flight. `finishReconnect` relaunches
+    /// the loop instead of clearing `reconnecting`, closing the window where a freshly-dialed channel
+    /// drops between `dial()` returning and the loop exiting (would otherwise leave us flow-dead).
+    private var pendingRedial = false
+    private var reconnectTask: Task<Void, Never>?
+
+    /// Reconnect backoff bounds (seconds).
+    private static let reconnectInitialBackoff: Double = 1.0
+    private static let reconnectMaxBackoff: Double = 30.0
+
     // MARK: Per-flow channel state (Task 5)
 
     /// State for one relay flow → one `direct-tcpip` child channel.
@@ -80,8 +98,7 @@ final class SSHFlowTransport: RelayFlowTransport, @unchecked Sendable {
          username: String,
          privateKeyPEM: String,
          pinnedHostKeyFingerprint: String?,
-         hostKeyStore: SSHHostKeyStore,
-         queue: DispatchQueue) throws {
+         hostKeyStore: SSHHostKeyStore) throws {
         self.host = host
         self.port = port
         self.username = username
@@ -98,7 +115,24 @@ final class SSHFlowTransport: RelayFlowTransport, @unchecked Sendable {
     /// Establishes the SSH transport connection: TCP connect, key exchange, host-key TOFU
     /// verification, and private-key user authentication. Returns once the server has accepted
     /// authentication; throws if the connection, host-key check, or auth fails.
+    ///
+    /// On success a `closeFuture` watcher is armed: an *unexpected* drop of the parent channel fails
+    /// every live flow and triggers a background reconnect (see `handleConnectionDrop`). Only the
+    /// *initial* connection failure here shuts the event-loop group down — re-dials keep the group
+    /// alive so they can retry.
     func start() async throws {
+        do {
+            try await dial()
+        } catch {
+            shutdownGroup()      // don't leak the event-loop group on a failed initial start
+            throw error
+        }
+    }
+
+    /// One connect + auth attempt. Sets `self.channel` and arms the drop watcher on success; throws
+    /// on connect/auth/host-key failure WITHOUT shutting the group down (the caller decides that).
+    /// Reused by both `start()` and the reconnect loop.
+    private func dial() async throws {
         Self.log.notice("[APPSPLIT_SSH] connect start host=\(host) port=\(port) user=\(username)")
 
         let authDelegate = PrivateKeyAuth(username: username, privateKey: privateKey, log: Self.log)
@@ -111,6 +145,12 @@ final class SSHFlowTransport: RelayFlowTransport, @unchecked Sendable {
 
         let bootstrap = ClientBootstrap(group: group)
             .channelOption(ChannelOptions.socketOption(.so_reuseaddr), value: 1)
+            // Best-effort TCP keepalive: keeps NAT/firewall state warm on an idle carrier. It is NOT
+            // a prompt drop detector (Darwin's default keepidle is ~2h); actual drop detection is the
+            // `closeFuture` watcher below. A proper application-level SSH keepalive
+            // (`keepalive@openssh.com` global request) is `internal` in swift-nio-ssh 0.14.1 and not
+            // reachable via public API — noted as a follow-up.
+            .channelOption(ChannelOptions.socketOption(.so_keepalive), value: 1)
             .channelInitializer { channel in
                 let sshHandler = NIOSSHHandler(
                     role: .client(.init(userAuthDelegate: authDelegate,
@@ -127,10 +167,8 @@ final class SSHFlowTransport: RelayFlowTransport, @unchecked Sendable {
         } catch {
             authPromise.fail(error)
             Self.log.error("[APPSPLIT_SSH] auth fail (connect) host=\(host): \(error)")
-            shutdownGroup()      // don't leak the event-loop group on a failed start
             throw error
         }
-        self.channel = channel
 
         do {
             try await authPromise.futureResult.get()
@@ -141,19 +179,138 @@ final class SSHFlowTransport: RelayFlowTransport, @unchecked Sendable {
             let reason = serverAuth.rejectionReason ?? error
             Self.log.error("[APPSPLIT_SSH] auth fail host=\(host): \(reason)")
             try? await channel.close().get()
-            self.channel = nil
-            shutdownGroup()      // don't leak the event-loop group on a failed start
             throw reason
         }
+        self.channel = channel
         Self.log.notice("[APPSPLIT_SSH] auth success host=\(host) user=\(username)")
+
+        // Arm the drop watcher. `closeFuture` fires exactly once for THIS channel; a later reconnect
+        // installs its own watcher on the new channel. Capture the specific channel so the handler
+        // only clears `self.channel` if it is still the one that dropped (never a newer re-dial).
+        channel.closeFuture.whenComplete { [weak self, weak channel] _ in
+            self?.handleConnectionDrop(closed: channel)
+        }
     }
 
     func stop() {
+        stateLock.lock()
+        stopping = true
+        let task = reconnectTask
+        reconnectTask = nil
+        stateLock.unlock()
+        task?.cancel()
+
         if let channel = channel {
             channel.close(promise: nil)
             self.channel = nil
         }
         shutdownGroup()
+    }
+
+    // MARK: Drop detection + reconnect
+
+    /// Invoked (on the SSH event loop) when the parent channel `closed` closes. Clears the dead
+    /// channel so `openTCP` fails fast during the outage, fails every live flow so the relay tears
+    /// down the corresponding source-app flows, then — unless this was an intentional `stop()` —
+    /// ensures a reconnect loop is (or will be) running.
+    private func handleConnectionDrop(closed: Channel?) {
+        // Nil out the dead channel (M2) so `openTCP`'s `guard let channel` returns false during the
+        // gap instead of registering a flow that then fails async. Only clear it if it is still the
+        // channel that dropped — never a newer re-dial's channel.
+        if let closed, self.channel === closed {
+            self.channel = nil
+        }
+        failAllFlows(reason: "ssh connection dropped")
+
+        stateLock.lock()
+        if stopping {
+            stateLock.unlock()
+            return
+        }
+        if reconnecting {
+            // A loop is already running (possibly finishing right now). Defer to it via pendingRedial
+            // so it relaunches on exit rather than us racing to clear `reconnecting` (I1).
+            pendingRedial = true
+            stateLock.unlock()
+            Self.log.notice("[APPSPLIT_SSH] connection dropped host=\(host) — redial queued (loop in flight)")
+            return
+        }
+        startReconnectTaskLocked()
+        stateLock.unlock()
+        Self.log.notice("[APPSPLIT_SSH] connection dropped host=\(host) — starting reconnect")
+    }
+
+    /// Fails and forgets every live flow, reporting each via `onFlowClosed`. Called on a connection
+    /// drop; also closes any still-attached child channels. Idempotent w.r.t. concurrent `close`.
+    private func failAllFlows(reason: String) {
+        flowsLock.lock()
+        let entries = flows
+        flows.removeAll()
+        flowsLock.unlock()
+        for (flowID, flow) in entries {
+            flow.channel?.close(promise: nil)
+            onFlowClosed?(flowID, reason)
+        }
+    }
+
+    /// Starts the reconnect Task. MUST be called while holding `stateLock`. Resets `pendingRedial`
+    /// since this fresh loop supersedes any queued redial.
+    private func startReconnectTaskLocked() {
+        reconnecting = true
+        pendingRedial = false
+        let task = Task { [weak self] in
+            guard let self else { return }
+            await self.reconnectLoop()
+        }
+        reconnectTask = task
+    }
+
+    /// Re-dials on the SAME event-loop group with exponential backoff until it succeeds, the
+    /// transport is stopped, or the server host key is rejected (a hard MITM signal — never retried).
+    /// A successful re-dial re-arms the `closeFuture` watcher, so a subsequent drop restarts this loop.
+    private func reconnectLoop() async {
+        var backoff = Self.reconnectInitialBackoff
+        while true {
+            if Task.isCancelled || isStopping() { break }
+            do {
+                try await dial()
+                Self.log.notice("[APPSPLIT_SSH] reconnect success host=\(host)")
+                break
+            } catch let rejection as HostKeyValidator.HostKeyRejected {
+                // A changed/rejected host key is a hard failure; retrying can't help and would just
+                // re-log a critical every cycle. Stop reconnecting and leave the tunnel flow-dead.
+                Self.log.critical("[APPSPLIT_SSH] reconnect aborted (host key rejected) host=\(host): \(rejection)")
+                break
+            } catch {
+                if isStopping() { break }
+                Self.log.error("[APPSPLIT_SSH] reconnect attempt failed host=\(host): \(error); retry in \(Int(backoff))s")
+                try? await Task.sleep(nanoseconds: UInt64(backoff * 1_000_000_000))
+                backoff = min(backoff * 2, Self.reconnectMaxBackoff)
+            }
+        }
+        finishReconnect()
+    }
+
+    /// Synchronous helper so the reconnect state mutation stays off the `async` call stack (NSLock is
+    /// flagged as unavailable from asynchronous contexts). If a drop was queued while this loop ran
+    /// (I1), relaunch instead of clearing so an immediate post-auth drop still leaves a loop running.
+    private func finishReconnect() {
+        stateLock.lock()
+        if pendingRedial && !stopping {
+            Self.log.notice("[APPSPLIT_SSH] reconnect loop finished with a queued redial — relaunching host=\(host)")
+            startReconnectTaskLocked()   // resets pendingRedial, keeps reconnecting=true
+            stateLock.unlock()
+            return
+        }
+        reconnecting = false
+        pendingRedial = false
+        reconnectTask = nil
+        stateLock.unlock()
+    }
+
+    private func isStopping() -> Bool {
+        stateLock.lock(); defer { stateLock.unlock() }
+        return stopping
     }
 
     /// Shuts down the event-loop group at most once. Safe to call from both the `start()` failure

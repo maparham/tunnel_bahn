@@ -6,6 +6,8 @@ import os.log
 public final class PacketTunnelProvider: NEPacketTunnelProvider {
     private var adapter: BoringTunAdapter?
     private var relayServer: PacketTunnelRelayServer?
+    /// Live SSH egress transport (only when the active profile's transport is `.ssh`).
+    private var sshTransport: SSHFlowTransport?
     private let logger = AppLog(subsystem: "com.tunnelbahn.mac.networkextension", category: "PacketTunnelProvider")
     // Tagged with `resourceSampleQueueKey` so `sampleResources()` can detect when it is already
     // running on this queue and call the sampler directly instead of dispatching `sync` onto
@@ -26,6 +28,18 @@ public final class PacketTunnelProvider: NEPacketTunnelProvider {
         let loadedRuntime = try loadRuntimeStateWithSource()
         let runtime = loadedRuntime.state
         logger.log("runtime state source: \(loadedRuntime.source.rawValue)")
+        switch runtime.profile.transport {
+        case .wireguard:
+            try await startWireGuard(loadedRuntime)
+        case .ssh:
+            try await startSSH(loadedRuntime)
+        }
+    }
+
+    // MARK: - WireGuard transport (unchanged path)
+
+    private func startWireGuard(_ loadedRuntime: LoadedRuntimeState) async throws {
+        let runtime = loadedRuntime.state
         logRuntimeProfileSummary(runtime.profile, source: loadedRuntime.source.rawValue)
         if let routes = runtime.appTunnelIncludedRoutes, !routes.isEmpty {
             logger.notice("destination app-tunnel included routes count=\(routes.count)")
@@ -68,12 +82,121 @@ public final class PacketTunnelProvider: NEPacketTunnelProvider {
         startResourceSampler()
     }
 
+    // MARK: - SSH transport
+
+    private func startSSH(_ loadedRuntime: LoadedRuntimeState) async throws {
+        let runtime = loadedRuntime.state
+        guard let params = runtime.ssh else {
+            let err = NSError(
+                domain: "TunnelBahn.NetworkExtension",
+                code: 2,
+                userInfo: [NSLocalizedDescriptionKey: "SSH transport selected but runtime.ssh params are missing."]
+            )
+            logger.error("[APPSPLIT_SSH] startSSH abort: \(err.localizedDescription)")
+            throw err
+        }
+        logger.notice("[APPSPLIT_SSH] startSSH host=\(params.host) port=\(params.port) user=\(params.username)")
+
+        // macOS reuses the extension process across stop/start. Discard any transport / relay left
+        // over from a previous run so we never reuse a shut-down EventLoopGroup or a stale UDS
+        // listener — the singleton-lifecycle hazard noted in project memory. Fresh instances below.
+        teardownSSH()
+
+        // Fetch the private-key PEM from the shared Keychain access group. Absent key → clean throw.
+        let pem: String
+        do {
+            pem = try KeychainService.shared.read(account: params.privateKeyRef)
+        } catch {
+            logger.error("[APPSPLIT_SSH] private-key fetch failed ref=\(params.privateKeyRef): \(error.localizedDescription)")
+            throw error
+        }
+
+        // Self-loop guard (verify + assert): the SSH carrier's own outbound TCP originates from THIS
+        // packet-tunnel extension process, which is NOT one of the transparent proxy's matched apps,
+        // so the proxy never captures it and the SSH connection cannot recurse through its own tunnel.
+        // If a future change ever added the extension to the match list, this would deadlock — kept
+        // as an explicit invariant so it is not silently assumed.
+        let hostKeyStore = SSHHostKeyStore(backing: UserDefaultsHostKeyBacking())
+        let packetQueue = DispatchQueue(
+            label: "com.tunnelbahn.mac.networkextension.ssh.relay",
+            qos: .userInitiated
+        )
+
+        let transport: SSHFlowTransport
+        do {
+            transport = try SSHFlowTransport(
+                host: params.host,
+                port: params.port,
+                username: params.username,
+                privateKeyPEM: pem,
+                pinnedHostKeyFingerprint: params.hostKeyFingerprint,
+                hostKeyStore: hostKeyStore
+            )
+        } catch {
+            logger.error("[APPSPLIT_SSH] transport init failed: \(error.localizedDescription)")
+            throw error
+        }
+
+        do {
+            // Performs TCP connect + host-key TOFU verification + publickey auth. A HostKeyRejected
+            // throw (changed/mismatched host key) aborts startTunnel with a clear error.
+            try await transport.start()
+        } catch {
+            logger.error("[APPSPLIT_SSH] startTunnel aborted (connect/auth/host-key): \(error.localizedDescription)")
+            transport.stop()
+            throw error
+        }
+        sshTransport = transport
+
+        // Host-key persistence: on TOFU the fingerprint was pinned into the App Group UserDefaults
+        // (the shared backing), which is exactly what the extension re-validates against on reconnect.
+        // Surfacing the pin back into the app's profile store crosses the host/extension uid boundary
+        // (see project memory) and is Task 9 — logged here so it is not silently dropped.
+        if params.hostKeyFingerprint == nil, let pinned = hostKeyStore.fingerprint(forHost: params.host) {
+            logger.notice("[APPSPLIT_SSH] host-key pinned via TOFU host=\(params.host) fp=\(pinned) (app-UI surfacing deferred to Task 9)")
+        }
+
+        guard let server = PacketTunnelRelayServer(relayBridge: transport, packetQueue: packetQueue) else {
+            logger.error("[APPSPLIT_SSH] PacketTunnelRelayServer init failed (socket URL unavailable)")
+            transport.stop()
+            sshTransport = nil
+            throw NSError(
+                domain: "TunnelBahn.NetworkExtension",
+                code: 3,
+                userInfo: [NSLocalizedDescriptionKey: "SSH relay server init failed (relay socket URL unavailable)."]
+            )
+        }
+        relayServer = server
+        server.start()
+
+        // Minimal network settings: the SSH data path is the transparent proxy + UDS relay, NOT this
+        // utun. We only need enough to report the provider connected — no WG routes, no smoltcp, no
+        // utun packet loop.
+        let settings = NEPacketTunnelNetworkSettings(tunnelRemoteAddress: params.host)
+        try await setTunnelNetworkSettings(settings)
+
+        logger.notice("[APPSPLIT_EXT_SUMMARY] outcome=started transport=ssh host=\(params.host) port=\(params.port) user=\(params.username)")
+        startResourceSampler()
+    }
+
+    /// Tears down the SSH relay server then the SSH transport (order matters: stop feeding the
+    /// transport before it shuts its event-loop group). Idempotent; safe when no SSH is active.
+    private func teardownSSH() {
+        relayServer?.stop()
+        relayServer = nil
+        sshTransport?.stop()
+        sshTransport = nil
+    }
+
     override public func stopTunnel(with _: NEProviderStopReason) async {
         resourceSampleTimer?.cancel()
         resourceSampleTimer = nil
+        // Relay server is shared by both transports; stop it first, then whichever egress is active.
         relayServer?.stop()
         relayServer = nil
-        await adapter?.stop()
+        sshTransport?.stop()   // no-op for the WireGuard path (nil)
+        sshTransport = nil
+        await adapter?.stop()  // no-op for the SSH path (nil)
         adapter = nil
     }
 
