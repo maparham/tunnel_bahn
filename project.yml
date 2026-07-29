@@ -133,6 +133,7 @@ targets:
       - path: Shared/Constants.swift
       - path: Shared/SharedLogWriter.swift
       - path: Shared/WGTunnelJWT.swift
+      - path: Shared/WGTCPWrapperRelay.swift
     settings:
       base:
         INFOPLIST_FILE: Tests/Unit/Info.plist

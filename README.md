@@ -77,6 +77,44 @@ v1 limitations to be aware of:
 - **No internal / split-horizon name resolution** through the SSH host.
 - **No app-level SSH keepalive:** idle-drop detection relies on TCP keepalive only.
 
+## WireGuard-over-TCP (WebSocket/TLS wrapper)
+
+WireGuard is UDP-only, so networks that block UDP (captive portals, some censored ISPs)
+stop the handshake from ever landing. A WireGuard profile can optionally carry its traffic
+over a **TCP WebSocket/TLS wrapper** to a [`wstunnel`](https://github.com/erebe/wstunnel)
+v10 server, which unwraps it back to UDP and forwards it to a normal WireGuard listener.
+
+Enable it in the profile editor: **TCP Wrapper (WebSocket/TLS)** → set the server
+`host:port` (usually `:443`), TLS on, the secret path prefix, and the server-side forward
+target (usually `127.0.0.1:51840`). Or import a `.conf` with a `[TCPWrapper]` section:
+
+    [TCPWrapper]
+    Server = 3.139.146.5:443
+    TLS = true
+    VerifyCert = false
+    PathPrefix = tun74fd08a683078a3e0439
+    Forward = 127.0.0.1:51840
+
+The whole WireGuard data plane is unchanged — only the encapsulated UDP's carrier changes.
+The wrapper runs entirely in-process in the network extension.
+
+As-built behavior and limitations:
+
+- **Wire-compatible with `wstunnel` v10** (WebSocket transport). Deployed wstunnel servers
+  keep working; the upgrade path is `/<prefix>/events` and each UDP datagram is one
+  WebSocket binary frame.
+- **Certificate verification is off by default**, matching wstunnel. The reference server
+  presents a cert that will not validate against a bare IP; turning verification on
+  requires connecting by a hostname with a matching certificate.
+- **Single WebSocket connection** carries all of the profile's WG traffic — under heavy
+  load, WebSocket/TCP head-of-line blocking can add latency versus native UDP.
+- **No WebSocket auto-reconnect in this version.** If the WebSocket drops, reconnect the
+  tunnel. (BoringTun's keepalive/handshake retries drive traffic while the socket is up.)
+- **WebSocket transport only** — wstunnel's HTTP/2 transport is not implemented.
+- **Routing-loop safe by construction:** per-app routing never captures the extension's own
+  sockets, so the wrapper's TCP connection to the server does not recurse into the tunnel —
+  no manual route pin is needed (unlike the `wg-quick` reference setup).
+
 ## Important notes
 
 - Building requires full Xcode (not only Command Line Tools).

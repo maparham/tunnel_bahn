@@ -8,6 +8,8 @@ public final class PacketTunnelProvider: NEPacketTunnelProvider {
     private var relayServer: PacketTunnelRelayServer?
     /// Live SSH egress transport (only when the active profile's transport is `.ssh`).
     private var sshTransport: SSHFlowTransport?
+    /// Live WebSocket/TLS UDP relay (only when the active WG profile has `tcpWrapper` set).
+    private var wgTcpRelay: WGTCPWrapperRelay?
     private let logger = AppLog(subsystem: "com.tunnelbahn.mac.networkextension", category: "PacketTunnelProvider")
     // Tagged with `resourceSampleQueueKey` so `sampleResources()` can detect when it is already
     // running on this queue and call the sampler directly instead of dispatching `sync` onto
@@ -45,14 +47,39 @@ public final class PacketTunnelProvider: NEPacketTunnelProvider {
             logger.notice("destination app-tunnel included routes count=\(routes.count)")
         }
         adapter = BoringTunAdapter(provider: self)
+        var effectiveEndpointOverride: String? = nil
+        if let wrapper = runtime.profile.tcpWrapper {
+            // Routing-loop invariant (verify + assert): the relay's own outbound TCP to
+            // \(wrapper.serverHost) originates from THIS packet-tunnel extension process, which is
+            // NOT one of the per-app-routed matched apps (per-app routing uses `sourceApplication`,
+            // so the extension's own sockets are never captured). It therefore exits over the
+            // physical interface and cannot recurse into its own tunnel — this is the in-app
+            // equivalent of the reference .conf's `route add -host <server> <gw>` pin, which is only
+            // needed because wg-quick installs a system-wide default route. If the relay ever fails
+            // to connect under full-tunnel, this assumption is the first suspect.
+            logger.notice("[APPSPLIT_WGTCP] starting relay server=\(wrapper.serverHost):\(wrapper.serverPort) tls=\(wrapper.tls) verifyCert=\(wrapper.verifyCert) forward=\(wrapper.forwardHost):\(wrapper.forwardPort)")
+            let relay = WGTCPWrapperRelay(config: wrapper)
+            do {
+                try await relay.start()
+            } catch {
+                logger.error("[APPSPLIT_WGTCP] relay start failed: \(error.localizedDescription)")
+                throw error
+            }
+            wgTcpRelay = relay
+            effectiveEndpointOverride = "127.0.0.1:\(relay.localUDPPort)"
+            logger.notice("[APPSPLIT_WGTCP] relay up; WG effective endpoint = \(effectiveEndpointOverride!)")
+        }
         do {
             try await adapter?.start(
                 with: runtime.profile,
                 secrets: runtime.secrets,
-                appTunnelIncludedRoutes: runtime.appTunnelIncludedRoutes
+                appTunnelIncludedRoutes: runtime.appTunnelIncludedRoutes,
+                effectiveEndpointOverride: effectiveEndpointOverride
             )
         } catch {
             logger.error("startTunnel failed: \(error.localizedDescription)")
+            wgTcpRelay?.stop()
+            wgTcpRelay = nil
             throw error
         }
         if let runtimeConfiguration = await adapter?.runtimeConfiguration() {
@@ -201,6 +228,8 @@ public final class PacketTunnelProvider: NEPacketTunnelProvider {
         sshTransport = nil
         await adapter?.stop()  // no-op for the SSH path (nil)
         adapter = nil
+        wgTcpRelay?.stop()
+        wgTcpRelay = nil
     }
 
     private static func primaryIPv4Address(from profile: WireGuardProfile) -> String? {

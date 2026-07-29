@@ -27,6 +27,12 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     no internal/split-horizon name resolution, no app-level SSH keepalive
     (idle-drop detection is TCP-keepalive-only), and best-effort (non-authoritative)
     in-app host-key reset.
+- **WireGuard-over-TCP (WebSocket/TLS wrapper).** WireGuard profiles can now carry traffic
+  over a `wstunnel` v10-compatible TLS WebSocket for networks that block UDP. Configured in
+  the profile editor or via a `[TCPWrapper]` section in imported `.conf` files. The wrapper
+  runs in-process in the network extension; the WireGuard data plane is unchanged. Cert
+  verification defaults off (matching wstunnel); single-connection, WebSocket-transport
+  only, no auto-reconnect in this release.
 
 ### Fixed
 - SSH private-key material is no longer orphaned in the Keychain when a profile's

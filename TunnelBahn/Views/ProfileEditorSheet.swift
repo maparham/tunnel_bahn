@@ -23,6 +23,16 @@ struct ProfileEditorSheet: View {
     /// New private-key text entered this session. Empty means "keep the existing stored key".
     @State private var sshPastedKey: String = ""
 
+    // TCP wrapper (WebSocket/TLS) editor state.
+    @State private var wrapEnabled: Bool
+    @State private var wrapServerHost: String
+    @State private var wrapServerPort: String
+    @State private var wrapTLS: Bool
+    @State private var wrapVerifyCert: Bool
+    @State private var wrapPathPrefix: String
+    @State private var wrapForwardHost: String
+    @State private var wrapForwardPort: String
+
     init(original: WireGuardProfile, onSave: @escaping (WireGuardProfile) -> Void, onCancel: @escaping () -> Void) {
         self.original = original
         self.onSave = onSave
@@ -35,6 +45,15 @@ struct ProfileEditorSheet: View {
         _sshHost = State(initialValue: original.ssh?.host ?? "")
         _sshPort = State(initialValue: original.ssh.map { String($0.port) } ?? "22")
         _sshUsername = State(initialValue: original.ssh?.username ?? "")
+        let w = original.tcpWrapper
+        _wrapEnabled = State(initialValue: w != nil)
+        _wrapServerHost = State(initialValue: w?.serverHost ?? "")
+        _wrapServerPort = State(initialValue: w.map { String($0.serverPort) } ?? "443")
+        _wrapTLS = State(initialValue: w?.tls ?? true)
+        _wrapVerifyCert = State(initialValue: w?.verifyCert ?? false)
+        _wrapPathPrefix = State(initialValue: w?.pathPrefix ?? "")
+        _wrapForwardHost = State(initialValue: w?.forwardHost ?? "127.0.0.1")
+        _wrapForwardPort = State(initialValue: w.map { String($0.forwardPort) } ?? "51840")
         _peerRows = State(
             initialValue: original.peers.map { peer in
                 PeerEditRow(
@@ -143,6 +162,14 @@ struct ProfileEditorSheet: View {
                             .padding(.top, 4)
                         }
                     }
+
+                    WireGuardTCPWrapperEditorFields(
+                        enabled: $wrapEnabled,
+                        serverHost: $wrapServerHost, serverPort: $wrapServerPort,
+                        tls: $wrapTLS, verifyCert: $wrapVerifyCert,
+                        pathPrefix: $wrapPathPrefix,
+                        forwardHost: $wrapForwardHost, forwardPort: $wrapForwardPort
+                    )
                     }
                 }
                 .padding(.vertical, 4)
@@ -262,6 +289,23 @@ struct ProfileEditorSheet: View {
             return nil
         }
 
+        var builtWrapper: WireGuardTCPWrapper? = nil
+        if wrapEnabled {
+            let host = wrapServerHost.trimmingCharacters(in: .whitespaces)
+            let prefix = wrapPathPrefix.trimmingCharacters(in: .whitespaces)
+            let fwdHost = wrapForwardHost.trimmingCharacters(in: .whitespaces)
+            guard !host.isEmpty, let sPort = UInt16(wrapServerPort.trimmingCharacters(in: .whitespaces)),
+                  !prefix.isEmpty, !fwdHost.isEmpty, let fPort = UInt16(wrapForwardPort.trimmingCharacters(in: .whitespaces))
+            else {
+                validationMessage = "TCP wrapper needs a server host:port, a path prefix, and a forward host:port."
+                return nil
+            }
+            builtWrapper = WireGuardTCPWrapper(
+                serverHost: host, serverPort: sPort, tls: wrapTLS, verifyCert: wrapVerifyCert,
+                pathPrefix: prefix, forwardHost: fwdHost, forwardPort: fPort
+            )
+        }
+
         let iface = WireGuardInterface(
             privateKeyRef: original.interface.privateKeyRef,
             addresses: addresses,
@@ -287,7 +331,8 @@ struct ProfileEditorSheet: View {
             interface: iface,
             peers: builtPeers,
             createdAt: original.createdAt,
-            updatedAt: .now
+            updatedAt: .now,
+            tcpWrapper: builtWrapper
         )
     }
 

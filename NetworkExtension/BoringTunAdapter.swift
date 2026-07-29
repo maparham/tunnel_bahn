@@ -174,7 +174,8 @@ final class BoringTunAdapter: @unchecked Sendable {
     func start(
         with profile: WireGuardProfile,
         secrets: TunnelSecrets? = nil,
-        appTunnelIncludedRoutes: [String]? = nil
+        appTunnelIncludedRoutes: [String]? = nil,
+        effectiveEndpointOverride: String? = nil
     ) async throws {
         guard let provider else { throw BoringTunAdapterError.missingProvider }
         guard let peer = profile.peers.first else { throw BoringTunAdapterError.noPeer }
@@ -224,7 +225,10 @@ final class BoringTunAdapter: @unchecked Sendable {
         self.tunnel = tunnelPtr
         self.tunnelFactory = makeTunnel
 
-        let endpointString = Self.endpointToken(from: peer.endpoint)
+        if let effectiveEndpointOverride {
+            Self.log.notice("[APPSPLIT_WGTCP] endpoint override active local-relay=\(effectiveEndpointOverride) (peer.endpoint=\(peer.endpoint) is carried by the wrapper)")
+        }
+        let endpointString = Self.endpointToken(from: effectiveEndpointOverride ?? peer.endpoint)
         let (wgHost, wgPort) = try Self.splitWireGuardHostPort(endpointString)
         let remoteEndpoint = NWHostEndpoint(hostname: wgHost, port: String(wgPort))
 
