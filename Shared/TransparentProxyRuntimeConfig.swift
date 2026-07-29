@@ -2,6 +2,18 @@ import Foundation
 
 // DestinationRoutingFilePayload is defined in DestinationRouting.swift (same Shared module)
 
+/// Server-side-DNS target selection (pure). Lives in a dual-target Shared file so both
+/// the extension (TCPFlowRelay) and the app's DebugSelfChecks can reference it. In SSH
+/// remote-DNS mode we prefer the SNI hostname (resolved on the SSH server) over the
+/// app-resolved IP, which a hijacking local resolver may have sinkholed. Falls back to
+/// the IP when there is no usable SNI (non-TLS, ECH, truncated ClientHello).
+enum RemoteDNSTargetSelector {
+    static func target(sni: String?, endpointHostname: String) -> String {
+        if let sni, !sni.isEmpty { return sni }
+        return endpointHostname
+    }
+}
+
 /// Routing snapshot passed from the host app when starting the transparent proxy.
 /// System extensions run as root and often cannot read files the host wrote in the user's
 /// app-group container, so this travels in `NETunnelProviderProtocol.providerConfiguration`.
@@ -19,6 +31,12 @@ struct TransparentProxyRuntimeConfig: Codable, Equatable {
     /// (pre-SSH-transport) encoded configs, which have no such key, decode to the existing WG
     /// behavior unchanged.
     var dropTunneledUDP: Bool
+    /// True when the active profile's transport is SSH (as opposed to WireGuard). SSH mode
+    /// resolves DNS on the far end (like `ssh -D` remote DNS) to defeat local DNS hijacking;
+    /// nothing consumes this yet (wired up in a later task). Defaults to `false` so legacy
+    /// (pre-remote-DNS) encoded configs, which have no such key, decode to the existing
+    /// local-resolution behavior unchanged, and WireGuard connects always carry `false`.
+    var remoteDNSResolution: Bool
 
     static let providerConfigurationKey = "proxyConfigB64"
 
@@ -27,13 +45,15 @@ struct TransparentProxyRuntimeConfig: Codable, Equatable {
         routeAllIdentifiedFlows: Bool,
         destinationRouting: DestinationRoutingFilePayload,
         packetTunnelInterfaceName: String? = nil,
-        dropTunneledUDP: Bool
+        dropTunneledUDP: Bool,
+        remoteDNSResolution: Bool
     ) {
         self.signingIdentifiers = signingIdentifiers
         self.routeAllIdentifiedFlows = routeAllIdentifiedFlows
         self.destinationRouting = destinationRouting
         self.packetTunnelInterfaceName = packetTunnelInterfaceName
         self.dropTunneledUDP = dropTunneledUDP
+        self.remoteDNSResolution = remoteDNSResolution
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -42,6 +62,7 @@ struct TransparentProxyRuntimeConfig: Codable, Equatable {
         case destinationRouting
         case packetTunnelInterfaceName
         case dropTunneledUDP
+        case remoteDNSResolution
     }
 
     init(from decoder: Decoder) throws {
@@ -53,6 +74,9 @@ struct TransparentProxyRuntimeConfig: Codable, Equatable {
         // Legacy configs (encoded before Task 7) have no `dropTunneledUDP` key — default false
         // preserves today's WG behavior (tunnel path never drops UDP) for any config in flight.
         dropTunneledUDP = try container.decodeIfPresent(Bool.self, forKey: .dropTunneledUDP) ?? false
+        // Legacy configs (encoded before this task) have no `remoteDNSResolution` key — default
+        // false preserves today's local-resolution behavior for any config in flight.
+        remoteDNSResolution = try container.decodeIfPresent(Bool.self, forKey: .remoteDNSResolution) ?? false
     }
 
     static func encodeBase64(_ config: TransparentProxyRuntimeConfig) throws -> String {

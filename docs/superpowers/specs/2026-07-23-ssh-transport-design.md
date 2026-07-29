@@ -165,3 +165,50 @@ de-risking first step of implementation, not a design unknown.
 - UDP forwarding of any kind.
 - Multi-connection pooling / HOL-blocking mitigation.
 - SSH-as-per-app-override (global transport is per active profile).
+
+## As-built: SSH server-side DNS (SNI-based)
+
+SSH mode resolves destination hostnames on the SSH server by using the TLS SNI
+recovered from each routed-app flow's ClientHello as the `direct-tcpip` target,
+instead of the app's locally-resolved IP. This defeats local DNS hijacking/
+sinkholing for TLS traffic and matches `ssh -D` SOCKS remote-DNS behavior.
+
+Limitations (future work — DNS-over-SSH task):
+- Non-TLS (plain HTTP), non-SNI TLS, and ECH have no recoverable name → they
+  fall back to the app-resolved IP and therefore remain subject to local DNS.
+  They fail closed (no real-interface leak); they do not bypass the tunnel.
+- Genuine RFC1918 LAN access from a routed app is not distinguished from a
+  private-range sinkhole while remote-DNS is active; such flows are peeked
+  and, absent SNI, fail closed rather than reaching the LAN.
+- Full parity (covering non-TLS + making local `getaddrinfo` return real
+  answers) requires an in-extension DNS resolver forwarding queries over the
+  SSH connection. Tracked as the DNS-over-SSH follow-on.
+- **SSH + domain-rules combination**: when a profile is both SSH (remote-DNS
+  active) *and* has domain/SNI split rules configured, a routed app's flow to
+  a **non-matching** domain still routes direct on the real interface (en0)
+  using the app's locally-resolved IP — this is the inherited WireGuard
+  SNI-split behavior, applied unchanged. It is not a leak of *tunneled*
+  traffic (the user configured that domain to split), but it does mean the
+  anti-hijack protection does **not** apply to non-matching domains in that
+  combined configuration. Recommendation: for full anti-hijack coverage, use
+  SSH App-Tunnel mode **without** domain rules, so every routed-app flow
+  tunnels and is resolved server-side.
+- The peek-forcing predicate is scoped to overridable-private (routable-private:
+  RFC1918/CGNAT/ULA) destinations only, since a DNS-hijack sinkhole always
+  rewrites a public hostname to one of those ranges. Two consequences:
+  - A server-speaks-first protocol (SMTP/IMAP/POP3/FTP/MySQL, etc.) whose
+    destination is a private-range sinkhole still hangs: the peek waits for a
+    first byte the client won't send until it sees the server's banner. This
+    is rare and fails closed (no leak); it is the same class as the RFC1918-LAN
+    limitation above. Server-first protocols to correctly-resolved PUBLIC hosts
+    are unaffected in App-Tunnel mode (no domain rules) — they skip the peek
+    entirely and use the pre-plan no-peek path. Note: if the profile ALSO has
+    domain/SNI split rules configured (`sniMode`), the SNI decider is active for
+    every routed TCP flow including public hosts, so those server-first flows are
+    peeked too (pre-existing SNI-split behavior, unchanged by this feature) — for
+    full server-first compatibility, use SSH App-Tunnel mode without domain rules.
+  - A sinkhole that redirects to loopback/`0.0.0.0`/link-local (e.g. a
+    Pi-hole-style `0.0.0.0` block) is NOT caught by SSH remote-DNS — those
+    ranges stay unconditionally bypassed by design (they can never be a real
+    tunnelable destination), so such a blocked host remains blocked. Only
+    routable-private sinkholes (RFC1918/CGNAT/ULA) are re-routed by SNI.

@@ -97,6 +97,13 @@ public final class TransparentProxyProvider: NETransparentProxyProvider {
     /// and read alongside the other `destinationLock`-guarded fields in `handleNewFlow`. Defaults
     /// false (WG behavior unchanged).
     private var dropTunneledUDP = false
+    /// True when the active profile's transport is SSH. Nothing consumes this yet — a later
+    /// task uses it to prefer server-side DNS resolution (via `direct-tcpip`) over the locally
+    /// resolved IP, defeating local DNS hijacking. Populated from
+    /// `TransparentProxyRuntimeConfig.remoteDNSResolution` in `refreshDestinationConfig`
+    /// alongside `dropTunneledUDP` (same session-static, `destinationLock`-guarded field).
+    /// Defaults false (WireGuard and legacy configs unaffected).
+    private var remoteDNSResolution = false
 
     /// Suffix match: `api.x.com` matches rule `x.com`; `notx.com` does not. `names` are lowercased.
     private static func sniMatches(_ host: String, names: [String]) -> Bool {
@@ -171,8 +178,11 @@ public final class TransparentProxyProvider: NETransparentProxyProvider {
         startProxyActivationCount += 1
         let (diagCidrs, diagEnforce, _) = currentDestinationState()
         let sniMode = diagEnforce && !destinationDomainNames.isEmpty
+        destinationLock.lock()
+        let diagRemoteDNS = remoteDNSResolution
+        destinationLock.unlock()
         Self.log.notice(
-            "[FIRSTRUN-DIAG] activation #\(self.startProxyActivationCount) enforce=\(diagEnforce) sniMode=\(sniMode) includeRuleCount=\(includeRules.count) destCidrCount=\(diagCidrs.count) cidrs=[\(diagCidrs.prefix(24).joined(separator: ","))]"
+            "[FIRSTRUN-DIAG] activation #\(self.startProxyActivationCount) enforce=\(diagEnforce) sniMode=\(sniMode) includeRuleCount=\(includeRules.count) destCidrCount=\(diagCidrs.count) remoteDNS=\(diagRemoteDNS) cidrs=[\(diagCidrs.prefix(24).joined(separator: ","))]"
         )
 
         setTunnelNetworkSettings(settings) { [weak self] error in
@@ -214,6 +224,7 @@ public final class TransparentProxyProvider: NETransparentProxyProvider {
         destinationDomainNames = []
         cachedPreparedRanges = []
         dropTunneledUDP = false
+        remoteDNSResolution = false
         destinationLock.unlock()
         completionHandler()
     }
@@ -332,6 +343,7 @@ public final class TransparentProxyProvider: NETransparentProxyProvider {
         let domainNames = destinationDomainNames
         let preparedRanges = cachedPreparedRanges
         let dropUDP = dropTunneledUDP
+        let remoteDNS = remoteDNSResolution
         destinationLock.unlock()
         // SNI mode: filtering on AND domain rules present. `includedNetworkRules` is catch-all for
         // TCP in this mode, so we peek each routed TCP flow's TLS SNI and route by name; UDP stays
@@ -369,7 +381,22 @@ public final class TransparentProxyProvider: NETransparentProxyProvider {
         // explicitly configured to tunnel is NOT bypassed — with WireGuard-to-a-remote-LAN the peer
         // *is* the gateway to those ranges (e.g. tunnel 192.168.88.0/24 to reach a router behind
         // the WG server). Loopback/link-local/multicast can never be overridden.
+        //
+        // SSH remote-DNS EXCEPTION: in SSH mode a routed app's TCP flow to an overridable-private
+        // (routable-private: RFC1918/CGNAT/ULA) IP is almost always a local-DNS-hijack sinkhole, not
+        // real LAN — the app resolved a public hostname to a bogus private address and we want to
+        // peek its TLS SNI and route by hostname instead of handing it to the OS as "local". The
+        // predicate is deliberately narrower than "any private literal": loopback/link-local/
+        // multicast/broadcast/0-8 are NEVER a real sinkhole target (a DNS hijack always rewrites to
+        // a routable-private address) and must keep their unconditional bypass above — see
+        // `IPCIDRMatcher.overridablePrivateRanges`. `isTCPFlow` keeps this scoped to TCP only: UDP
+        // flow handling (this same check, shared above the TCP/UDP split) and the direct-flow path
+        // are untouched. If no SNI ever surfaces on such a flow, TCPFlowRelay's `remoteDNSTarget`
+        // falls back to the (private) IP and the tunnel connect to it fails closed — no real-interface
+        // leak.
+        let isTCPFlow = flow is NEAppProxyTCPFlow
         if let literal = literalRemoteHostname(from: flow),
+           !(remoteDNS && isTCPFlow && IPCIDRMatcher.literalMatches(literal, ranges: IPCIDRMatcher.overridablePrivateRanges)),
            IPCIDRMatcher.shouldBypassLocal(literal, tunnelRanges: preparedRanges) {
             Self.log.notice("[APPSPLIT_FLOW] decision=bypass-local signingID=\(signingID) remote=\(literal)")
             return false
@@ -386,7 +413,7 @@ public final class TransparentProxyProvider: NETransparentProxyProvider {
             // hostname: tunnel if the SNI matches a domain rule (suffix) OR the remote IP is in a
             // fixed-IP/resolved CIDR; otherwise direct/en0. Captures only value snapshots + statics,
             // so it's free of `self` and safe to run on the relay's queue.
-            let routeDecider: ((Data) -> Bool)? = sniMode ? { firstChunk in
+            let sniDecider: ((Data) -> Bool)? = sniMode ? { firstChunk in
                 let sni = TLSClientHelloSNI.serverName(from: firstChunk)
                 let ipMatch = remoteLiteral.map { IPCIDRMatcher.literalMatches($0, ranges: preparedRanges) } ?? false
                 let tunnel: Bool
@@ -413,6 +440,20 @@ public final class TransparentProxyProvider: NETransparentProxyProvider {
                 return tunnel
             } : nil
 
+            // SSH remote-DNS mode: force the peek path ONLY for sinkhole-candidate destinations —
+            // literals in the overridable-private (routable-private: RFC1918/CGNAT/ULA) ranges. A
+            // DNS-hijack sinkhole always rewrites a public hostname to a routable-private address, so
+            // that's the only case peeking can help. A routed app hitting a correctly-resolved PUBLIC
+            // IP is never a sinkhole, and forcing a peek there would deadlock server-speaks-first
+            // protocols (SMTP/IMAP/POP3/FTP/MySQL, …) that wait for the server's banner before
+            // sending anything — `peekFirstChunk` blocks on `flow.readData` with no timeout. Those
+            // keep the pre-plan no-peek path (routeDecider stays nil unless domain rules apply).
+            // Reuses the SNI/domain decider when SNI mode is also active. WG (remoteDNS == false)
+            // keeps `sniDecider` exactly as before: nil unless sniMode, unaffected by this branch.
+            let forceRemoteDNSPeek = remoteDNS
+                && (remoteLiteral.map { IPCIDRMatcher.literalMatches($0, ranges: IPCIDRMatcher.overridablePrivateRanges) } ?? false)
+            let routeDecider: ((Data) -> Bool)? = forceRemoteDNSPeek ? (sniDecider ?? { _ in true }) : sniDecider
+
             let relay = TCPFlowRelay(
                 flow: tcp,
                 signingID: signingID,
@@ -420,6 +461,7 @@ public final class TransparentProxyProvider: NETransparentProxyProvider {
                 tunnelInterfaceName: ifaceName,
                 queue: flowQueue,
                 routeDecider: routeDecider,
+                remoteDNS: remoteDNS,
                 onTx: { [weak self] bytes in
                     self?.aggregator.addTx(bytes, signingID: signingID)
                     if let remoteLiteral {
@@ -772,6 +814,7 @@ public final class TransparentProxyProvider: NETransparentProxyProvider {
             destinationLock.lock()
             if generation == currentSessionGeneration() {
                 dropTunneledUDP = config.dropTunneledUDP
+                remoteDNSResolution = config.remoteDNSResolution
             }
             destinationLock.unlock()
             applyDestinationPayload(

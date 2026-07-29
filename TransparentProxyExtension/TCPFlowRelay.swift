@@ -54,6 +54,11 @@ final class TCPFlowRelay {
     /// and calls this to decide tunnel (`true`) vs direct/en0 (`false`) BEFORE connecting outbound.
     /// nil = legacy behavior: route per the `routeThroughTunnel` passed at init, no peek.
     private let routeDecider: ((Data) -> Bool)?
+    /// When true (SSH mode), a recovered SNI name is used as the outbound target so the SSH
+    /// server resolves it. WG mode leaves this false and always targets the numeric IP.
+    private let remoteDNS: Bool
+    /// SNI recovered during the peek (lowercased) or nil. Set once in `peekFirstChunk`.
+    private var sniName: String?
 
     private var directRelay: RelayOutboundConnection?
     private var xpcFlowID: UInt64?
@@ -75,6 +80,7 @@ final class TCPFlowRelay {
         tunnelInterfaceName: String?,
         queue: DispatchQueue,
         routeDecider: ((Data) -> Bool)? = nil,
+        remoteDNS: Bool = false,
         onTx: @escaping (UInt64) -> Void,
         onRx: @escaping (UInt64) -> Void,
         onClose: @escaping () -> Void
@@ -85,6 +91,7 @@ final class TCPFlowRelay {
         self.tunnelInterfaceName = tunnelInterfaceName
         self.queue = queue
         self.routeDecider = routeDecider
+        self.remoteDNS = remoteDNS
         self.onTx = onTx
         self.onRx = onRx
         self.onClose = onClose
@@ -155,6 +162,10 @@ final class TCPFlowRelay {
                 return
             }
             self.pendingFirstChunk = data
+            if self.remoteDNS {
+                self.sniName = TLSClientHelloSNI.serverName(from: data)
+                Self.log.debug("SSH remote-DNS peek sni=\(self.sniName ?? "nil") destIP=\(endpoint.hostname) signingID=\(self.signingID)")
+            }
             let tunnel = self.routeDecider?(data) ?? true
             self.routeThroughTunnel = tunnel
             self.countTx(UInt64(data.count))
@@ -177,9 +188,13 @@ final class TCPFlowRelay {
             finishDueToFailure()
             return
         }
+        let targetHost = remoteDNS
+            ? Self.remoteDNSTarget(sni: sniName, endpointHostname: endpoint.hostname)
+            : endpoint.hostname
+        Self.log.debug("SSH tunnel target signingID=\(self.signingID) host=\(targetHost) port=\(endpoint.port) sni=\(self.sniName ?? "nil") destIP=\(endpoint.hostname)")
         TransparentProxyRelayClient.shared.openFlow(
             flowID: flowID,
-            remoteHost: endpoint.hostname,
+            remoteHost: targetHost,
             remotePort: port,
             isTCP: true,
             onReceive: { [weak self] data in self?.handleXPCPayload(data) },
@@ -521,6 +536,16 @@ final class TCPFlowRelay {
 
     private func signalRemoteEOF() {
         directRelay?.signalEOF()
+    }
+
+    // MARK: - SSH remote-DNS target selection
+
+    /// Forwards to the canonical `RemoteDNSTargetSelector` (Shared/TransparentProxyRuntimeConfig.swift),
+    /// which is compiled into both this extension target and the TunnelBahn app target so the app's
+    /// DEBUG self-checks can exercise the same logic. Kept as a static func here (not just inlined at
+    /// call sites) so Task 3's `Self.remoteDNSTarget(...)` call site is unaffected.
+    static func remoteDNSTarget(sni: String?, endpointHostname: String) -> String {
+        RemoteDNSTargetSelector.target(sni: sni, endpointHostname: endpointHostname)
     }
 
     // MARK: - Lifecycle

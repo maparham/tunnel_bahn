@@ -13,6 +13,7 @@ enum DebugSelfChecks {
         checkSSHProfileRoundTrips()
         checkLegacyProfileDefaultsToWireGuard()
         checkHostKeyTOFU()
+        checkRemoteDNSTargetSelection()
         log.notice("[DEBUG_SELF_CHECKS] all checks passed")
     }
 
@@ -25,6 +26,13 @@ enum DebugSelfChecks {
         assert(s1.verifyOrPin(fingerprint: "AAAA", forHost: "h"))
         // changed key is rejected
         assert(!s1.verifyOrPin(fingerprint: "BBBB", forHost: "h"))
+    }
+
+    private static func checkRemoteDNSTargetSelection() {
+        // SSH remote-DNS target selection.
+        assert(RemoteDNSTargetSelector.target(sni: "www.youtube.com", endpointHostname: "10.10.34.36") == "www.youtube.com")
+        assert(RemoteDNSTargetSelector.target(sni: nil, endpointHostname: "1.2.3.4") == "1.2.3.4")
+        assert(RemoteDNSTargetSelector.target(sni: "", endpointHostname: "1.2.3.4") == "1.2.3.4")
     }
 
     private static func checkSSHProfileRoundTrips() {

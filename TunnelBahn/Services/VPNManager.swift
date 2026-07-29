@@ -392,7 +392,10 @@ final class VPNManager: ObservableObject {
                     enforceDestinationFiltering: destinationEnforce,
                     destinationRanges: destinationRanges,
                     destinationDomainNames: destinationDomainNames,
-                    dropTunneledUDP: profile.transport == .ssh
+                    dropTunneledUDP: profile.transport == .ssh,
+                    // Server-side DNS: only SSH mode can resolve names on the far end (via direct-tcpip).
+                    // WireGuard mode must keep local resolution + numeric-IP relay, so gate strictly on transport.
+                    remoteDNSResolution: profile.transport == .ssh
                 )
                 traceLog(
                     "transparent proxy runtime config: signingIDs=\(pendingTransparentProxyConfig?.signingIdentifiers.count ?? 0) routeAll=\(!hasAppTunnelSelection) destRanges=\(destinationRanges.count) destDomains=\(destinationDomainNames.count) names=[\(destinationDomainNames.prefix(12).joined(separator: ","))]"
@@ -1371,7 +1374,8 @@ final class VPNManager: ObservableObject {
         enforceDestinationFiltering: Bool,
         destinationRanges: [String],
         destinationDomainNames: [String],
-        dropTunneledUDP: Bool
+        dropTunneledUDP: Bool,
+        remoteDNSResolution: Bool
     ) -> TransparentProxyRuntimeConfig {
         TransparentProxyRuntimeConfig(
             signingIdentifiers: routeAllIdentifiedFlows ? [] : signingIdentifiers(from: appRules),
@@ -1381,7 +1385,8 @@ final class VPNManager: ObservableObject {
                 ranges: destinationRanges,
                 domainNames: destinationDomainNames
             ),
-            dropTunneledUDP: dropTunneledUDP
+            dropTunneledUDP: dropTunneledUDP,
+            remoteDNSResolution: remoteDNSResolution
         )
     }
 
