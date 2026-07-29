@@ -128,7 +128,9 @@ final class WireGuardConfigParser {
             mtu: mtu
         )
 
-        return WireGuardProfile(name: profileName, interface: interface, peers: peers)
+        let tcpWrapper = try TCPWrapperConfigCodec.decode(sections["tcpwrapper"]?.first ?? [:])
+
+        return WireGuardProfile(name: profileName, interface: interface, peers: peers, tcpWrapper: tcpWrapper)
     }
 
     private func parseSections(_ raw: String) -> [String: [[String: String]]] {

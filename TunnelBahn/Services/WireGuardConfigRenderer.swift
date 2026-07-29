@@ -88,6 +88,11 @@ final class WireGuardConfigRenderer {
             }
         }
 
+        if let wrapper = profile.tcpWrapper {
+            lines.append("")
+            lines.append(contentsOf: TCPWrapperConfigCodec.encodeLines(wrapper))
+        }
+
         return lines.joined(separator: "\n") + "\n"
     }
 

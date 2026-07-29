@@ -117,6 +117,27 @@ targets:
       - name: Auto-bump build number (force sysext redeploy)
         script: bash "${SRCROOT}/tools/autobump-build-number.sh"
         basedOnDependencyAnalysis: false
+  TunnelBahnUnitTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - path: Tests/Unit
+      - path: TunnelBahn/Models/WireGuardProfile.swift
+      - path: TunnelBahn/Models/SSHProfile.swift
+      - path: TunnelBahn/Models/WireGuardTCPWrapper.swift
+      - path: Shared/TCPWrapperConfigCodec.swift
+      - path: TunnelBahn/Services/WireGuardConfigParser.swift
+      - path: TunnelBahn/Services/WireGuardConfigRenderer.swift
+      - path: Shared/KeychainService.swift
+      - path: Shared/AppLog.swift
+      - path: Shared/Constants.swift
+      - path: Shared/SharedLogWriter.swift
+      - path: Shared/WGTunnelJWT.swift
+    settings:
+      base:
+        INFOPLIST_FILE: Tests/Unit/Info.plist
+    dependencies:
+      - target: TunnelBahn
 schemes:
   TunnelBahn:
     build:
@@ -132,3 +153,6 @@ schemes:
       config: Release
       executable: TunnelBahn
       macroExpansion: PacketTunnelExtension
+    test:
+      targets:
+        - TunnelBahnUnitTests

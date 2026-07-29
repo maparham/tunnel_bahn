@@ -48,6 +48,8 @@ struct WireGuardProfile: Codable, Identifiable, Hashable {
     var transport: TransportKind
     /// Present only when `transport == .ssh`.
     var ssh: SSHProfile?
+    /// Present only when this WG profile uses the TCP (WebSocket/TLS) wrapper sub-mode.
+    var tcpWrapper: WireGuardTCPWrapper?
 
     init(
         id: UUID = UUID(),
@@ -57,7 +59,8 @@ struct WireGuardProfile: Codable, Identifiable, Hashable {
         createdAt: Date = .now,
         updatedAt: Date = .now,
         transport: TransportKind = .wireguard,
-        ssh: SSHProfile? = nil
+        ssh: SSHProfile? = nil,
+        tcpWrapper: WireGuardTCPWrapper? = nil
     ) {
         self.id = id
         self.name = name
@@ -67,6 +70,7 @@ struct WireGuardProfile: Codable, Identifiable, Hashable {
         self.updatedAt = updatedAt
         self.transport = transport
         self.ssh = ssh
+        self.tcpWrapper = tcpWrapper
     }
 
     // NOTE: `encode(to:)` below is the COMPILER-SYNTHESIZED implementation (this type only defines
@@ -75,7 +79,7 @@ struct WireGuardProfile: Codable, Identifiable, Hashable {
     // added to this struct MUST also be added to `CodingKeys` or it will be silently dropped from
     // persistence (no compile error, no runtime error — the field just never round-trips).
     private enum CodingKeys: String, CodingKey {
-        case id, name, interface, peers, createdAt, updatedAt, transport, ssh
+        case id, name, interface, peers, createdAt, updatedAt, transport, ssh, tcpWrapper
     }
 
     init(from decoder: Decoder) throws {
@@ -89,6 +93,7 @@ struct WireGuardProfile: Codable, Identifiable, Hashable {
         // Profiles saved before SSH transport support have no `transport` key on disk.
         transport = try container.decodeIfPresent(TransportKind.self, forKey: .transport) ?? .wireguard
         ssh = try container.decodeIfPresent(SSHProfile.self, forKey: .ssh)
+        tcpWrapper = try container.decodeIfPresent(WireGuardTCPWrapper.self, forKey: .tcpWrapper)
     }
 
     /// First IPv4 interface address without CIDR prefix (for PF `route-to` on macOS).
