@@ -35,6 +35,10 @@ final class VPNManager: ObservableObject {
     private var publicIPRefreshTask: Task<Void, Never>?
     private var lastTransferSnapshot: TransferSnapshot?
     private var lastPerAppAggregateSnapshot: TransferSnapshot?
+    /// True while the active connection egresses over SSH (no BoringTun adapter). Gates the stats
+    /// refresh so the WireGuard-only aggregate section is skipped without suppressing the
+    /// transport-agnostic per-app fetch. Set at connect / status-reconstruction, cleared on stop.
+    private var connectedTransportIsSSH = false
     private let perAppStatsProxy = PerAppStatsProxyManager()
     /// Built during connect and consumed when enabling the transparent proxy after the tunnel is up.
     private var pendingTransparentProxyConfig: TransparentProxyRuntimeConfig?
@@ -824,6 +828,7 @@ final class VPNManager: ObservableObject {
             : extensionProfile.peers.first?.endpoint
         stats.perAppSplitTunnelActive = hasAppTunnelSelection && useAppTunnelNEStack
         stats.perAppStatsCollectionActive = useTransparentProxy
+        connectedTransportIsSSH = profile.transport == .ssh
         stats.tunnelHasDefaultRoute = profileOkForAccounting && !destinationSplitActive
 
         if useTransparentProxy {
@@ -1617,6 +1622,7 @@ final class VPNManager: ObservableObject {
                 stats.endpoint = runtimeProfile.transport == .ssh
                     ? runtimeProfile.ssh.map { "\($0.host):\($0.port)" }
                     : runtimeProfile.peers.first?.endpoint
+                connectedTransportIsSSH = runtimeProfile.transport == .ssh
             }
         }
         if stats.state == .connected, stats.tunnelHasDefaultRoute, stats.publicIP == nil,
@@ -1727,6 +1733,7 @@ final class VPNManager: ObservableObject {
         statsRefreshTask = nil
         lastTransferSnapshot = nil
         lastPerAppAggregateSnapshot = nil
+        connectedTransportIsSSH = false
     }
 
     private func startPeriodicProbeIfNeeded(phase: TunnelProbePhase, profileID: UUID) {
@@ -1768,20 +1775,30 @@ final class VPNManager: ObservableObject {
         // is independent of the WireGuard IPC channel below. An IPC timeout must not leave the
         // warning stale.
         refreshCompetingProxyWarningFromExtensionFile()
-        guard let runtimeConfiguration = await loadRuntimeConfiguration() else { return }
-        let totals = Self.parseTransferTotals(from: runtimeConfiguration)
+
+        // Shared timestamp for the WG-aggregate and per-app rate calculations below.
         let now = Date()
 
-        if let lastTransferSnapshot {
-            let elapsed = max(now.timeIntervalSince(lastTransferSnapshot.date), 0.001)
-            stats.rxBytesPerSecond = Double(totals.rxBytes.saturatingSubtract(lastTransferSnapshot.rxBytes)) / elapsed
-            stats.txBytesPerSecond = Double(totals.txBytes.saturatingSubtract(lastTransferSnapshot.txBytes)) / elapsed
-        }
+        // WireGuard aggregate transfer totals come from the BoringTun adapter's UAPI, which only
+        // exists on the WireGuard path. In SSH mode there is no adapter, so skip this IPC and its
+        // aggregate accounting entirely and fall through to the transport-agnostic per-app fetch.
+        // In WireGuard mode a nil reply is a transient IPC timeout: preserve the original
+        // early-return so per-app stats aren't blanked to empty on a hiccup.
+        if !connectedTransportIsSSH {
+            guard let runtimeConfiguration = await loadRuntimeConfiguration() else { return }
+            let totals = Self.parseTransferTotals(from: runtimeConfiguration)
 
-        stats.bytesIn = totals.rxBytes
-        stats.bytesOut = totals.txBytes
-        stats.lastInboundAt = totals.lastInboundAt
-        lastTransferSnapshot = TransferSnapshot(date: now, rxBytes: totals.rxBytes, txBytes: totals.txBytes)
+            if let lastTransferSnapshot {
+                let elapsed = max(now.timeIntervalSince(lastTransferSnapshot.date), 0.001)
+                stats.rxBytesPerSecond = Double(totals.rxBytes.saturatingSubtract(lastTransferSnapshot.rxBytes)) / elapsed
+                stats.txBytesPerSecond = Double(totals.txBytes.saturatingSubtract(lastTransferSnapshot.txBytes)) / elapsed
+            }
+
+            stats.bytesIn = totals.rxBytes
+            stats.bytesOut = totals.txBytes
+            stats.lastInboundAt = totals.lastInboundAt
+            lastTransferSnapshot = TransferSnapshot(date: now, rxBytes: totals.rxBytes, txBytes: totals.txBytes)
+        }
 
         // App-tunnel counters (transparent proxy accounting). Pulled over `sendProviderMessage`
         // because the proxy extension (root) and this host (user) resolve the App Group container
