@@ -51,6 +51,11 @@ final class PacketTunnelRelayServer {
     /// `PacketTunnelRelayServer.deinit`). A resumed-or-cancelled source is always safe to release.
     private var writeSource: DispatchSourceWrite?
 
+    /// Flow IDs opened as UDP (`openFlowRequest` with `isTCP == false`), so `sendPayloadRequest`
+    /// routes to `sendUDP` (datagram, drop-on-full) instead of `sendTCP` (stream, backpressured).
+    /// Only touched on `packetQueue`.
+    private var udpFlowIDs = Set<UInt64>()
+
     init?(relayBridge: RelayFlowTransport, packetQueue: DispatchQueue) {
         guard let url = SharedPaths.relaySocketURL() else {
             Self.log.error("relaySocketURL is nil — cannot start relay server")
@@ -264,7 +269,16 @@ final class PacketTunnelRelayServer {
             packetQueue.async { [weak self] in
                 guard let self else { return }
                 if !isTCP {
-                    self.sendFrame(RelayWireFrame.encodeOpenFlowReply(reqID: reqID, ok: false, error: "UDP not implemented"))
+                    // WG mode: smoltcp UDP socket through the tunnel. SSH transport keeps the
+                    // protocol-extension default (false) → refused, proxy fails the flow closed.
+                    let ok = self.relayBridge.openUDP(flowID: flowID, remoteHost: host, remotePort: port)
+                    if ok {
+                        self.udpFlowIDs.insert(flowID)
+                        Self.log.notice("[APPSPLIT_RELAY] openFlow(UDP) ok flowID=\(flowID) remote=\(host):\(port)")
+                    } else {
+                        Self.log.error("[APPSPLIT_RELAY] openFlow(UDP) failed flowID=\(flowID) remote=\(host):\(port)")
+                    }
+                    self.sendFrame(RelayWireFrame.encodeOpenFlowReply(reqID: reqID, ok: ok, error: ok ? nil : "UDP relay open failed"))
                     return
                 }
                 let ok = self.relayBridge.openTCP(flowID: flowID, remoteHost: host, remotePort: port)
@@ -284,6 +298,16 @@ final class PacketTunnelRelayServer {
             // a later payload reach the bridge first and reorder the TCP stream.
             packetQueue.async { [weak self] in
                 guard let self else { return }
+                if self.udpFlowIDs.contains(flowID) {
+                    // Datagram path: no backpressure, no teardown-on-full — a send only fails if
+                    // the flow vanished, and then the close below is a no-op safety.
+                    if !self.relayBridge.sendUDP(flowID: flowID, data: payload) {
+                        Self.log.error("[APPSPLIT_RELAY] sendPayload(UDP) unknown flowID=\(flowID) — pushing flowClosed")
+                        self.udpFlowIDs.remove(flowID)
+                        self.pushFlowClosed(flowID: flowID, error: "udp relay flow unknown")
+                    }
+                    return
+                }
                 switch self.relayBridge.sendTCP(flowID: flowID, data: payload) {
                 case .ok:
                     return
@@ -302,6 +326,7 @@ final class PacketTunnelRelayServer {
             }
         case let .closeFlowRequest(flowID):
             packetQueue.async { [weak self] in
+                self?.udpFlowIDs.remove(flowID)
                 self?.relayBridge.close(flowID: flowID)
             }
         case .openFlowReply, .deliverPayloadPush, .flowClosedPush:

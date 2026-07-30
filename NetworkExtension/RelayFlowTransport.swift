@@ -15,5 +15,15 @@ protocol RelayFlowTransport: AnyObject {
     var onFlowClosed: ((UInt64, String?) -> Void)? { get set }
     func openTCP(flowID: UInt64, remoteHost: String, remotePort: UInt16) -> Bool
     func sendTCP(flowID: UInt64, data: Data) -> SendResult
+    /// UDP flow to a fixed remote. Transports that only forward TCP (SSH `direct-tcpip`)
+    /// keep the default `false`, which makes the relay server refuse the open (fail closed).
+    func openUDP(flowID: UInt64, remoteHost: String, remotePort: UInt16) -> Bool
+    /// One datagram on an open UDP flow. `false` = flow unknown/not UDP (drop-on-full is `true`).
+    func sendUDP(flowID: UInt64, data: Data) -> Bool
     func close(flowID: UInt64)
+}
+
+extension RelayFlowTransport {
+    func openUDP(flowID: UInt64, remoteHost: String, remotePort: UInt16) -> Bool { false }
+    func sendUDP(flowID: UInt64, data: Data) -> Bool { false }
 }

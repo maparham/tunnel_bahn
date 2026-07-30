@@ -104,6 +104,13 @@ public final class TransparentProxyProvider: NETransparentProxyProvider {
     /// alongside `dropTunneledUDP` (same session-static, `destinationLock`-guarded field).
     /// Defaults false (WireGuard and legacy configs unaffected).
     private var remoteDNSResolution = false
+    /// WG mode: tunnel-side DNS resolver IP. `UDPFlowRelay` rewrites a routed app's UDP DNS
+    /// query aimed at a local/private resolver to this server and relays it THROUGH the tunnel,
+    /// defeating hijacking/sinkholing local resolvers. Populated from
+    /// `TransparentProxyRuntimeConfig.tunnelDNSHost` in `refreshDestinationConfig` (same
+    /// session-static, `destinationLock`-guarded pattern as `dropTunneledUDP`). nil = disabled
+    /// (SSH mode / legacy configs).
+    private var tunnelDNSHost: String?
 
     /// Suffix match: `api.x.com` matches rule `x.com`; `notx.com` does not. `names` are lowercased.
     private static func sniMatches(_ host: String, names: [String]) -> Bool {
@@ -225,6 +232,7 @@ public final class TransparentProxyProvider: NETransparentProxyProvider {
         cachedPreparedRanges = []
         dropTunneledUDP = false
         remoteDNSResolution = false
+        tunnelDNSHost = nil
         destinationLock.unlock()
         completionHandler()
     }
@@ -344,6 +352,7 @@ public final class TransparentProxyProvider: NETransparentProxyProvider {
         let preparedRanges = cachedPreparedRanges
         let dropUDP = dropTunneledUDP
         let remoteDNS = remoteDNSResolution
+        let dnsRedirectHost = tunnelDNSHost
         destinationLock.unlock()
         // SNI mode: filtering on AND domain rules present. `includedNetworkRules` is catch-all for
         // TCP in this mode, so we peek each routed TCP flow's TLS SNI and route by name; UDP stays
@@ -493,6 +502,7 @@ public final class TransparentProxyProvider: NETransparentProxyProvider {
                 signingID: signingID,
                 routeThroughTunnel: routeThroughTunnel,
                 dropTunneledUDP: dropUDP,
+                tunnelDNSHost: dnsRedirectHost,
                 tunnelInterfaceName: ifaceName,
                 queue: flowQueue,
                 tunnelRanges: { [weak self] in
@@ -815,6 +825,7 @@ public final class TransparentProxyProvider: NETransparentProxyProvider {
             if generation == currentSessionGeneration() {
                 dropTunneledUDP = config.dropTunneledUDP
                 remoteDNSResolution = config.remoteDNSResolution
+                tunnelDNSHost = config.tunnelDNSHost
             }
             destinationLock.unlock()
             applyDestinationPayload(

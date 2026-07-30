@@ -37,6 +37,11 @@ struct TransparentProxyRuntimeConfig: Codable, Equatable {
     /// (pre-remote-DNS) encoded configs, which have no such key, decode to the existing
     /// local-resolution behavior unchanged, and WireGuard connects always carry `false`.
     var remoteDNSResolution: Bool
+    /// WG mode: tunnel-side DNS resolver IP. A routed app's UDP DNS query aimed at a
+    /// local/private resolver (the typical hijacking/sinkholing setup) is rewritten to this
+    /// server and sent THROUGH the tunnel instead of being bypassed to the local resolver.
+    /// `nil` (SSH mode / legacy configs) disables the redirect.
+    var tunnelDNSHost: String?
 
     static let providerConfigurationKey = "proxyConfigB64"
 
@@ -46,7 +51,8 @@ struct TransparentProxyRuntimeConfig: Codable, Equatable {
         destinationRouting: DestinationRoutingFilePayload,
         packetTunnelInterfaceName: String? = nil,
         dropTunneledUDP: Bool,
-        remoteDNSResolution: Bool
+        remoteDNSResolution: Bool,
+        tunnelDNSHost: String? = nil
     ) {
         self.signingIdentifiers = signingIdentifiers
         self.routeAllIdentifiedFlows = routeAllIdentifiedFlows
@@ -54,6 +60,7 @@ struct TransparentProxyRuntimeConfig: Codable, Equatable {
         self.packetTunnelInterfaceName = packetTunnelInterfaceName
         self.dropTunneledUDP = dropTunneledUDP
         self.remoteDNSResolution = remoteDNSResolution
+        self.tunnelDNSHost = tunnelDNSHost
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -63,6 +70,7 @@ struct TransparentProxyRuntimeConfig: Codable, Equatable {
         case packetTunnelInterfaceName
         case dropTunneledUDP
         case remoteDNSResolution
+        case tunnelDNSHost
     }
 
     init(from decoder: Decoder) throws {
@@ -77,6 +85,8 @@ struct TransparentProxyRuntimeConfig: Codable, Equatable {
         // Legacy configs (encoded before this task) have no `remoteDNSResolution` key — default
         // false preserves today's local-resolution behavior for any config in flight.
         remoteDNSResolution = try container.decodeIfPresent(Bool.self, forKey: .remoteDNSResolution) ?? false
+        // Legacy configs have no `tunnelDNSHost` key — nil disables the WG DNS redirect.
+        tunnelDNSHost = try container.decodeIfPresent(String.self, forKey: .tunnelDNSHost)
     }
 
     static func encodeBase64(_ config: TransparentProxyRuntimeConfig) throws -> String {

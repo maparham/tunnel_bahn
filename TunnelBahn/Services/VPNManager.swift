@@ -399,7 +399,14 @@ final class VPNManager: ObservableObject {
                     dropTunneledUDP: profile.transport == .ssh,
                     // Server-side DNS: only SSH mode can resolve names on the far end (via direct-tcpip).
                     // WireGuard mode must keep local resolution + numeric-IP relay, so gate strictly on transport.
-                    remoteDNSResolution: profile.transport == .ssh
+                    remoteDNSResolution: profile.transport == .ssh,
+                    // WG mode: UDP DNS aimed at a local/private resolver is rewritten to this
+                    // tunnel-side resolver and relayed through the tunnel (defeats resolver
+                    // hijacking/sinkholing). Prefer the profile's own DNS server; 1.1.1.1 as a
+                    // reliable fallback. SSH mode uses SNI remote-DNS instead — nil disables.
+                    tunnelDNSHost: profile.transport == .ssh
+                        ? nil
+                        : (extensionProfile.interface.dnsServers.first(where: { $0.contains(".") }) ?? "1.1.1.1")
                 )
                 traceLog(
                     "transparent proxy runtime config: signingIDs=\(pendingTransparentProxyConfig?.signingIdentifiers.count ?? 0) routeAll=\(!hasAppTunnelSelection) destRanges=\(destinationRanges.count) destDomains=\(destinationDomainNames.count) names=[\(destinationDomainNames.prefix(12).joined(separator: ","))]"
@@ -1380,7 +1387,8 @@ final class VPNManager: ObservableObject {
         destinationRanges: [String],
         destinationDomainNames: [String],
         dropTunneledUDP: Bool,
-        remoteDNSResolution: Bool
+        remoteDNSResolution: Bool,
+        tunnelDNSHost: String? = nil
     ) -> TransparentProxyRuntimeConfig {
         TransparentProxyRuntimeConfig(
             signingIdentifiers: routeAllIdentifiedFlows ? [] : signingIdentifiers(from: appRules),
@@ -1391,7 +1399,8 @@ final class VPNManager: ObservableObject {
                 domainNames: destinationDomainNames
             ),
             dropTunneledUDP: dropTunneledUDP,
-            remoteDNSResolution: remoteDNSResolution
+            remoteDNSResolution: remoteDNSResolution,
+            tunnelDNSHost: tunnelDNSHost
         )
     }
 

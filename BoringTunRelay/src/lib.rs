@@ -2,9 +2,11 @@
 
 use smoltcp::iface::{Config, Interface, SocketHandle, SocketSet};
 use smoltcp::phy::{Device, DeviceCapabilities, Medium, RxToken, TxToken};
-use smoltcp::socket::tcp;
+use smoltcp::socket::{tcp, udp};
 use smoltcp::time::Instant;
-use smoltcp::wire::{IpAddress, IpCidr, IpEndpoint, IpProtocol, Ipv4Address, Ipv4Packet, TcpPacket};
+use smoltcp::wire::{
+    IpAddress, IpCidr, IpEndpoint, IpProtocol, Ipv4Address, Ipv4Packet, TcpPacket, UdpPacket,
+};
 use std::collections::{HashMap, VecDeque};
 use std::ffi::c_char;
 use std::ptr;
@@ -41,6 +43,13 @@ const MAX_FLOW_TX_BUF: usize = 4 * 1024 * 1024;
 /// keeps `pending_tx` from ever climbing to `MAX_FLOW_TX_BUF` (the fail-closed cap that was tearing
 /// sustained uploads down). Well below the cap so a flow is never killed for merely being busy.
 const TX_BACKPRESSURE_HIGH: usize = 512 * 1024;
+// Per-flow smoltcp UDP packet buffers. Sized for interactive datagram traffic (DNS, QUIC
+// handshakes, NTP): each direction holds up to N datagrams / B payload bytes; a full buffer
+// DROPS the datagram — correct UDP semantics, the app retransmits at its own layer.
+const UDP_RX_PACKETS: usize = 64;
+const UDP_RX_BUF: usize = 128 * 1024;
+const UDP_TX_PACKETS: usize = 32;
+const UDP_TX_BUF: usize = 64 * 1024;
 
 struct RelayDevice {
     rx_queue: VecDeque<Vec<u8>>,
@@ -132,6 +141,10 @@ struct FlowEntry {
     /// tx window (TCP_TX_BUF) was full (or the TCP handshake hadn't completed). Drained in order by
     /// `pump_tx` on every poll, so no byte is ever dropped and stream order is preserved.
     pending_tx: Vec<u8>,
+    /// `Some(remote)` marks a UDP flow (the socket behind `handle` is `udp::Socket`, every
+    /// datagram is sent to `remote`); `None` marks TCP. Guards every `sockets.get::<T>` cast —
+    /// downcasting a handle to the wrong socket type panics inside smoltcp.
+    udp_remote: Option<IpEndpoint>,
 }
 
 pub struct TunnelbahnRelayBridge {
@@ -141,6 +154,9 @@ pub struct TunnelbahnRelayBridge {
     sockets: SocketSet<'static>,
     flows: HashMap<u64, FlowEntry>,
     port_to_flow: HashMap<u16, u64>,
+    /// UDP local-port → flow map, separate from `port_to_flow` (TCP) because inbound intercept
+    /// must match ports per-protocol: a TCP segment to a UDP flow's port is NOT ours.
+    udp_port_to_flow: HashMap<u16, u64>,
     next_port: u16,
     /// Monotonic anchor for smoltcp time. Must NOT be wall clock: a backward NTP step or
     /// sleep/wake correction would regress smoltcp's Instant and freeze every
@@ -177,7 +193,7 @@ impl TunnelbahnRelayBridge {
         let Some(entry) = self.flows.get_mut(&flow_id) else {
             return;
         };
-        if entry.pending_tx.is_empty() {
+        if entry.udp_remote.is_some() || entry.pending_tx.is_empty() {
             return;
         }
         let socket = self.sockets.get_mut::<tcp::Socket>(entry.handle);
@@ -210,6 +226,21 @@ impl TunnelbahnRelayBridge {
                 continue;
             };
             let handle = entry.handle;
+            if entry.udp_remote.is_some() {
+                // UDP flow: surface each received datagram as one pending_rx chunk (preserving
+                // datagram boundaries end-to-end). No close-state machinery — UDP flows live
+                // until the proxy explicitly closes them.
+                let socket = self.sockets.get_mut::<udp::Socket>(handle);
+                while socket.can_recv() {
+                    match socket.recv_slice(&mut self.rx_scratch) {
+                        Ok((n, _meta)) => {
+                            entry.pending_rx.push_back(self.rx_scratch[..n].to_vec());
+                        }
+                        Err(_) => break,
+                    }
+                }
+                continue;
+            }
             let socket = self.sockets.get_mut::<tcp::Socket>(handle);
             while socket.can_recv() {
                 // recv into the persistent scratch, copying only the delivered bytes into an
@@ -250,7 +281,8 @@ impl TunnelbahnRelayBridge {
             } else {
                 port + 1
             };
-            if !self.port_to_flow.contains_key(&port) {
+            if !self.port_to_flow.contains_key(&port) && !self.udp_port_to_flow.contains_key(&port)
+            {
                 return Some(port);
             }
         }
@@ -275,6 +307,7 @@ impl TunnelbahnRelayBridge {
             sockets: SocketSet::new(vec![]),
             flows: HashMap::new(),
             port_to_flow: HashMap::new(),
+            udp_port_to_flow: HashMap::new(),
             next_port: EPHEMERAL_PORT_MIN,
             started_at: StdInstant::now(),
             closed_flows: Vec::new(),
@@ -292,15 +325,17 @@ impl TunnelbahnRelayBridge {
         }
         let proto = ip.next_header();
         let payload = ip.payload();
-        let local_port = match proto {
+        match proto {
             IpProtocol::Tcp => TcpPacket::new_checked(payload)
                 .ok()
-                .map(|t| t.dst_port()),
-            _ => None,
-        };
-        local_port
-            .map(|p| self.port_to_flow.contains_key(&p))
-            .unwrap_or(false)
+                .map(|t| self.port_to_flow.contains_key(&t.dst_port()))
+                .unwrap_or(false),
+            IpProtocol::Udp => UdpPacket::new_checked(payload)
+                .ok()
+                .map(|u| self.udp_port_to_flow.contains_key(&u.dst_port()))
+                .unwrap_or(false),
+            _ => false,
+        }
     }
 
     pub fn feed_rx_ip(&mut self, packet: &[u8]) -> bool {
@@ -348,8 +383,63 @@ impl TunnelbahnRelayBridge {
                 local_port,
                 pending_rx: VecDeque::new(),
                 pending_tx: Vec::new(),
+                udp_remote: None,
             },
         );
+        self.poll_stack();
+        true
+    }
+
+    /// Opens a UDP "flow": one bound local port whose datagrams all go to `remote`. Mirrors the
+    /// proxy's per-destination `UDPFlowRelay` keying (one relay flow per app-flow × remote).
+    pub fn open_udp(&mut self, flow_id: u64, remote_ip: Ipv4Address, remote_port: u16) -> bool {
+        if self.flows.contains_key(&flow_id) {
+            return false;
+        }
+        let Some(local_port) = self.alloc_port() else {
+            return false;
+        };
+
+        let rx_buffer = udp::PacketBuffer::new(
+            vec![udp::PacketMetadata::EMPTY; UDP_RX_PACKETS],
+            vec![0u8; UDP_RX_BUF],
+        );
+        let tx_buffer = udp::PacketBuffer::new(
+            vec![udp::PacketMetadata::EMPTY; UDP_TX_PACKETS],
+            vec![0u8; UDP_TX_BUF],
+        );
+        let mut socket = udp::Socket::new(rx_buffer, tx_buffer);
+        if socket.bind(local_port).is_err() {
+            return false;
+        }
+
+        let handle = self.sockets.add(socket);
+        self.udp_port_to_flow.insert(local_port, flow_id);
+        self.flows.insert(
+            flow_id,
+            FlowEntry {
+                handle,
+                local_port,
+                pending_rx: VecDeque::new(),
+                pending_tx: Vec::new(),
+                udp_remote: Some(IpEndpoint::new(IpAddress::Ipv4(remote_ip), remote_port)),
+            },
+        );
+        self.poll_stack();
+        true
+    }
+
+    /// Sends one datagram on a UDP flow. A full tx buffer silently DROPS the datagram (UDP
+    /// semantics — the app's own protocol retransmits); only a missing/non-UDP flow returns false.
+    pub fn send_udp(&mut self, flow_id: u64, data: &[u8]) -> bool {
+        let Some(entry) = self.flows.get_mut(&flow_id) else {
+            return false;
+        };
+        let Some(remote) = entry.udp_remote else {
+            return false;
+        };
+        let socket = self.sockets.get_mut::<udp::Socket>(entry.handle);
+        let _ = socket.send_slice(data, remote);
         self.poll_stack();
         true
     }
@@ -359,6 +449,7 @@ impl TunnelbahnRelayBridge {
             return;
         };
         self.port_to_flow.remove(&entry.local_port);
+        self.udp_port_to_flow.remove(&entry.local_port);
         self.sockets.remove(entry.handle);
         self.poll_stack();
     }
@@ -384,6 +475,10 @@ impl TunnelbahnRelayBridge {
             let Some(entry) = self.flows.get_mut(&flow_id) else {
                 return SendTcpResult::Permanent;
             };
+            // A UDP flow's handle downcast to tcp::Socket would panic inside smoltcp.
+            if entry.udp_remote.is_some() {
+                return SendTcpResult::Permanent;
+            }
             let socket = self.sockets.get::<tcp::Socket>(entry.handle);
             // Buffer while connecting (SynSent/SynReceived) or open (may_send covers
             // Established + CloseWait); refuse only when the socket can never send again.
@@ -599,6 +694,45 @@ pub unsafe extern "C" fn tunnelbahn_relay_open_tcp(
 }
 
 #[no_mangle]
+pub unsafe extern "C" fn tunnelbahn_relay_open_udp(
+    bridge: *mut TunnelbahnRelayBridge,
+    flow_id: u64,
+    remote_ipv4: *const c_char,
+    remote_port: u16,
+) -> i32 {
+    let Some(bridge) = bridge.as_mut() else {
+        return 0;
+    };
+    let Some(remote) = parse_ipv4(remote_ipv4) else {
+        return 0;
+    };
+    i32::from(bridge.open_udp(flow_id, remote, remote_port))
+}
+
+/// Returns 1 if the flow exists and is UDP (the datagram was queued OR dropped-on-full — UDP
+/// semantics, never an error), -1 if the flow is unknown or not UDP.
+#[no_mangle]
+pub unsafe extern "C" fn tunnelbahn_relay_send_udp(
+    bridge: *mut TunnelbahnRelayBridge,
+    flow_id: u64,
+    data: *const u8,
+    len: u32,
+) -> i32 {
+    let Some(bridge) = bridge.as_mut() else {
+        return -1;
+    };
+    if data.is_null() || len == 0 {
+        return -1;
+    }
+    let slice = std::slice::from_raw_parts(data, len as usize);
+    if bridge.send_udp(flow_id, slice) {
+        1
+    } else {
+        -1
+    }
+}
+
+#[no_mangle]
 pub unsafe extern "C" fn tunnelbahn_relay_close(
     bridge: *mut TunnelbahnRelayBridge,
     flow_id: u64,
@@ -678,4 +812,135 @@ pub unsafe extern "C" fn tunnelbahn_relay_drain_closed(
         out_slice[i] = flow_id;
     }
     n as u32
+}
+
+#[cfg(test)]
+mod udp_tests {
+    use super::*;
+    use smoltcp::wire::{IpProtocol, Ipv4Packet, UdpPacket};
+
+    const TUNNEL_IP: Ipv4Address = Ipv4Address::new(10, 9, 0, 2);
+    const REMOTE_IP: Ipv4Address = Ipv4Address::new(1, 1, 1, 1);
+
+    fn new_bridge() -> TunnelbahnRelayBridge {
+        TunnelbahnRelayBridge::new(TUNNEL_IP, 1380)
+    }
+
+    /// Pull every queued outbound IP packet out of the stack (mirrors poll_tx_ip's drain loop).
+    fn drain_tx(b: &mut TunnelbahnRelayBridge) -> Vec<Vec<u8>> {
+        let mut out = Vec::new();
+        loop {
+            if b.device.tx_queue.is_empty() {
+                b.poll_stack();
+            }
+            match b.device.tx_queue.pop_front() {
+                Some(p) => out.push(p),
+                None => break,
+            }
+        }
+        out
+    }
+
+    /// Build an inbound IPv4/UDP packet remote:sport -> tunnel_ip:dport with `payload`.
+    fn build_udp_ip(sport: u16, dport: u16, payload: &[u8]) -> Vec<u8> {
+        use smoltcp::wire::{Ipv4Repr, UdpRepr};
+        let udp_repr = UdpRepr { src_port: sport, dst_port: dport };
+        let ip_repr = Ipv4Repr {
+            src_addr: REMOTE_IP,
+            dst_addr: TUNNEL_IP,
+            next_header: IpProtocol::Udp,
+            payload_len: udp_repr.header_len() + payload.len(),
+            hop_limit: 64,
+        };
+        let mut buf = vec![0u8; ip_repr.buffer_len() + udp_repr.header_len() + payload.len()];
+        let mut ipv4 = Ipv4Packet::new_unchecked(&mut buf);
+        ip_repr.emit(&mut ipv4, &smoltcp::phy::ChecksumCapabilities::default());
+        let mut udp = UdpPacket::new_unchecked(ipv4.payload_mut());
+        udp_repr.emit(
+            &mut udp,
+            &IpAddress::Ipv4(REMOTE_IP),
+            &IpAddress::Ipv4(TUNNEL_IP),
+            payload.len(),
+            |b| b.copy_from_slice(payload),
+            &smoltcp::phy::ChecksumCapabilities::default(),
+        );
+        buf
+    }
+
+    #[test]
+    fn open_and_send_emits_udp_packet_to_remote() {
+        let mut b = new_bridge();
+        assert!(b.open_udp(7, REMOTE_IP, 53));
+        let query = b"hello-dns-query";
+        assert!(b.send_udp(7, query));
+
+        let pkts = drain_tx(&mut b);
+        let found = pkts.iter().find_map(|p| {
+            let ip = Ipv4Packet::new_checked(p.as_slice()).ok()?;
+            if ip.next_header() != IpProtocol::Udp {
+                return None;
+            }
+            let udp = UdpPacket::new_checked(ip.payload()).ok()?;
+            Some((ip.src_addr(), ip.dst_addr(), udp.dst_port(), udp.payload().to_vec()))
+        });
+        let (src, dst, dport, payload) = found.expect("no UDP packet egressed");
+        assert_eq!(src, TUNNEL_IP);
+        assert_eq!(dst, REMOTE_IP);
+        assert_eq!(dport, 53);
+        assert_eq!(payload, query);
+    }
+
+    #[test]
+    fn inbound_udp_response_surfaces_on_flow() {
+        let mut b = new_bridge();
+        assert!(b.open_udp(9, REMOTE_IP, 53));
+        assert!(b.send_udp(9, b"q"));
+        // Find the local (ephemeral) port the flow bound.
+        let sport = drain_tx(&mut b)
+            .iter()
+            .find_map(|p| {
+                let ip = Ipv4Packet::new_checked(p.as_slice()).ok()?;
+                let udp = UdpPacket::new_checked(ip.payload()).ok()?;
+                if ip.next_header() == IpProtocol::Udp { Some(udp.src_port()) } else { None }
+            })
+            .expect("no egress to learn local port");
+
+        let response = b"dns-answer-bytes";
+        let ip_pkt = build_udp_ip(53, sport, response);
+        assert!(b.feed_rx_ip(&ip_pkt), "response should be intercepted");
+
+        let mut items: Vec<RelayRxItem> =
+            (0..8).map(|_| RelayRxItem { flow_id: 0, offset: 0, len: 0 }).collect();
+        let mut blob = vec![0u8; 4096];
+        let n = b.drain_rx(&mut items, &mut blob) as usize;
+        assert_eq!(n, 1, "exactly one datagram should surface");
+        assert_eq!(items[0].flow_id, 9);
+        let start = items[0].offset as usize;
+        let end = start + items[0].len as usize;
+        assert_eq!(&blob[start..end], response);
+    }
+
+    #[test]
+    fn send_tcp_on_udp_flow_is_permanent_not_panic() {
+        let mut b = new_bridge();
+        assert!(b.open_udp(11, REMOTE_IP, 53));
+        assert!(matches!(b.send_tcp(11, b"x"), SendTcpResult::Permanent));
+    }
+
+    #[test]
+    fn send_udp_on_missing_flow_fails() {
+        let mut b = new_bridge();
+        assert!(!b.send_udp(999, b"x"));
+    }
+
+    #[test]
+    fn tcp_and_udp_share_port_namespace_no_collision() {
+        let mut b = new_bridge();
+        assert!(b.open_tcp(1, REMOTE_IP, 443));
+        assert!(b.open_udp(2, REMOTE_IP, 53));
+        // Distinct local ports allocated across both maps.
+        let tcp_port = b.flows[&1].local_port;
+        let udp_port = b.flows[&2].local_port;
+        assert_ne!(tcp_port, udp_port);
+    }
 }

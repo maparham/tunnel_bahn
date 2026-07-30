@@ -104,6 +104,26 @@ final class SmoltcpRelayBridge: RelayFlowTransport, @unchecked Sendable {
         }
     }
 
+    func openUDP(flowID: UInt64, remoteHost: String, remotePort: UInt16) -> Bool {
+        guard let handle else { return false }
+        return remoteHost.withCString { host in
+            tunnelbahn_relay_open_udp(handle, flowID, host, remotePort) == 1
+        }
+    }
+
+    func sendUDP(flowID: UInt64, data: Data) -> Bool {
+        guard let handle, !data.isEmpty else { return false }
+        let raw = data.withUnsafeBytes { buf -> Int32 in
+            guard let base = buf.baseAddress?.assumingMemoryBound(to: UInt8.self) else { return -1 }
+            return tunnelbahn_relay_send_udp(handle, flowID, base, UInt32(data.count))
+        }
+        if raw == 1 {
+            drainReceivedPayloads()
+            return true
+        }
+        return false
+    }
+
     func close(flowID: UInt64) {
         guard let handle else { return }
         tunnelbahn_relay_close(handle, flowID)

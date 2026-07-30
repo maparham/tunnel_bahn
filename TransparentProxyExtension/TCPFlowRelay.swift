@@ -30,9 +30,12 @@ final class TCPFlowRelay {
     // Monotonic flowID source. The prior `ObjectIdentifier(self).hashValue` exposed Swift's
     // pointer reuse: a deallocated TCPFlowRelay's address could be recycled by a newly
     // allocated one and collide with a stale entry in the tunnel-side relay bridge.
+    // Shared with UDPFlowRelay: TCP and UDP relay flows live in the same tunnel-side flowID
+    // namespace (PacketTunnelRelayServer keys both off the same map), so both must draw from
+    // this one counter.
     private static let flowIDLock = NSLock()
     private static var nextFlowID: UInt64 = 1
-    private static func allocateFlowID() -> UInt64 {
+    static func allocateFlowID() -> UInt64 {
         flowIDLock.lock()
         defer { flowIDLock.unlock() }
         let id = nextFlowID

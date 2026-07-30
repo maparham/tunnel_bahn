@@ -44,6 +44,20 @@ int tunnelbahn_relay_open_tcp(TunnelbahnRelayBridge *bridge,
                               const char *remote_ipv4,
                               uint16_t remote_port);
 
+/// Opens a UDP flow: one bound local port whose datagrams all go to remote_ipv4:remote_port.
+/// Returns 1 on success.
+int tunnelbahn_relay_open_udp(TunnelbahnRelayBridge *bridge,
+                              uint64_t flow_id,
+                              const char *remote_ipv4,
+                              uint16_t remote_port);
+
+/// Sends one datagram on a UDP flow. Returns 1 if the flow exists and is UDP (queued, or
+/// dropped-on-full — UDP semantics), -1 if the flow is unknown or not UDP.
+int tunnelbahn_relay_send_udp(TunnelbahnRelayBridge *bridge,
+                              uint64_t flow_id,
+                              const uint8_t *data,
+                              uint32_t len);
+
 void tunnelbahn_relay_close(TunnelbahnRelayBridge *bridge, uint64_t flow_id);
 
 /// Tristate. 1 = bytes accepted (buffered/sent), room remains. 0 = bytes WERE accepted

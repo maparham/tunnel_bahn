@@ -4,8 +4,13 @@ import NetworkExtension
 import os.log
 
 /// UDP relay between an `NEAppProxyUDPFlow` and outbound datagram sockets.
-/// When `routeThroughTunnel` is true, each per-destination connection is created via
-/// `RelayOutboundConnection` which binds it to the WireGuard utun interface.
+/// Tunnel path (WG mode): per-destination XPC relay flows into the packet-tunnel's smoltcp
+/// stack (`TransparentProxyRelayClient.openFlow(isTCP: false)` → BoringTun), mirroring
+/// `TCPFlowRelay.startTunnelConnection`. The previous `RelayOutboundConnection` (raw
+/// `nw_connection`) path followed SYSTEM routing — the extension's own sockets are not
+/// captured by the per-app VPN — so every "tunneled" datagram silently egressed on the real
+/// interface (measured: 0 inner-UDP packets reached the server; DNS leaked to the local
+/// resolver). Direct path (local/LAN destinations) still uses plain `NWConnection`.
 final class UDPFlowRelay {
     private static let log = AppLog(
         subsystem: "com.tunnelbahn.mac.transparentproxy",
@@ -26,6 +31,12 @@ final class UDPFlowRelay {
     /// datagrams are dropped instead of dialed. Never routes them via `sendViaDirect` — that would
     /// leak the traffic outside the tunnel. See project memory: SSH transport UDP no-leak.
     private let dropTunneledUDP: Bool
+    /// WG mode: tunnel-side DNS resolver IP. A tunneled app's UDP DNS query aimed at a
+    /// local/private resolver (which `shouldBypassLocal` would hand to the — possibly
+    /// hijacking — local resolver) is instead rewritten to this server and relayed THROUGH
+    /// the tunnel. Responses are written back to the app as if they came from the original
+    /// resolver, so the redirect is invisible to the app. nil = disabled (SSH mode).
+    private let tunnelDNSHost: String?
     private let tunnelInterfaceName: String?
     private let queue: DispatchQueue
     /// Live snapshot of the user's configured tunnel destination ranges (CIDRs + resolved domain
@@ -36,8 +47,23 @@ final class UDPFlowRelay {
     private let onRx: (UInt64) -> Void
     private let onClose: () -> Void
 
-    // Tunnel path: keyed by "host:port"
-    private var relayConns: [String: RelayOutboundConnection] = [:]
+    /// One XPC relay flow per original destination. `pending` buffers datagrams that arrive
+    /// between the openFlow request and its reply (the reply is async); `isOpen` flips once and
+    /// `pending` drains in order. All mutation on `queue`.
+    private final class TunnelUDPFlow {
+        let flowID: UInt64
+        var isOpen = false
+        var pending: [Data] = []
+        init(flowID: UInt64) { self.flowID = flowID }
+    }
+
+    /// Cap on datagrams buffered while an open is in flight (a QUIC burst can be large; DNS
+    /// needs only a few). Beyond this, drop — UDP semantics.
+    private static let maxPendingPerDestination = 32
+
+    // Tunnel path: keyed by ORIGINAL "host:port" (even when DNS-redirected, so responses map
+    // back to the endpoint the app actually targeted).
+    private var tunnelFlows: [String: TunnelUDPFlow] = [:]
     // Direct path: keyed by "host:port"
     private var nwConnections: [String: NWConnection] = [:]
     private var legacyEndpoints: [String: NWHostEndpoint] = [:]
@@ -54,6 +80,7 @@ final class UDPFlowRelay {
         signingID: String,
         routeThroughTunnel: Bool,
         dropTunneledUDP: Bool,
+        tunnelDNSHost: String? = nil,
         tunnelInterfaceName: String?,
         queue: DispatchQueue,
         tunnelRanges: @escaping () -> [IPCIDRMatcher.PreparedRange],
@@ -65,6 +92,7 @@ final class UDPFlowRelay {
         self.signingID = signingID
         self.routeThroughTunnel = routeThroughTunnel
         self.dropTunneledUDP = dropTunneledUDP
+        self.tunnelDNSHost = tunnelDNSHost
         self.tunnelInterfaceName = tunnelInterfaceName
         self.queue = queue
         self.tunnelRanges = tunnelRanges
@@ -104,7 +132,7 @@ final class UDPFlowRelay {
                 return
             }
             // Hop to `queue` before touching the connection dictionaries. `send` mutates
-            // relayConns/nwConnections/legacyEndpoints, but `readDatagrams` delivers on the NE flow's
+            // tunnelFlows/nwConnections/legacyEndpoints, but `readDatagrams` delivers on the NE flow's
             // callback queue — not `queue` — so doing it inline raced the receive/teardown paths and
             // corrupted the dictionaries (the SIGSEGV in `scheduleDirectTeardown` →
             // `removeValue(forKey:)`). Serialize all dictionary access onto `queue`.
@@ -130,8 +158,20 @@ final class UDPFlowRelay {
         // routable-private destination the user explicitly configured to tunnel is not bypassed.
         // tunnelRanges() (a lock-guarded live read) is only evaluated for local-literal remotes,
         // via the predicate's autoclosure.
-        let useTunnel = routeThroughTunnel
+        var useTunnel = routeThroughTunnel
             && !IPCIDRMatcher.shouldBypassLocal(legacyEndpoint.hostname, tunnelRanges: tunnelRanges())
+        // DNS redirect (WG mode only): a routed app's DNS query to a local/private resolver
+        // would bypass to the — possibly hijacking/sinkholing — local network. Rewrite it to the
+        // tunnel-side resolver and relay it through the tunnel instead. The flow key stays the
+        // ORIGINAL endpoint, so responses are written back `sentBy` the resolver the app asked.
+        var targetHost = legacyEndpoint.hostname
+        var targetPort = legacyEndpoint.port
+        if routeThroughTunnel, !dropTunneledUDP, !useTunnel,
+           legacyEndpoint.port == "53", let redirect = tunnelDNSHost {
+            useTunnel = true
+            targetHost = redirect
+            targetPort = "53"
+        }
         if useTunnel && dropTunneledUDP {
             // SSH transport: no WG utun backs the tunnel path, so a would-be-tunneled datagram
             // is dropped here — deterministically, and WITHOUT falling through to sendViaDirect,
@@ -146,87 +186,86 @@ final class UDPFlowRelay {
             return
         }
         if useTunnel {
-            sendViaTunnel(datagram: datagram, to: legacyEndpoint, key: key)
+            sendViaTunnel(datagram: datagram, key: key, targetHost: targetHost, targetPort: targetPort)
         } else {
             sendViaDirect(datagram: datagram, to: legacyEndpoint, key: key)
         }
     }
 
-    // MARK: - Tunnel path
+    // MARK: - Tunnel path (XPC → packet-tunnel smoltcp UDP → BoringTun)
 
-    private func sendViaTunnel(datagram: Data, to legacyEndpoint: NWHostEndpoint, key: String) {
-        if relayConns[key] == nil {
-            guard let conn = makeTunnelConnection(to: legacyEndpoint) else { return }
-            relayConns[key] = conn
-            startTunnelReadLoop(on: conn, key: key)
-            conn.start(queue: queue) { [weak self, weak conn] (isReady: Bool, error: Error?) in
+    /// Runs on `queue`. Opens (once per destination) an XPC relay flow into the packet tunnel's
+    /// smoltcp stack and sends each datagram over it. Fail-closed: if the open fails, datagrams
+    /// are dropped — never re-dialed on the real interface (that would leak tunnel traffic).
+    private func sendViaTunnel(datagram: Data, key: String, targetHost: String, targetPort: String) {
+        if let existing = tunnelFlows[key] {
+            if existing.isOpen {
+                onTx(UInt64(datagram.count))
+                TransparentProxyRelayClient.shared.sendPayload(flowID: existing.flowID, data: datagram) { _ in }
+            } else if existing.pending.count < Self.maxPendingPerDestination {
+                existing.pending.append(datagram)
+            }
+            return
+        }
+        guard let port = UInt16(targetPort) else {
+            Self.log.error("UDP tunnel invalid target port signingID=\(self.signingID) target=\(targetHost):\(targetPort)")
+            return
+        }
+        let tunnelFlow = TunnelUDPFlow(flowID: TCPFlowRelay.allocateFlowID())
+        tunnelFlow.pending.append(datagram)
+        tunnelFlows[key] = tunnelFlow
+        Self.log.notice(
+            "UDP tunnel XPC open signingID=\(self.signingID) key=\(key) target=\(targetHost):\(targetPort) flowID=\(tunnelFlow.flowID)"
+        )
+        TransparentProxyRelayClient.shared.openFlow(
+            flowID: tunnelFlow.flowID,
+            remoteHost: targetHost,
+            remotePort: port,
+            isTCP: false,
+            onReceive: { [weak self] data in
                 guard let self else { return }
-                if !isReady {
-                    Self.log.debug("UDP tunnel conn failed for key=\(key): \(error?.localizedDescription ?? "cancelled")")
-                    self.scheduleTunnelTeardown(key: key, connection: conn)
+                self.queue.async {
+                    guard let legacy = self.legacyEndpoints[key] else { return }
+                    self.onRx(UInt64(data.count))
+                    self.flow.writeDatagrams([data], sentBy: [legacy]) { writeError in
+                        if let writeError {
+                            Self.log.debug("UDP writeDatagrams error: \(writeError.localizedDescription)")
+                        }
+                    }
                 }
-            }
-        }
-        onTx(UInt64(datagram.count))
-        guard let conn = relayConns[key] else { return }
-        conn.sendData(datagram) { [weak self, weak conn] (error: Error?) in
-            if let error {
-                // One dead destination must not kill the whole flow — a UDP flow multiplexes
-                // many remotes (e.g. a racing resolver, where one ICMP-unreachable DNS server
-                // would take down all the others). Tear down just this destination's
-                // connection; the flow only finishes when the flow itself dies.
-                Self.log.debug("UDP tunnel send error: \(error.localizedDescription)")
-                self?.scheduleTunnelTeardown(key: key, connection: conn)
-            }
-        }
-    }
-
-    private func makeTunnelConnection(to legacyEndpoint: NWHostEndpoint) -> RelayOutboundConnection? {
-        // See TCPFlowRelay.startTunnelConnection: we deliberately do NOT bind to the utun
-        // interface. Routing is handled by the proxy extension's NEAppRule on the per-app
-        // VPN plus [flow setMetadata:params] in RelayOutboundBridge.m.
-        let conn: RelayOutboundConnection? = legacyEndpoint.hostname.withCString { hostCStr in
-            legacyEndpoint.port.withCString { portCStr in
-                RelayOutboundConnection.makeConnection(flow: flow,
-                                                       hostname: hostCStr,
-                                                       port: portCStr,
-                                                       isTCP: false,
-                                                       interfaceName: nil)
-            }
-        }
-        if conn == nil {
-            Self.log.error(
-                "UDP RelayOutboundConnection returned nil signingID=\(self.signingID) remote=\(legacyEndpoint.hostname):\(legacyEndpoint.port)"
-            )
-        } else {
-            Self.log.notice(
-                "UDP tunnel RelayOutboundConnection signingID=\(self.signingID) remote=\(legacyEndpoint.hostname):\(legacyEndpoint.port)"
-            )
-        }
-        return conn
-    }
-
-    private func startTunnelReadLoop(on conn: RelayOutboundConnection, key: String) {
-        conn.receiveMessage { [weak self] (data: Data?, isComplete: Bool, error: Error?) in  // receiveMessage(completion:)
-            guard let self else { return }
-            if let data, !data.isEmpty, let legacy = self.legacyEndpoints[key] {
-                self.onRx(UInt64(data.count))
-                self.flow.writeDatagrams([data], sentBy: [legacy]) { writeError in
-                    if let writeError {
-                        Self.log.debug("UDP writeDatagrams error: \(writeError.localizedDescription)")
+            },
+            onClose: { [weak self] error in
+                guard let self else { return }
+                self.queue.async {
+                    // Per-destination teardown only (a UDP flow multiplexes many remotes); the
+                    // app flow itself stays up. Removing the entry lets a later datagram retry.
+                    if let cur = self.tunnelFlows[key], cur === tunnelFlow {
+                        self.tunnelFlows.removeValue(forKey: key)
+                    }
+                    if let error {
+                        Self.log.debug("UDP tunnel XPC flow closed key=\(key): \(error)")
                     }
                 }
             }
-            if let error {
-                Self.log.debug("UDP tunnel receive error: \(error.localizedDescription)")
-                self.scheduleTunnelTeardown(key: key, connection: conn)
-                return
+        ) { [weak self] ok in
+            guard let self else { return }
+            self.queue.async {
+                guard let cur = self.tunnelFlows[key], cur === tunnelFlow else { return }
+                let pending = tunnelFlow.pending
+                tunnelFlow.pending = []
+                if ok {
+                    tunnelFlow.isOpen = true
+                    for d in pending {
+                        self.onTx(UInt64(d.count))
+                        TransparentProxyRelayClient.shared.sendPayload(flowID: tunnelFlow.flowID, data: d) { _ in }
+                    }
+                } else {
+                    // Fail closed: drop buffered datagrams, remove the entry so a retransmit
+                    // can retry the open (e.g. tunnel not ready yet during connect).
+                    Self.log.error("UDP tunnel XPC open failed signingID=\(self.signingID) key=\(key)")
+                    self.tunnelFlows.removeValue(forKey: key)
+                }
             }
-            if isComplete {
-                self.scheduleTunnelTeardown(key: key, connection: conn)
-                return
-            }
-            self.startTunnelReadLoop(on: conn, key: key)
         }
     }
 
@@ -314,19 +353,6 @@ final class UDPFlowRelay {
         }
     }
 
-    /// Tunnel-path counterpart of `scheduleDirectTeardown`: same deferred hop to `queue` (never
-    /// drop the connection's last reference inside its own callback), same identity check for
-    /// idempotence. Cancels before dropping — the previous bare `removeValue` leaked the
-    /// connection's internal resources.
-    private func scheduleTunnelTeardown(key: String, connection: RelayOutboundConnection?) {
-        queue.async { [weak self] in
-            guard let self, let connection, self.relayConns[key] === connection else { return }
-            connection.cancel()
-            self.relayConns.removeValue(forKey: key)
-            self.legacyEndpoints.removeValue(forKey: key)
-        }
-    }
-
     // MARK: - Lifecycle
 
     private func endpointKey(_ endpoint: NWHostEndpoint) -> String {
@@ -376,8 +402,10 @@ final class UDPFlowRelay {
         // `removeValue` running on `queue` and corrupted them. Strong `self` so the connections are
         // still cancelled even if this async holds the last reference.
         queue.async {
-            for conn in self.relayConns.values { conn.cancel() }
-            self.relayConns.removeAll(keepingCapacity: false)
+            for tunnelFlow in self.tunnelFlows.values {
+                TransparentProxyRelayClient.shared.closeFlow(flowID: tunnelFlow.flowID)
+            }
+            self.tunnelFlows.removeAll(keepingCapacity: false)
             for conn in self.nwConnections.values {
                 // Clear the handler first so the .cancelled transition can't re-enter
                 // teardown while we're dropping the reference here.
