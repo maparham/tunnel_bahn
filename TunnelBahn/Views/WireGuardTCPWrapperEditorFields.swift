@@ -22,7 +22,7 @@ struct WireGuardTCPWrapperEditorFields: View {
                 if enabled {
                     Text("Server (host:port)").font(.caption).foregroundStyle(.secondary)
                     HStack {
-                        TextField("3.139.146.5", text: $serverHost)
+                        TextField("server IP or hostname", text: $serverHost)
                             .textFieldStyle(.roundedBorder).font(.system(.body, design: .monospaced))
                         Text(":").foregroundStyle(.secondary)
                         TextField("443", text: $serverPort)
@@ -36,7 +36,7 @@ struct WireGuardTCPWrapperEditorFields: View {
                         .instantTooltip("Off (default) matches wstunnel and is required for the bare-IP reference server whose cert won't validate against an IP.")
 
                     Text("Secret path prefix").font(.caption).foregroundStyle(.secondary)
-                    TextField("tun74fd08a683078a3e0439", text: $pathPrefix)
+                    TextField("path prefix from your server", text: $pathPrefix)
                         .textFieldStyle(.roundedBorder).font(.system(.body, design: .monospaced))
                         .instantTooltip("The secret WebSocket path prefix the server routes on. Upgrade path is /<prefix>/events.")
 

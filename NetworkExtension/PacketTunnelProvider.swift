@@ -1,5 +1,6 @@
 import Foundation
 import Darwin
+import Network
 import NetworkExtension
 import os.log
 
@@ -58,12 +59,37 @@ public final class PacketTunnelProvider: NEPacketTunnelProvider {
             // needed because wg-quick installs a system-wide default route. If the relay ever fails
             // to connect under full-tunnel, this assumption is the first suspect.
             logger.notice("[APPSPLIT_WGTCP] starting relay server=\(wrapper.serverHost):\(wrapper.serverPort) tls=\(wrapper.tls) verifyCert=\(wrapper.verifyCert) forward=\(wrapper.forwardHost):\(wrapper.forwardPort)")
-            let relay = WGTCPWrapperRelay(config: wrapper)
-            do {
-                try await relay.start()
-            } catch {
-                logger.error("[APPSPLIT_WGTCP] relay start failed: \(error.localizedDescription)")
-                throw error
+            // DIAGNOSTIC (temporary): before the WS relay dials, do a bare TCP-only connect to the
+            // same server:port and log whether the socket even reaches .ready and how long it takes.
+            // This disambiguates "relay's carrier is being captured/black-holed by our own NE stack"
+            // (TCP never reaches .ready → local capture) from "TLS handshake reset by an on-path
+            // middlebox" (.ready fast, then relay's -1200 → censorship/server, not us).
+            await probeTCPReachability(host: wrapper.serverHost, port: wrapper.serverPort)
+            // Carrier retry: on the hostile/lossy networks this transport targets, the first
+            // TLS+WebSocket upgrade can fail transiently (observed both -1200 TLS resets and slow
+            // upgrades). Each attempt uses a FRESH relay instance so there is no cross-attempt state
+            // to reason about (the relay's open-continuation machinery is strictly single-use). A
+            // successful attempt returns immediately; only a fully-failed path pays the full budget.
+            let maxAttempts = 3
+            var startedRelay: WGTCPWrapperRelay?
+            for attempt in 1...maxAttempts {
+                let candidate = WGTCPWrapperRelay(config: wrapper)
+                do {
+                    try await candidate.start()
+                    startedRelay = candidate
+                    logger.notice("[APPSPLIT_WGTCP] relay upgrade succeeded on attempt \(attempt)/\(maxAttempts)")
+                    break
+                } catch {
+                    candidate.stop()
+                    let ns = error as NSError
+                    logger.error("[APPSPLIT_WGTCP] relay start attempt \(attempt)/\(maxAttempts) failed: domain=\(ns.domain) code=\(ns.code) desc=\(ns.localizedDescription) userInfo=\(String(describing: ns.userInfo))")
+                    if attempt == maxAttempts { throw error }
+                    try? await Task.sleep(nanoseconds: 2_000_000_000) // 2s backoff before retry
+                }
+            }
+            guard let relay = startedRelay else {
+                throw NSError(domain: "WGTCPWrapperRelay", code: 6,
+                              userInfo: [NSLocalizedDescriptionKey: "relay failed to start after \(maxAttempts) attempts"])
             }
             wgTcpRelay = relay
             effectiveEndpointOverride = "127.0.0.1:\(relay.localUDPPort)"
@@ -107,6 +133,60 @@ public final class PacketTunnelProvider: NEPacketTunnelProvider {
         }
         logger.log("startTunnel completed adapter started")
         startResourceSampler()
+    }
+
+    /// DIAGNOSTIC (temporary): bare TCP-only connect to `host:port` from inside the extension
+    /// process, at the same point the WS relay dials. No TLS — isolates plain TCP egress.
+    /// `.waiting` is a *transient, auto-retrying* Network.framework state (e.g. a bring-up
+    /// ENETUNREACH that clears once the path settles), so we LOG it and keep waiting — a terminal
+    /// verdict is only `.ready`, `.failed`, or the timeout. On `.ready` we log the path's actual
+    /// interface(s) + local endpoint, which directly answers the real question: did egress go out
+    /// the physical interface (en0) or get scoped into the tunnel (utun / `.other`)?
+    private func probeTCPReachability(host: String, port: UInt16, timeoutMs: Int = 15000) async {
+        let nwHost = NWEndpoint.Host(host)
+        guard let nwPort = NWEndpoint.Port(rawValue: port) else {
+            logger.error("[APPSPLIT_WGTCP_PROBE] bad port \(port)")
+            return
+        }
+        let params = NWParameters.tcp
+        let conn = NWConnection(host: nwHost, port: nwPort, using: params)
+        let started = DispatchTime.now()
+        let probeQueue = DispatchQueue(label: "com.tunnelbahn.mac.networkextension.wgtcp.probe")
+        await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
+            // All closures below are dispatched on the serial `probeQueue`, so this plain flag needs
+            // no atomics. `.waiting` never finishes; only `.ready`/`.failed`/timeout do.
+            var resolved = false
+            func elapsedMs() -> String {
+                let ms = Double(DispatchTime.now().uptimeNanoseconds - started.uptimeNanoseconds) / 1_000_000
+                return String(format: "%.0f", ms)
+            }
+            func finish(_ msg: String) {
+                guard !resolved else { return }
+                resolved = true
+                self.logger.notice("[APPSPLIT_WGTCP_PROBE] \(msg) elapsed=\(elapsedMs())ms")
+                conn.cancel()
+                cont.resume()
+            }
+            conn.stateUpdateHandler = { state in
+                switch state {
+                case .ready:
+                    let path = conn.currentPath
+                    let ifaces = path?.availableInterfaces.map { "\($0.name):\($0.type)" }.joined(separator: ",") ?? "nil"
+                    let local = path?.localEndpoint.map { "\($0)" } ?? "nil"
+                    finish("TCP .ready to \(host):\(port) ifaces=[\(ifaces)] local=\(local)")
+                case let .failed(err):
+                    finish("TCP .failed to \(host):\(port) err=\(err)")
+                case let .waiting(err):
+                    // Transient — log and KEEP waiting (do not finish).
+                    self.logger.notice("[APPSPLIT_WGTCP_PROBE] TCP .waiting (transient) to \(host):\(port) err=\(err) elapsed=\(elapsedMs())ms")
+                default: break
+                }
+            }
+            probeQueue.asyncAfter(deadline: .now() + .milliseconds(timeoutMs)) {
+                finish("TCP timeout to \(host):\(port) after \(timeoutMs)ms")
+            }
+            conn.start(queue: probeQueue)
+        }
     }
 
     // MARK: - SSH transport
