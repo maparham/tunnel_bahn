@@ -17,7 +17,18 @@
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>0.1.0</string>
+	<string>1.2.0</string>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>com.tunnelbahn.mac</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>tunnelbahn</string>
+			</array>
+		</dict>
+	</array>
 	<key>CFBundleVersion</key>
 	<string>1</string>
 	<key>LSApplicationCategoryType</key>
@@ -31,16 +42,5 @@
 </string>
 	<key>TunnelBahnKeychainAccessGroup</key>
 	<string>$(AppIdentifierPrefix)com.tunnelbahn.mac</string>
-	<key>CFBundleURLTypes</key>
-	<array>
-		<dict>
-			<key>CFBundleURLName</key>
-			<string>com.tunnelbahn.mac</string>
-			<key>CFBundleURLSchemes</key>
-			<array>
-				<string>tunnelbahn</string>
-			</array>
-		</dict>
-	</array>
 </dict>
 </plist>

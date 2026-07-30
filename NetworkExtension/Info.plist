@@ -4,22 +4,24 @@
 <dict>
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
+	<key>CFBundleDisplayName</key>
+	<string>TunnelBahn Network Extension</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>
 	<string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
-	<key>CFBundleDisplayName</key>
-	<string>TunnelBahn Network Extension</string>
 	<key>CFBundleName</key>
 	<string>TunnelBahn Network Extension</string>
 	<key>CFBundlePackageType</key>
 	<string>SYSX</string>
 	<key>CFBundleShortVersionString</key>
-	<string>0.1.0</string>
+	<string>1.2.0</string>
 	<key>CFBundleVersion</key>
 	<string>10</string>
+	<key>NSSystemExtensionUsageDescription</key>
+	<string>TunnelBahn uses this extension to establish encrypted VPN tunnels.</string>
 	<key>NetworkExtension</key>
 	<dict>
 		<key>NEProviderClasses</key>
@@ -28,8 +30,6 @@
 			<string>$(PRODUCT_MODULE_NAME).PacketTunnelProvider</string>
 		</dict>
 	</dict>
-	<key>NSSystemExtensionUsageDescription</key>
-	<string>TunnelBahn uses this extension to establish encrypted VPN tunnels.</string>
 	<key>TunnelBahnKeychainAccessGroup</key>
 	<string>$(AppIdentifierPrefix)com.tunnelbahn.mac</string>
 </dict>
