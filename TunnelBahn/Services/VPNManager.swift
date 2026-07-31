@@ -305,20 +305,18 @@ final class VPNManager: ObservableObject {
             /// (and optional host probe). Used for app-tunnel split **or** full-tunnel app-tunnel byte accounting.
             let useAppTunnelNEStack = hasAppTunnelSelection || (profileOkForAccounting && isFullTrafficAccountingShape)
 
-            /// Full-tunnel mode with destination-CIDR filtering: activate the transparent proxy
-            /// to filter all apps' flows by destination CIDR, but keep the standard (non-per-app)
-            /// VPN manager so 0.0.0.0/0 → utun routes everything (including the proxy's own
-            /// relay connections) through the tunnel without needing per-app attribution.
-            // Exclude semantics are NOT supported in full-tunnel routing mode: this shape narrows the
-            // packet tunnel's includedRoutes to the listed CIDRs (include semantics), which is exactly
-            // backwards for exclude (listed = direct) and both leaks non-proxy-handled flows and
-            // re-tunnels the excluded CIDRs. The UI blocks selecting exclude here; this guard is the
-            // safety net for any residual stored state — an exclude profile in full-tunnel mode falls
-            // through to plain full-tunnel (tunnel everything), never the broken narrowed-routes shape.
+            /// Full-tunnel mode with destination filtering: activate the transparent proxy
+            /// to filter all apps' flows by destination verdicts (include OR exclude; the
+            /// proxy's DestinationRouteDecision handles both). Kernel route shapes are
+            /// built below via TunnelRouteShape.fullTunnelOverride: include narrows utun
+            /// includedRoutes to the filter CIDRs; exclude keeps the default route and
+            /// installs the sanitized filter CIDRs as excludedRoutes. Enforce-off residual
+            /// modes never reach here — the flag requires enforceDestinationFiltering, so
+            /// a stale `.exclude` with enforce off falls through to plain full-tunnel
+            /// (tunnel everything), matching the UI.
             let isFullTunnelDestFilterShape = AppConstants.isPerAppSplitTunnelEnabled
                 && !appTunnelModeSelected
                 && settings.enforceDestinationFiltering
-                && settings.destinationFilterMode == .include
                 && !destinationCidrStrings.isEmpty
                 && profileOkForAccounting
 
@@ -517,25 +515,40 @@ final class VPNManager: ObservableObject {
                 traceLog("app-tunnel: tunnel NEAppRules count=\(finalAppRules.count)")
             }
 
-            // In full_tunnel+filter shape, narrow the packet tunnel's includedRoutes to only
-            // the filter CIDRs so the kernel routes only those IPs through utun. Out-of-filter
+            // Full-tunnel filter kernel route shapes (TunnelRouteShape.fullTunnelOverride):
+            // include narrows includedRoutes to the filter CIDRs + DNS host routes; exclude
+            // keeps the default route and excludes the sanitized filter CIDRs. Out-of-tunnel
             // traffic falls back to en0 without needing any cleanup on disconnect or crash —
             // the next connect rewrites the file with whatever shape is active then.
-            // DNS server IPs must also be included; they live inside the WireGuard virtual
-            // network (e.g. 10.2.0.1) and are unreachable if not routed through utun.
-            let tunnelIncludedRoutes: [String]? = isFullTunnelDestFilterShape
-                ? destinationCidrStrings + extensionProfile.interface.dnsServers.map { $0.contains(":") ? "\($0)/128" : "\($0)/32" }
-                : nil
+            var tunnelIncludedRoutes: [String]? = nil
+            var tunnelExcludedRoutes: [String]? = nil
+            if isFullTunnelDestFilterShape {
+                let routeOverride = TunnelRouteShape.fullTunnelOverride(
+                    filterMode: destinationFilterMode,
+                    destinationCidrs: destinationCidrStrings,
+                    interfaceAddresses: extensionProfile.interface.addresses,
+                    dnsServers: extensionProfile.interface.dnsServers
+                )
+                tunnelIncludedRoutes = routeOverride.includedRoutes
+                tunnelExcludedRoutes = routeOverride.excludedRoutes
+                if !routeOverride.droppedExcludedRoutes.isEmpty {
+                    traceLog(
+                        "exclude kernel routes: dropped \(routeOverride.droppedExcludedRoutes.count) CIDR(s) overlapping tunnel interface/DNS: \(routeOverride.droppedExcludedRoutes.joined(separator: ","))"
+                    )
+                }
+            }
             let fileRuntimeData = try makeRuntimeStateData(
                 profile: extensionProfile,
                 includeSecrets: false,
-                appTunnelIncludedRoutes: tunnelIncludedRoutes
+                appTunnelIncludedRoutes: tunnelIncludedRoutes,
+                appTunnelExcludedRoutes: tunnelExcludedRoutes
             )
             try persistRuntimeState(data: fileRuntimeData)
             let tunnelRuntimeData = try makeRuntimeStateData(
                 profile: extensionProfile,
                 includeSecrets: true,
-                appTunnelIncludedRoutes: tunnelIncludedRoutes
+                appTunnelIncludedRoutes: tunnelIncludedRoutes,
+                appTunnelExcludedRoutes: tunnelExcludedRoutes
             )
             traceLog("runtime state persisted for profile=\(profile.name)")
             let appRules = useAppTunnelNEStack ? finalAppRules : []
@@ -545,7 +558,7 @@ final class VPNManager: ObservableObject {
                 useAppTunnelNEStack: useAppTunnelNEStack,
                 hasDefaultRoute: profileHasDefaultRoute(profile: extensionProfile),
                 destinationSplitActive: destinationSplitActive,
-                narrowedRoutes: isFullTunnelDestFilterShape
+                narrowedRoutes: tunnelIncludedRoutes != nil
             )
             managerSavedEnabledThisAttempt = true
 
@@ -1370,7 +1383,8 @@ final class VPNManager: ObservableObject {
     private func makeRuntimeStateData(
         profile: WireGuardProfile,
         includeSecrets: Bool,
-        appTunnelIncludedRoutes: [String]? = nil
+        appTunnelIncludedRoutes: [String]? = nil,
+        appTunnelExcludedRoutes: [String]? = nil
     ) throws -> Data {
         // WireGuard secrets (interface private key + preshared keys) only exist for WG profiles.
         // SSH profiles carry no WG interface key; their credential travels via `ssh.privateKeyRef`
@@ -1398,7 +1412,7 @@ final class VPNManager: ObservableObject {
             profile: profile,
             secrets: secrets,
             appTunnelIncludedRoutes: appTunnelIncludedRoutes,
-            appTunnelExcludedRoutes: nil,
+            appTunnelExcludedRoutes: appTunnelExcludedRoutes,
             ssh: ssh
         )
         return try JSONEncoder().encode(payload)
