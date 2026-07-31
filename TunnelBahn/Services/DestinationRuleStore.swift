@@ -6,19 +6,25 @@ struct DestinationCidrImportResult: Equatable {
     var skippedDuplicate: Int
 }
 
-private struct DestinationRoutingPersisted: Codable {
-    var customRules: [DestinationCidrRule]
-    var bulkGroups: [DestinationCidrBulkGroup]
-    var domainRules: [DestinationDomainRule]
+private struct DestinationRulesByModePersisted: Codable {
+    var include: DestinationModeRuleSet
+    var exclude: DestinationModeRuleSet
 }
 
 @MainActor
 final class DestinationRuleStore: ObservableObject {
+    /// The currently edited mode's rules. All published arrays and every mutator refer to
+    /// `editedMode`'s set; the other mode's set is parked in `offModeSet`.
     @Published private(set) var customRules: [DestinationCidrRule] = []
     @Published private(set) var bulkGroups: [DestinationCidrBulkGroup] = []
     @Published private(set) var domainRules: [DestinationDomainRule] = []
+    @Published private(set) var editedMode: DestinationFilterMode = .include
 
-    private let defaultsKey = "destinationCidrRules"
+    /// The not-currently-edited mode's complete rule set.
+    private var offModeSet = DestinationModeRuleSet()
+
+    private let defaultsKey = "destinationRulesByMode"
+    private let defaults: UserDefaults
 
     /// Prepared matchers invalidated when `customRules` / `bulkGroups` change — avoids re-preparing bulk CIDRs per stats refresh.
     private var cachedRulesFingerprint: [DestinationCidrRule]?
@@ -26,8 +32,29 @@ final class DestinationRuleStore: ObservableObject {
     private var cachedCustomPrepared: [(cidrDisplay: String, ranges: [IPCIDRMatcher.PreparedRange])] = []
     private var cachedBulkPrepared: [(title: String, ranges: [IPCIDRMatcher.PreparedRange])] = []
 
-    init() {
+    init(defaults: UserDefaults = AppGroupStore.defaults) {
+        self.defaults = defaults
         load()
+    }
+
+    // MARK: - Mode plumbing
+
+    /// Swap the published arrays to `mode`'s set. Pure view-of-data switch; content unchanged, no save().
+    func setEditedMode(_ mode: DestinationFilterMode) {
+        guard mode != editedMode else { return }
+        let outgoing = DestinationModeRuleSet(customRules: customRules, bulkGroups: bulkGroups, domainRules: domainRules)
+        let incoming = offModeSet
+        offModeSet = outgoing
+        editedMode = mode
+        customRules = incoming.customRules
+        bulkGroups = incoming.bulkGroups
+        domainRules = incoming.domainRules
+    }
+
+    func ruleSet(for mode: DestinationFilterMode) -> DestinationModeRuleSet {
+        mode == editedMode
+            ? DestinationModeRuleSet(customRules: customRules, bulkGroups: bulkGroups, domainRules: domainRules)
+            : offModeSet
     }
 
     func addRule(cidr: String) -> Bool {
@@ -109,34 +136,64 @@ final class DestinationRuleStore: ObservableObject {
         save()
     }
 
-    func replaceAll(
-        customRules newCustomRules: [DestinationCidrRule],
-        bulkGroups newBulkGroups: [DestinationCidrBulkGroup],
-        domainRules newDomainRules: [DestinationDomainRule] = []
+    // Domain rules live in two stores (this global store + the per-profile routing snapshot),
+    // and `replaceAll` runs on every connect/profile-load. Match the existing live rule by id OR
+    // domain and UNION the resolved IPs from both copies so an accumulated set is never lost when
+    // one source lags the other (never-remove). Without the union, applying a stale snapshot
+    // would shrink the enforced set below what the UI shows — the "displayed ≠ enforced" bug.
+    // Now applied per mode.
+    func replaceAll(include: DestinationModeRuleSet, exclude: DestinationModeRuleSet) {
+        var mergedInclude = include
+        mergedInclude.domainRules = Self.mergedDomainRules(
+            incoming: include.domainRules, existing: ruleSet(for: .include).domainRules
+        )
+        var mergedExclude = exclude
+        mergedExclude.domainRules = Self.mergedDomainRules(
+            incoming: exclude.domainRules, existing: ruleSet(for: .exclude).domainRules
+        )
+        let surfaced = editedMode == .include ? mergedInclude : mergedExclude
+        offModeSet = editedMode == .include ? mergedExclude : mergedInclude
+        customRules = surfaced.customRules
+        bulkGroups = surfaced.bulkGroups
+        domainRules = surfaced.domainRules
+        save()
+    }
+
+    /// Replaces one mode's set verbatim (no domain merge). Test-URL and reset path.
+    func replaceRules(
+        for mode: DestinationFilterMode,
+        customRules: [DestinationCidrRule],
+        bulkGroups: [DestinationCidrBulkGroup],
+        domainRules: [DestinationDomainRule]
     ) {
-        customRules = newCustomRules
-        bulkGroups = newBulkGroups
-        // Domain rules live in two stores (this global store + the per-profile routing snapshot),
-        // and `replaceAll` runs on every connect/profile-load. Match the existing live rule by id OR
-        // domain and UNION the resolved IPs from both copies so an accumulated set is never lost when
-        // one source lags the other (never-remove). Without the union, applying a stale snapshot
-        // would shrink the enforced set below what the UI shows — the "displayed ≠ enforced" bug.
-        domainRules = newDomainRules.map { incoming in
-            guard let existing = domainRules.first(where: { $0.id == incoming.id || $0.domain == incoming.domain }) else {
-                return incoming
+        if mode == editedMode {
+            self.customRules = customRules
+            self.bulkGroups = bulkGroups
+            self.domainRules = domainRules
+        } else {
+            offModeSet = DestinationModeRuleSet(customRules: customRules, bulkGroups: bulkGroups, domainRules: domainRules)
+        }
+        save()
+    }
+
+    private static func mergedDomainRules(
+        incoming: [DestinationDomainRule], existing: [DestinationDomainRule]
+    ) -> [DestinationDomainRule] {
+        incoming.map { incomingRule in
+            guard let match = existing.first(where: { $0.id == incomingRule.id || $0.domain == incomingRule.domain }) else {
+                return incomingRule
             }
-            var merged = incoming
-            var combined = existing.resolvedCidrs
-            for cidr in incoming.resolvedCidrs where !combined.contains(cidr) {
+            var merged = incomingRule
+            var combined = match.resolvedCidrs
+            for cidr in incomingRule.resolvedCidrs where !combined.contains(cidr) {
                 combined.append(cidr)
             }
             merged.resolvedCidrs = combined
-            merged.resolvedAt = existing.resolvedAt ?? incoming.resolvedAt
-            merged.resolvedTTL = existing.resolvedTTL > 0 ? existing.resolvedTTL : incoming.resolvedTTL
-            merged.status = combined.isEmpty ? incoming.status : .resolved(cidrCount: combined.count)
+            merged.resolvedAt = match.resolvedAt ?? incomingRule.resolvedAt
+            merged.resolvedTTL = match.resolvedTTL > 0 ? match.resolvedTTL : incomingRule.resolvedTTL
+            merged.status = combined.isEmpty ? incomingRule.status : .resolved(cidrCount: combined.count)
             return merged
         }
-        save()
     }
 
     func renameBulkGroup(id: UUID, title: String) {
@@ -274,12 +331,9 @@ final class DestinationRuleStore: ObservableObject {
     }
 
     /// Enabled entries only — invalid CIDR syntax may be included (extension skips unparsable strings). Order-preserving dedupe.
-    /// Section-enabled flags mirror the UI toggles persisted in AppSettings.
-    func enabledFlattenedCidrs(
-        customRangesEnabled: Bool = true,
-        bulkListsEnabled: Bool = true,
-        domainNamesEnabled: Bool = true
-    ) -> [String] {
+    /// Section-enabled flags mirror the UI toggles persisted per mode.
+    func enabledFlattenedCidrs(for mode: DestinationFilterMode, toggles: DestinationSectionToggles) -> [String] {
+        let set = ruleSet(for: mode)
         var seen = Set<String>()
         var out: [String] = []
         func append(_ raw: String) {
@@ -287,26 +341,18 @@ final class DestinationRuleStore: ObservableObject {
             guard !t.isEmpty, seen.insert(t).inserted else { return }
             out.append(t)
         }
-        if customRangesEnabled {
-            for rule in customRules where rule.isEnabled {
-                append(rule.cidr)
+        if toggles.customRanges {
+            for rule in set.customRules where rule.isEnabled { append(rule.cidr) }
+        }
+        if toggles.bulkLists {
+            for group in set.bulkGroups where group.isEnabled {
+                for c in group.cidrs { append(c) }
             }
         }
-        if bulkListsEnabled {
-            for group in bulkGroups where group.isEnabled {
-                for c in group.cidrs {
-                    append(c)
-                }
-            }
-        }
-        if domainNamesEnabled {
-            for rule in domainRules where rule.isEnabled {
-                // Include accumulated IPs regardless of transient status: a re-resolution in flight
-                // (.resolving) or a transient .failed must NOT drop already-known IPs from what's
-                // enforced (never-remove). Empty sets contribute nothing.
-                for cidr in rule.resolvedCidrs {
-                    append(cidr)
-                }
+        if toggles.domainNames {
+            // Include accumulated IPs regardless of transient status (never-remove).
+            for rule in set.domainRules where rule.isEnabled {
+                for cidr in rule.resolvedCidrs { append(cidr) }
             }
         }
         return out
@@ -315,12 +361,11 @@ final class DestinationRuleStore: ObservableObject {
     /// Enabled domain rules' names (lowercased, deduped, order-preserving) for the proxy's SNI
     /// matcher. Unlike the resolved IPs in `enabledFlattenedCidrs`, these are the *names* — the
     /// proxy compares them against each TCP flow's TLS SNI to route by hostname.
-    /// `domainNamesEnabled` mirrors the same section toggle used by `enabledFlattenedCidrs`.
-    func enabledDomainNames(domainNamesEnabled: Bool = true) -> [String] {
-        guard domainNamesEnabled else { return [] }
+    func enabledDomainNames(for mode: DestinationFilterMode, toggles: DestinationSectionToggles) -> [String] {
+        guard toggles.domainNames else { return [] }
         var seen = Set<String>()
         var out: [String] = []
-        for rule in domainRules where rule.isEnabled {
+        for rule in ruleSet(for: mode).domainRules where rule.isEnabled {
             let name = rule.domain.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
             guard !name.isEmpty, seen.insert(name).inserted else { continue }
             out.append(name)
@@ -344,21 +389,22 @@ final class DestinationRuleStore: ObservableObject {
     }
 
     private func save() {
-        let payload = DestinationRoutingPersisted(customRules: customRules, bulkGroups: bulkGroups, domainRules: domainRules)
-        let encoder = JSONEncoder()
-        guard let data = try? encoder.encode(payload) else { return }
-        AppGroupStore.defaults.set(data, forKey: defaultsKey)
+        let payload = DestinationRulesByModePersisted(
+            include: ruleSet(for: .include),
+            exclude: ruleSet(for: .exclude)
+        )
+        guard let data = try? JSONEncoder().encode(payload) else { return }
+        defaults.set(data, forKey: defaultsKey)
     }
 
     private func load() {
-        guard let data = AppGroupStore.defaults.data(forKey: defaultsKey) else {
-            return
-        }
-        guard let persisted = try? JSONDecoder().decode(DestinationRoutingPersisted.self, from: data) else {
-            return
-        }
-        customRules = persisted.customRules
-        bulkGroups = persisted.bulkGroups
-        domainRules = persisted.domainRules
+        guard let data = defaults.data(forKey: defaultsKey),
+              let persisted = try? JSONDecoder().decode(DestinationRulesByModePersisted.self, from: data)
+        else { return }
+        // editedMode is .include at init.
+        customRules = persisted.include.customRules
+        bulkGroups = persisted.include.bulkGroups
+        domainRules = persisted.include.domainRules
+        offModeSet = persisted.exclude
     }
 }
