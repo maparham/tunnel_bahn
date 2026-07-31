@@ -638,7 +638,7 @@ struct RoutingView: View {
         }
     }
 
-    /// Extracts exactly the host from a URL or bare domain string — no parent-domain expansion.
+    /// Extracts exactly the host from a URL or bare domain string, with no parent-domain expansion.
     /// The proxy's SNI matcher is already suffix-based (`x.com` matches `api.x.com`), so entering a
     /// specific host covers its subdomains going DOWN. The old behavior ALSO added the parent
     /// (www.youtube.com → youtube.com), which broadened UP to the whole registrable domain and, with
