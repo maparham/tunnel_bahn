@@ -111,8 +111,10 @@ so profile switching just works.
 - Exclude mode with an empty rule list is legal: "tunnel everything" for routed apps.
   No special-casing; the UI may note it.
 - Invalid CIDR lines are skipped by `IPCIDRMatcher.prepare`, as today.
-- Live appMessage config pushes carry the mode; a mid-session mode flip republishes
-  network rules through the existing `applyDestinationPayload` change-detection path.
+- The mode is connect-time static (like `dropTunneledUDP`): it arrives via
+  `providerConfiguration`, and the appMessage live-push channel never changes it — that
+  channel only widens the range set. This matches the UI, which locks the routing mode
+  radios while a tunnel is connected (`destinationRoutingEditingLocked`).
 
 ## Testing
 
