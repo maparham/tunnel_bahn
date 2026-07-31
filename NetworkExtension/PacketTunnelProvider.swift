@@ -131,6 +131,9 @@ public final class PacketTunnelProvider: NEPacketTunnelProvider {
             }
         }
         logger.log("startTunnel completed adapter started")
+        // Seed the sampler's time-delta baseline so the host's first poll measures a real
+        // interval (matching the removed timer's pre-warm) instead of a no-baseline zero.
+        _ = sampleResources()
     }
 
     /// DIAGNOSTIC (temporary): bare TCP-only connect to `host:port` from inside the extension
@@ -290,6 +293,9 @@ public final class PacketTunnelProvider: NEPacketTunnelProvider {
         try await setTunnelNetworkSettings(settings)
 
         logger.notice("[APPSPLIT_EXT_SUMMARY] outcome=started transport=ssh host=\(params.host) port=\(params.port) user=\(params.username)")
+        // Seed the sampler's time-delta baseline so the host's first poll measures a real
+        // interval (matching the removed timer's pre-warm) instead of a no-baseline zero.
+        _ = sampleResources()
     }
 
     /// Tears down the SSH relay server then the SSH transport (order matters: stop feeding the
@@ -341,9 +347,9 @@ public final class PacketTunnelProvider: NEPacketTunnelProvider {
             return await diagnosticsPayload().data(using: .utf8)
         }
         if command == "resourceStats" {
-            // The host can't read this extension's resource file across the uid boundary, so it
-            // pulls our own CPU/memory over IPC instead. Reuses the same sampler as the timer path
-            // so the host sees the smoothed time-delta value, not a divergent snapshot.
+            // The uid boundary blocks any shared-file path, so the host pulls our own CPU/memory
+            // over IPC. All sampling funnels through `sampleResources()` so concurrent IPC replies
+            // see one coherent smoothed time-delta value.
             let sample = sampleResources()
             let payload: [String: Any] = [
                 "cpu": sample.cpuPercent,

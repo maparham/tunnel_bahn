@@ -200,6 +200,9 @@ public final class TransparentProxyProvider: NETransparentProxyProvider {
                 return
             }
             self.startFlushTimer(generation: generation)
+            // Seed the sampler's time-delta baseline so the host's first poll measures a real
+            // interval (matching the removed timer's pre-warm) instead of a no-baseline zero.
+            _ = self.sampleResources()
             Self.log.notice("startProxy completed")
             completionHandler(nil)
         }
@@ -285,8 +288,8 @@ public final class TransparentProxyProvider: NETransparentProxyProvider {
             return currentStatsPayload() ?? (try? Self.statsEncoder.encode(PerAppTransferStats.empty))
         case "getResourceStats":
             // Same uid-boundary reason as getStats — hand back this extension's own CPU/memory.
-            // `sampleResources()` hops onto `flushQueue` so it shares the smoothed time-delta
-            // state with the flush-timer path instead of returning a divergent reading.
+            // `sampleResources()` hops onto `flushQueue` so concurrent IPC replies can't race the
+            // sampler's cross-sample time-delta state.
             let sample = sampleResources()
             let payload: [String: Any] = [
                 "cpu": sample.cpuPercent,
