@@ -532,8 +532,10 @@ final class VPNManager: ObservableObject {
                 tunnelIncludedRoutes = routeOverride.includedRoutes
                 tunnelExcludedRoutes = routeOverride.excludedRoutes
                 if !routeOverride.droppedExcludedRoutes.isEmpty {
+                    let droppedPreview = routeOverride.droppedExcludedRoutes.prefix(8).joined(separator: ",")
+                    let droppedSuffix = routeOverride.droppedExcludedRoutes.count > 8 ? "+\(routeOverride.droppedExcludedRoutes.count - 8)more" : ""
                     traceLog(
-                        "exclude kernel routes: dropped \(routeOverride.droppedExcludedRoutes.count) CIDR(s) overlapping tunnel interface/DNS: \(routeOverride.droppedExcludedRoutes.joined(separator: ","))"
+                        "exclude kernel routes: dropped \(routeOverride.droppedExcludedRoutes.count) CIDR(s) overlapping tunnel interface/DNS: \(droppedPreview)\(droppedSuffix)"
                     )
                 }
             }

@@ -895,6 +895,10 @@ final class BoringTunAdapter: @unchecked Sendable {
             log.error("both included and excluded route overrides present; ignoring excluded")
             usingDestinationExclude = false
         }
+        // Exclude shape is active if the override is non-nil (list may legitimately be empty
+        // after host-side sanitization). Used to gate DNS: even an all-sanitized exclude list
+        // keeps tunnel DNS off; proxy port-53 redirect owns DNS resolution.
+        let excludeShapeActive = appTunnelExcludedRoutes != nil && !usingDestinationAppTunnel
         let excludeCIDRs = usingDestinationExclude ? (appTunnelExcludedRoutes ?? []) : []
         let routeCIDRs = usingDestinationAppTunnel ? appTunnelIncludedRoutes! : allAllowedIPs
         let hasDefaultRoute = !usingDestinationAppTunnel
@@ -977,7 +981,7 @@ final class BoringTunAdapter: @unchecked Sendable {
         }
 
         if !profile.interface.dnsServers.isEmpty && hasDefaultRoute
-            && !usingDestinationAppTunnel && !usingDestinationExclude {
+            && !usingDestinationAppTunnel && !excludeShapeActive {
             // Only apply tunnel DNS when a default route is present. With split-tunnel
             // AllowedIPs, setting dnsSettings with servers outside the AllowedIPs CIDRs
             // causes macOS to install a default route on utun to make those servers reachable,
