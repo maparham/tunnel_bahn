@@ -13,32 +13,32 @@ struct RoutingView: View {
     @State private var importError: String?
     @State private var lastImportSummary: String?
     @State private var bulkPrefixBrowse: BulkPrefixBrowsePayload?
-    private var bulkListsEnabled: Bool { appState.settings.destinationBulkListsEnabled }
-    private var customRangesEnabled: Bool { appState.settings.destinationCustomRangesEnabled }
-    private var domainNamesEnabled: Bool { appState.settings.destinationDomainNamesEnabled }
+    private var bulkListsEnabled: Bool { appState.settings.activeSectionToggles.bulkLists }
+    private var customRangesEnabled: Bool { appState.settings.activeSectionToggles.customRanges }
+    private var domainNamesEnabled: Bool { appState.settings.activeSectionToggles.domainNames }
 
     private var bulkListsEnabledBinding: Binding<Bool> {
-        Binding(get: { appState.settings.destinationBulkListsEnabled },
+        Binding(get: { appState.settings.activeSectionToggles.bulkLists },
                 set: { newValue in
-                    appState.settings.destinationBulkListsEnabled = newValue
+                    appState.settings.activeSectionToggles.bulkLists = newValue
                     if newValue && appState.destinationRuleStore.bulkGroups.contains(where: \.isEnabled) {
                         appState.settings.enforceDestinationFiltering = true
                     }
                 })
     }
     private var customRangesEnabledBinding: Binding<Bool> {
-        Binding(get: { appState.settings.destinationCustomRangesEnabled },
+        Binding(get: { appState.settings.activeSectionToggles.customRanges },
                 set: { newValue in
-                    appState.settings.destinationCustomRangesEnabled = newValue
+                    appState.settings.activeSectionToggles.customRanges = newValue
                     if newValue && appState.destinationRuleStore.customRules.contains(where: \.isEnabled) {
                         appState.settings.enforceDestinationFiltering = true
                     }
                 })
     }
     private var domainNamesEnabledBinding: Binding<Bool> {
-        Binding(get: { appState.settings.destinationDomainNamesEnabled },
+        Binding(get: { appState.settings.activeSectionToggles.domainNames },
                 set: { newValue in
-                    appState.settings.destinationDomainNamesEnabled = newValue
+                    appState.settings.activeSectionToggles.domainNames = newValue
                     if newValue && appState.destinationRuleStore.domainRules.contains(where: \.isEnabled) {
                         appState.settings.enforceDestinationFiltering = true
                     }
@@ -168,9 +168,9 @@ struct RoutingView: View {
                 if newValue && !hasAnyDestinations { return }
                 appState.settings.enforceDestinationFiltering = newValue
                 if !newValue {
-                    appState.settings.destinationBulkListsEnabled = false
-                    appState.settings.destinationCustomRangesEnabled = false
-                    appState.settings.destinationDomainNamesEnabled = false
+                    appState.settings.activeSectionToggles.bulkLists = false
+                    appState.settings.activeSectionToggles.customRanges = false
+                    appState.settings.activeSectionToggles.domainNames = false
                 }
             }
         )

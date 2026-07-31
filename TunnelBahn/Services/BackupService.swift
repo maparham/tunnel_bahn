@@ -109,13 +109,11 @@ final class BackupService {
                         raw.appRules = []
                     }
                     if !options.includeDestinationRouting {
-                        raw.customCidrRules = []
-                        raw.bulkGroups = []
-                        raw.domainRules = []
+                        raw.include = DestinationModeRuleSet()
+                        raw.exclude = DestinationModeRuleSet()
                         raw.enforceDestinationFiltering = false
-                        raw.bulkListsEnabled = true
-                        raw.customRangesEnabled = true
-                        raw.domainNamesEnabled = true
+                        raw.includeToggles = DestinationSectionToggles()
+                        raw.excludeToggles = DestinationSectionToggles()
                     }
                     snapshot = raw
                 }
@@ -319,10 +317,11 @@ final class BackupService {
             snapshot.appRules = []
         }
         if !options.includeDestinationRouting {
-            snapshot.customCidrRules = []
-            snapshot.bulkGroups = []
-            snapshot.domainRules = []
+            snapshot.include = DestinationModeRuleSet()
+            snapshot.exclude = DestinationModeRuleSet()
             snapshot.enforceDestinationFiltering = false
+            snapshot.includeToggles = DestinationSectionToggles()
+            snapshot.excludeToggles = DestinationSectionToggles()
         }
         snapshot.appRules = sanitizeAppRules(snapshot.appRules)
         return snapshot

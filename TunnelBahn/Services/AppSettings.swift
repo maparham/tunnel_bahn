@@ -39,14 +39,9 @@ final class AppSettings: ObservableObject {
         didSet { save() }
     }
 
-    /// Set by AppState when a profile is selected; not persisted independently.
-    @Published var destinationBulkListsEnabled: Bool = true
-
-    /// Set by AppState when a profile is selected; not persisted independently.
-    @Published var destinationCustomRangesEnabled: Bool = true
-
-    /// Set by AppState when a profile is selected; not persisted independently.
-    @Published var destinationDomainNamesEnabled: Bool = true
+    /// Per-mode section toggles. Set by AppState when a profile is selected; not persisted independently.
+    @Published var includeSectionToggles = DestinationSectionToggles()
+    @Published var excludeSectionToggles = DestinationSectionToggles()
 
     /// Set by AppState when a profile is selected; not persisted independently.
     @Published var destinationFilterMode: DestinationFilterMode = .include
@@ -54,6 +49,20 @@ final class AppSettings: ObservableObject {
     /// Profile-wide: when true, routed apps' DNS is not redirected to the tunnel
     /// resolver. Set by AppState when a profile is selected; not persisted independently.
     @Published var resolveDNSLocally: Bool = false
+
+    func sectionToggles(for mode: DestinationFilterMode) -> DestinationSectionToggles {
+        mode == .exclude ? excludeSectionToggles : includeSectionToggles
+    }
+
+    func setSectionToggles(_ toggles: DestinationSectionToggles, for mode: DestinationFilterMode) {
+        if mode == .exclude { excludeSectionToggles = toggles } else { includeSectionToggles = toggles }
+    }
+
+    /// The section toggles of the mode currently selected in `destinationFilterMode`.
+    var activeSectionToggles: DestinationSectionToggles {
+        get { sectionToggles(for: destinationFilterMode) }
+        set { setSectionToggles(newValue, for: destinationFilterMode) }
+    }
 
     private enum Keys {
         static let autoReconnect = "autoReconnect"

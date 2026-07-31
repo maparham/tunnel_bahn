@@ -126,14 +126,19 @@ final class AppState: ObservableObject {
             .sink { [weak self] _ in self?.objectWillChange.send() }
             .store(in: &cancellables)
 
+        // The store's published arrays must always show the selected mode's rule set.
+        settings.$destinationFilterMode
+            .removeDuplicates()
+            .sink { [weak self] mode in self?.destinationRuleStore.setEditedMode(mode) }
+            .store(in: &cancellables)
+
         // Save current snapshot (debounced) whenever per-profile settings change.
         appRuleStore.objectWillChange
             .merge(with: destinationRuleStore.objectWillChange)
             .merge(with: settings.$routingMode.dropFirst().map { _ in () }.eraseToAnyPublisher())
             .merge(with: settings.$enforceDestinationFiltering.dropFirst().map { _ in () }.eraseToAnyPublisher())
-            .merge(with: settings.$destinationBulkListsEnabled.dropFirst().map { _ in () }.eraseToAnyPublisher())
-            .merge(with: settings.$destinationCustomRangesEnabled.dropFirst().map { _ in () }.eraseToAnyPublisher())
-            .merge(with: settings.$destinationDomainNamesEnabled.dropFirst().map { _ in () }.eraseToAnyPublisher())
+            .merge(with: settings.$includeSectionToggles.dropFirst().map { _ in () }.eraseToAnyPublisher())
+            .merge(with: settings.$excludeSectionToggles.dropFirst().map { _ in () }.eraseToAnyPublisher())
             .merge(with: settings.$destinationFilterMode.dropFirst().map { _ in () }.eraseToAnyPublisher())
             .merge(with: settings.$resolveDNSLocally.dropFirst().map { _ in () }.eraseToAnyPublisher())
             .debounce(for: .milliseconds(500), scheduler: DispatchQueue.main)
@@ -212,16 +217,12 @@ final class AppState: ObservableObject {
         loadedProfileID = profileID
         settings.routingMode = snapshot.routingMode
         appRuleStore.replaceAll(snapshot.appRules)
-        destinationRuleStore.replaceAll(
-            customRules: snapshot.customCidrRules,
-            bulkGroups: snapshot.bulkGroups,
-            domainRules: snapshot.domainRules
-        )
-        settings.enforceDestinationFiltering = snapshot.enforceDestinationFiltering
-        settings.destinationBulkListsEnabled = snapshot.bulkListsEnabled
-        settings.destinationCustomRangesEnabled = snapshot.customRangesEnabled
-        settings.destinationDomainNamesEnabled = snapshot.domainNamesEnabled
         settings.destinationFilterMode = snapshot.filterMode
+        destinationRuleStore.setEditedMode(snapshot.filterMode)
+        destinationRuleStore.replaceAll(include: snapshot.include, exclude: snapshot.exclude)
+        settings.enforceDestinationFiltering = snapshot.enforceDestinationFiltering
+        settings.includeSectionToggles = snapshot.includeToggles
+        settings.excludeSectionToggles = snapshot.excludeToggles
         settings.resolveDNSLocally = snapshot.resolveDNSLocally
         domainResolutionCoordinator.resolveAll()
         if syncDestinationRouting {
@@ -242,26 +243,23 @@ final class AppState: ObservableObject {
         // Live state currently holds tunnelbahn://test overrides — persisting it would
         // permanently rewrite the user's profile snapshot with pinned test values.
         guard !testSettingsPinned else { return }
-        let bulkListsEnabled = settings.destinationBulkListsEnabled
-        let customRangesEnabled = settings.destinationCustomRangesEnabled
-        let domainNamesEnabled = settings.destinationDomainNamesEnabled
+        let activeToggles = settings.activeSectionToggles
+        let activeSet = destinationRuleStore.ruleSet(for: settings.destinationFilterMode)
         let hasEffectiveDestinations =
-            (customRangesEnabled && destinationRuleStore.customRules.contains(where: \.isEnabled))
-            || (bulkListsEnabled && destinationRuleStore.bulkGroups.contains(where: \.isEnabled))
-            || (domainNamesEnabled && destinationRuleStore.domainRules.contains(where: \.isEnabled))
+            (activeToggles.customRanges && activeSet.customRules.contains(where: \.isEnabled))
+            || (activeToggles.bulkLists && activeSet.bulkGroups.contains(where: \.isEnabled))
+            || (activeToggles.domainNames && activeSet.domainRules.contains(where: \.isEnabled))
         // Never persist enforceDestinationFiltering=true with an empty effective CIDR set —
         // that would silently activate filtering against an empty list on the next connect.
         let enforceFiltering = settings.enforceDestinationFiltering && hasEffectiveDestinations
         let snapshot = ProfileRoutingSnapshot(
             routingMode: settings.routingMode,
             enforceDestinationFiltering: enforceFiltering,
-            bulkListsEnabled: bulkListsEnabled,
-            customRangesEnabled: customRangesEnabled,
-            domainNamesEnabled: domainNamesEnabled,
             appRules: appRuleStore.rules,
-            customCidrRules: destinationRuleStore.customRules,
-            bulkGroups: destinationRuleStore.bulkGroups,
-            domainRules: destinationRuleStore.domainRules,
+            include: destinationRuleStore.ruleSet(for: .include),
+            exclude: destinationRuleStore.ruleSet(for: .exclude),
+            includeToggles: settings.includeSectionToggles,
+            excludeToggles: settings.excludeSectionToggles,
             filterMode: settings.destinationFilterMode,
             resolveDNSLocally: settings.resolveDNSLocally
         )
@@ -294,15 +292,17 @@ final class AppState: ObservableObject {
                 profile: profile,
                 rules: appRuleStore.rules,
                 destinationCidrStrings: destinationRuleStore.enabledFlattenedCidrs(
-                    customRangesEnabled: settings.destinationCustomRangesEnabled,
-                    bulkListsEnabled: settings.destinationBulkListsEnabled,
-                    domainNamesEnabled: settings.destinationDomainNamesEnabled
+                    for: settings.destinationFilterMode,
+                    toggles: settings.activeSectionToggles
                 ),
                 // App-tunnel only: domain rules also route by name (TLS SNI) in the proxy, catching
                 // CDN/anycast IPs the host resolver never returned. Resolved IPs still ship in the
                 // CIDR set above (covers UDP/QUIC + non-SNI). Full-tunnel passes none — unchanged.
                 destinationDomainNames: settings.routingMode == .appTunnel
-                    ? destinationRuleStore.enabledDomainNames(domainNamesEnabled: settings.destinationDomainNamesEnabled)
+                    ? destinationRuleStore.enabledDomainNames(
+                        for: settings.destinationFilterMode,
+                        toggles: settings.activeSectionToggles
+                    )
                     : []
             )
         }
@@ -340,13 +340,15 @@ final class AppState: ObservableObject {
                 profile: profile,
                 rules: appRuleStore.rules,
                 destinationCidrStrings: destinationRuleStore.enabledFlattenedCidrs(
-                    customRangesEnabled: settings.destinationCustomRangesEnabled,
-                    bulkListsEnabled: settings.destinationBulkListsEnabled,
-                    domainNamesEnabled: settings.destinationDomainNamesEnabled
+                    for: settings.destinationFilterMode,
+                    toggles: settings.activeSectionToggles
                 ),
                 // Mirror connectProfile: app-tunnel routes domains by SNI in the proxy.
                 destinationDomainNames: settings.routingMode == .appTunnel
-                    ? destinationRuleStore.enabledDomainNames(domainNamesEnabled: settings.destinationDomainNamesEnabled)
+                    ? destinationRuleStore.enabledDomainNames(
+                        for: settings.destinationFilterMode,
+                        toggles: settings.activeSectionToggles
+                    )
                     : []
             )
         }
@@ -360,7 +362,7 @@ final class AppState: ObservableObject {
     ///   • IP present here but absent from destCIDRs → the payload-building path dropped it.
     /// Grep: `log show --predicate 'subsystem == "com.tunnelbahn.mac"' | grep APPSPLIT_DOMAIN_RESOLVE`
     private func logDomainResolutionForConnect() {
-        guard settings.destinationDomainNamesEnabled else {
+        guard settings.activeSectionToggles.domainNames else {
             Self.log.notice("[APPSPLIT_DOMAIN_RESOLVE] domainNames disabled — domain rules contribute no CIDRs")
             return
         }
@@ -393,12 +395,12 @@ final class AppState: ObservableObject {
             profileStore.delete(id: id)
         }
         appRuleStore.replaceAll([])
-        destinationRuleStore.replaceAll(customRules: [], bulkGroups: [], domainRules: [])
+        destinationRuleStore.replaceAll(include: DestinationModeRuleSet(), exclude: DestinationModeRuleSet())
         settings.routingMode = .fullTunnel
         settings.enforceDestinationFiltering = false
-        settings.destinationBulkListsEnabled = true
-        settings.destinationCustomRangesEnabled = true
-        settings.destinationDomainNamesEnabled = true
+        settings.destinationFilterMode = .include
+        settings.includeSectionToggles = DestinationSectionToggles()
+        settings.excludeSectionToggles = DestinationSectionToggles()
         settings.autoReconnect = true
         settings.launchAtLogin = false
         settings.showTrafficRates = true
@@ -434,9 +436,8 @@ final class AppState: ObservableObject {
         vpnManager.syncDestinationRoutingFromHostActivity(
             enforceFiltering: settings.enforceDestinationFiltering,
             flattenedRangeStrings: destinationRuleStore.enabledFlattenedCidrs(
-                customRangesEnabled: settings.destinationCustomRangesEnabled,
-                bulkListsEnabled: settings.destinationBulkListsEnabled,
-                domainNamesEnabled: settings.destinationDomainNamesEnabled
+                for: settings.destinationFilterMode,
+                toggles: settings.activeSectionToggles
             ),
             // Normalize: when enforce is off, pass include so a residual `.exclude` can never
             // make the host-file snapshot declare exclude semantics on an enforce-off profile.
@@ -477,9 +478,8 @@ final class AppState: ObservableObject {
               connectedID == loadedID else { return }
 
         let ranges = destinationRuleStore.enabledFlattenedCidrs(
-            customRangesEnabled: settings.destinationCustomRangesEnabled,
-            bulkListsEnabled: settings.destinationBulkListsEnabled,
-            domainNamesEnabled: settings.destinationDomainNamesEnabled
+            for: settings.destinationFilterMode,
+            toggles: settings.activeSectionToggles
         )
         guard ranges != lastSyncedConnectedDestinationRanges else { return }
         lastSyncedConnectedDestinationRanges = ranges

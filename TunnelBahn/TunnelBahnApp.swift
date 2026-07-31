@@ -39,9 +39,8 @@ private struct MenuBarRefreshInputs: Equatable {
         guard state == .connected || state == .reconnecting else { return nil }
         guard appState.settings.enforceDestinationFiltering else { return nil }
         let cidrs = appState.destinationRuleStore.enabledFlattenedCidrs(
-                customRangesEnabled: appState.settings.destinationCustomRangesEnabled,
-                bulkListsEnabled: appState.settings.destinationBulkListsEnabled,
-                domainNamesEnabled: appState.settings.destinationDomainNamesEnabled
+                for: appState.settings.destinationFilterMode,
+                toggles: appState.settings.activeSectionToggles
             )
             .filter { !IPCIDRMatcher.prepare([$0]).isEmpty }
         if cidrs.isEmpty {
@@ -373,20 +372,26 @@ final class AppLifecycleDelegate: NSObject, NSApplicationDelegate, NSWindowDeleg
         if let rawCidrs = param("setDestinationCIDRs") {
             let cidrs = rawCidrs.split(separator: ",").map(String.init)
             let rules = cidrs.map { DestinationCidrRule(cidr: $0.trimmingCharacters(in: .whitespaces), isEnabled: true) }
-            appState.destinationRuleStore.replaceAll(
+            let mode = appState.settings.destinationFilterMode
+            let current = appState.destinationRuleStore.ruleSet(for: mode)
+            appState.destinationRuleStore.replaceRules(
+                for: mode,
                 customRules: rules,
-                bulkGroups: appState.destinationRuleStore.bulkGroups,
-                domainRules: appState.destinationRuleStore.domainRules
+                bulkGroups: current.bulkGroups,
+                domainRules: current.domainRules
             )
             Self.testURLLog.notice("[APPSPLIT_TEST_URL] set \(rules.count) destination CIDRs")
         }
 
         // ── clearDestinationCIDRs=1 ────────────────────────────────────────────
         if flag("clearDestinationCIDRs") {
-            appState.destinationRuleStore.replaceAll(
+            let mode = appState.settings.destinationFilterMode
+            let current = appState.destinationRuleStore.ruleSet(for: mode)
+            appState.destinationRuleStore.replaceRules(
+                for: mode,
                 customRules: [],
-                bulkGroups: appState.destinationRuleStore.bulkGroups,
-                domainRules: appState.destinationRuleStore.domainRules
+                bulkGroups: current.bulkGroups,
+                domainRules: current.domainRules
             )
             Self.testURLLog.notice("[APPSPLIT_TEST_URL] cleared destination CIDRs")
         }
@@ -456,8 +461,8 @@ final class AppLifecycleDelegate: NSObject, NSApplicationDelegate, NSWindowDeleg
                 "publicIP": state.publicIP ?? "",
                 "appRuleCount": appState.appRuleStore.rules.count,
                 "destinationCidrCount": appState.destinationRuleStore.customRules.count,
-                "destinationBulkListsEnabled": appState.settings.destinationBulkListsEnabled,
-                "destinationCustomRangesEnabled": appState.settings.destinationCustomRangesEnabled
+                "destinationBulkListsEnabled": appState.settings.activeSectionToggles.bulkLists,
+                "destinationCustomRangesEnabled": appState.settings.activeSectionToggles.customRanges
             ]
             if let data = try? JSONSerialization.data(withJSONObject: obj, options: .prettyPrinted) {
                 let path = "/tmp/tunnelbahn-state.json"

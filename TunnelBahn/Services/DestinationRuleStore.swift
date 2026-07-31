@@ -110,7 +110,7 @@ final class DestinationRuleStore: ObservableObject {
     }
 
     func removeRule(ids: IndexSet) {
-        customRules.remove(atOffsets: ids)
+        for index in ids.sorted(by: >) { customRules.remove(at: index) }
         save()
     }
 
