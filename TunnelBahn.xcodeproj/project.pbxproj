@@ -8,6 +8,7 @@
 
 /* Begin PBXBuildFile section */
 		014C2FCBF12405FEFD835E63 /* ProfileDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B3B3A483CAA076196A178605 /* ProfileDetailView.swift */; };
+		027F3B9FEA04135D6224A3D0 /* DestinationRouting.swift in Sources */ = {isa = PBXBuildFile; fileRef = D78392AE063F46CA11402F13 /* DestinationRouting.swift */; };
 		0307DA1B17F9DCDF85FA5597 /* SharedLogWriter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 748BFC2AF3A11879E344CF2E /* SharedLogWriter.swift */; };
 		035FABFA0601E358F352C11B /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 832330F2308BBB09BCD44A43 /* Assets.xcassets */; };
 		0393E05DDE08CCC0854817CD /* PerAppStatsProxyManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = F7E43092154982D7DF581773 /* PerAppStatsProxyManager.swift */; };
@@ -66,6 +67,7 @@
 		4D775B7E697727EB5FADB127 /* WGTunnelJWT.swift in Sources */ = {isa = PBXBuildFile; fileRef = 96F40C554C8EC710FF48B351 /* WGTunnelJWT.swift */; };
 		53602B80FA25CDD0EDFD9AAF /* DebugSelfChecks.swift in Sources */ = {isa = PBXBuildFile; fileRef = 419A1112BE970F26BC9AE3ED /* DebugSelfChecks.swift */; };
 		55F92A597C5E3200AA3A0696 /* Constants.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5FD44AFE7F187FA0508C1EC3 /* Constants.swift */; };
+		57757478C23DA0D03FFB3FE0 /* TransparentProxyRuntimeConfig.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2B47182EE791A9342A1CFFB /* TransparentProxyRuntimeConfig.swift */; };
 		58AD33EA19800FF1A507C5DB /* NIOPosix in Frameworks */ = {isa = PBXBuildFile; productRef = 40196FBB930DD854269AB451 /* NIOPosix */; };
 		58B1CD61A8B7AD2B22D59579 /* DestinationCidrRule.swift in Sources */ = {isa = PBXBuildFile; fileRef = E8DB280E40DE01D8F9752BFC /* DestinationCidrRule.swift */; };
 		5CAE3262389A512CC2C026DB /* PacketTunnelExtension.systemextension in Embed System Extensions */ = {isa = PBXBuildFile; fileRef = 9B3CB79223DD6D3B708B633B /* PacketTunnelExtension.systemextension */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
@@ -115,6 +117,7 @@
 		9F2DC7DE0C7D7C9358CBCD16 /* TransparentProxyRuntimeConfig.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2B47182EE791A9342A1CFFB /* TransparentProxyRuntimeConfig.swift */; };
 		A3394A953CA232BDAA3D2B91 /* WGTCPWrapperRelayTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7AAA1FCAD780732BB9EAA949 /* WGTCPWrapperRelayTests.swift */; };
 		A37B3952FB6266F313B6E0C4 /* SharedLogWriter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 748BFC2AF3A11879E344CF2E /* SharedLogWriter.swift */; };
+		A3A89F6956AE4AF7AFF6E0C2 /* DestinationRoutingModeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 089E892C735D440F61FEAFA1 /* DestinationRoutingModeTests.swift */; };
 		A685DC94E4525F366418659B /* LaunchAtLoginService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6D9A4FB22EE531616E707012 /* LaunchAtLoginService.swift */; };
 		A7236DEDC5D196CAE299BE89 /* ProfileListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0E0A94BF06DD5B0AE3302B9C /* ProfileListView.swift */; };
 		A795F9984DD264323A8560DC /* PerAppSigningCatalog.swift in Sources */ = {isa = PBXBuildFile; fileRef = 58E05756E27A7F82EAE7E623 /* PerAppSigningCatalog.swift */; };
@@ -227,6 +230,7 @@
 		056AF191BDE4A37210A30210 /* MenuBarController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MenuBarController.swift; sourceTree = "<group>"; };
 		05BD96809D818C323D7BCE55 /* SSHFlowTransport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SSHFlowTransport.swift; sourceTree = "<group>"; };
 		0827F61A21C5BB1DB6246BCA /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
+		089E892C735D440F61FEAFA1 /* DestinationRoutingModeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DestinationRoutingModeTests.swift; sourceTree = "<group>"; };
 		0E0A94BF06DD5B0AE3302B9C /* ProfileListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProfileListView.swift; sourceTree = "<group>"; };
 		0FF498AA49464F1ADD8B8D60 /* DestinationRuleStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DestinationRuleStore.swift; sourceTree = "<group>"; };
 		132EDEF0EA68675638E19645 /* WireGuardConfigParser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WireGuardConfigParser.swift; sourceTree = "<group>"; };
@@ -490,6 +494,7 @@
 		8302FE1151B97911B1E940DF /* Unit */ = {
 			isa = PBXGroup;
 			children = (
+				089E892C735D440F61FEAFA1 /* DestinationRoutingModeTests.swift */,
 				E629683F7392901EDFDE8CDB /* Info.plist */,
 				FCE101ED62A34E86DDD8A55F /* TCPWrapperConfigCodecTests.swift */,
 				7AAA1FCAD780732BB9EAA949 /* WGTCPWrapperRelayTests.swift */,
@@ -882,11 +887,14 @@
 			files = (
 				EA31616FBB4B4152791A103F /* AppLog.swift in Sources */,
 				9D2B785FE6B66D38DE2B0657 /* Constants.swift in Sources */,
+				027F3B9FEA04135D6224A3D0 /* DestinationRouting.swift in Sources */,
+				A3A89F6956AE4AF7AFF6E0C2 /* DestinationRoutingModeTests.swift in Sources */,
 				BA39D6C36C3608C249058CC5 /* KeychainService.swift in Sources */,
 				F342E9B7F68FC9D32A4CFC21 /* SSHProfile.swift in Sources */,
 				0307DA1B17F9DCDF85FA5597 /* SharedLogWriter.swift in Sources */,
 				C503F44C5645EEF42DED3362 /* TCPWrapperConfigCodec.swift in Sources */,
 				77F4EFB2078D3E0A8BBE9F92 /* TCPWrapperConfigCodecTests.swift in Sources */,
+				57757478C23DA0D03FFB3FE0 /* TransparentProxyRuntimeConfig.swift in Sources */,
 				07ED33EE15B47343DF5546E5 /* WGTCPWrapperRelay.swift in Sources */,
 				A3394A953CA232BDAA3D2B91 /* WGTCPWrapperRelayTests.swift in Sources */,
 				D7B747C6C40BEF5A8754ECFB /* WGTunnelJWT.swift in Sources */,

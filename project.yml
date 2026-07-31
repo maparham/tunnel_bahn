@@ -135,6 +135,8 @@ targets:
       - path: Shared/SharedLogWriter.swift
       - path: Shared/WGTunnelJWT.swift
       - path: Shared/WGTCPWrapperRelay.swift
+      - path: Shared/DestinationRouting.swift
+      - path: Shared/TransparentProxyRuntimeConfig.swift
     settings:
       base:
         INFOPLIST_FILE: Tests/Unit/Info.plist

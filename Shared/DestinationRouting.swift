@@ -1,11 +1,36 @@
 import Darwin
 import Foundation
 
+/// Whether the destination rule set selects what to TUNNEL (`include` — the historical
+/// whitelist behavior) or what to send DIRECT while everything else tunnels (`exclude`).
+public enum DestinationFilterMode: String, Codable, Sendable {
+    case include
+    case exclude
+}
+
+public enum DestinationRouteVerdict: Equatable, Sendable {
+    case tunnel
+    case direct
+}
+
+/// Pure tunnel-vs-direct choice given rule-match results — the single source of truth for
+/// both the TCP SNI decider and the UDP per-datagram path, so the two cannot drift.
+/// `sniMatch` is nil when no SNI is available (non-TLS, fragmented ClientHello, no peek).
+/// Note the fail-open inversion: include mode's no-match falls back to DIRECT; exclude
+/// mode's no-match falls back to TUNNEL (unknown traffic belongs in the tunnel there).
+public enum DestinationRouteDecision {
+    public static func decide(mode: DestinationFilterMode, ipMatch: Bool, sniMatch: Bool?) -> DestinationRouteVerdict {
+        let matchesRules = (sniMatch == true) || ipMatch
+        switch mode {
+        case .include: return matchesRules ? .tunnel : .direct
+        case .exclude: return matchesRules ? .direct : .tunnel
+        }
+    }
+}
+
 /// Payload written under the shared App Group (`SharedPaths.destinationRangesFileURL`).
 /// Interpreted only by `TransparentProxyProvider` alongside signing-ID snapshots.
 public struct DestinationRoutingFilePayload: Codable, Equatable {
-    /// Current on-disk encoding version; incremented when incompatible changes happen.
-    public var schemaVersion: Int
     public var enforceDestinationFiltering: Bool
     public var ranges: [String]
     /// Domain-rule names (e.g. `x.com`), lowercased. The transparent proxy matches these against
@@ -13,27 +38,13 @@ public struct DestinationRoutingFilePayload: Codable, Equatable {
     /// browser connects to an IP the host resolver never returned. Empty = no SNI routing (the
     /// proxy keeps its IP-only behavior). Suffix-matched, so `x.com` also covers `api.x.com`.
     public var domainNames: [String]
+    public var filterMode: DestinationFilterMode
 
-    public init(schemaVersion: Int = 1, enforceDestinationFiltering: Bool, ranges: [String], domainNames: [String] = []) {
-        self.schemaVersion = schemaVersion
+    public init(enforceDestinationFiltering: Bool, ranges: [String], domainNames: [String] = [], filterMode: DestinationFilterMode = .include) {
         self.enforceDestinationFiltering = enforceDestinationFiltering
         self.ranges = ranges
         self.domainNames = domainNames
-    }
-
-    enum CodingKeys: String, CodingKey {
-        case schemaVersion
-        case enforceDestinationFiltering
-        case ranges
-        case domainNames
-    }
-
-    public init(from decoder: Decoder) throws {
-        let c = try decoder.container(keyedBy: CodingKeys.self)
-        enforceDestinationFiltering = try c.decodeIfPresent(Bool.self, forKey: .enforceDestinationFiltering) ?? false
-        ranges = try c.decodeIfPresent([String].self, forKey: .ranges) ?? []
-        domainNames = try c.decodeIfPresent([String].self, forKey: .domainNames) ?? []
-        schemaVersion = try c.decodeIfPresent(Int.self, forKey: .schemaVersion) ?? 1
+        self.filterMode = filterMode
     }
 }
 
