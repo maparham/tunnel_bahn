@@ -356,6 +356,7 @@ public final class TransparentProxyProvider: NETransparentProxyProvider {
         // filtering still narrows WHICH flows are intercepted via `includedNetworkRules`;
         // it no longer gates the tunnel-vs-direct decision here.
         let routeThroughTunnel = true
+        let filterMode = destinationFilterMode
         let ifaceName = tunnelInterfaceName
         let cidrCount = destinationRawCIDRs.count
         let enforce = enforceDestinationFiltering
@@ -417,8 +418,21 @@ public final class TransparentProxyProvider: NETransparentProxyProvider {
         let isTCPFlow = flow is NEAppProxyTCPFlow
         if let literal = literalRemoteHostname(from: flow),
            !(remoteDNS && isTCPFlow && IPCIDRMatcher.literalMatches(literal, ranges: IPCIDRMatcher.overridablePrivateRanges)),
-           IPCIDRMatcher.shouldBypassLocal(literal, tunnelRanges: preparedRanges) {
+           // Exclude mode: a listed CIDR means DIRECT, so the "user configured this private range
+           // for tunneling" override can never apply — pass no tunnel ranges.
+           IPCIDRMatcher.shouldBypassLocal(literal, tunnelRanges: filterMode == .exclude ? [] : preparedRanges) {
             Self.log.notice("[APPSPLIT_FLOW] decision=bypass-local signingID=\(signingID) remote=\(literal)")
+            return false
+        }
+
+        // Exclude mode: a destination the user listed goes DIRECT. An IP match cannot be
+        // overridden by SNI (an SNI match would also mean direct), so the flow is declined at
+        // open and the OS routes it out en0 natively — no relay, no peek. UDP flows carry no
+        // remote at open; they are excluded per-datagram in UDPFlowRelay instead.
+        if filterMode == .exclude,
+           let literal = literalRemoteHostname(from: flow),
+           IPCIDRMatcher.literalMatches(literal, ranges: preparedRanges) {
+            Self.log.notice("[APPSPLIT_FLOW] decision=exclude-direct signingID=\(signingID) remote=\(literal)")
             return false
         }
 
@@ -436,21 +450,15 @@ public final class TransparentProxyProvider: NETransparentProxyProvider {
             let sniDecider: ((Data) -> Bool)? = sniMode ? { firstChunk in
                 let sni = TLSClientHelloSNI.serverName(from: firstChunk)
                 let ipMatch = remoteLiteral.map { IPCIDRMatcher.literalMatches($0, ranges: preparedRanges) } ?? false
-                let tunnel: Bool
+                let sniMatch = sni.map { Self.sniMatches($0, names: domainNames) }
+                let tunnel = DestinationRouteDecision.decide(mode: filterMode, ipMatch: ipMatch, sniMatch: sniMatch) == .tunnel
                 let reason: String
-                if let sni {
-                    if Self.sniMatches(sni, names: domainNames) {
-                        tunnel = true; reason = "sni"
-                    } else if ipMatch {
-                        tunnel = true; reason = "ip"
-                    } else {
-                        tunnel = false; reason = "unmatched"
-                    }
-                } else if ipMatch {
-                    // No SNI (non-TLS, or a ClientHello fragmented across segments) → fall back to IP.
-                    tunnel = true; reason = "ip-nosni"
-                } else {
-                    tunnel = false; reason = "no-sni"
+                switch (sniMatch, ipMatch) {
+                case (.some(true), _): reason = "sni"
+                case (.some(false), true): reason = "ip"
+                case (nil, true): reason = "ip-nosni"
+                case (.some(false), false): reason = "unmatched"
+                case (nil, false): reason = "no-sni"
                 }
                 // Summary at .notice carries decision + reason but NO hostname (privacy + volume);
                 // the full detail with the SNI hostname is logged at .debug only.
@@ -513,6 +521,7 @@ public final class TransparentProxyProvider: NETransparentProxyProvider {
                 signingID: signingID,
                 routeThroughTunnel: routeThroughTunnel,
                 dropTunneledUDP: dropUDP,
+                filterMode: filterMode,
                 tunnelDNSHost: dnsRedirectHost,
                 tunnelInterfaceName: ifaceName,
                 queue: flowQueue,

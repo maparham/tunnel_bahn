@@ -38,6 +38,10 @@ final class UDPFlowRelay {
     /// resolver, so the redirect is invisible to the app. nil = disabled (SSH mode).
     private let tunnelDNSHost: String?
     private let tunnelInterfaceName: String?
+    /// Session-static destination-filter semantics. In `.exclude` mode `tunnelRanges()` holds
+    /// the DIRECT set: a matching datagram exits via `sendViaDirect`, everything else tunnels,
+    /// and the private-range tunnel override in `shouldBypassLocal` never applies.
+    private let filterMode: DestinationFilterMode
     private let queue: DispatchQueue
     /// Live snapshot of the user's configured tunnel destination ranges (CIDRs + resolved domain
     /// IPs). A closure, not a value: resolved-domain IPs are live-pushed mid-session, and UDP
@@ -67,6 +71,15 @@ final class UDPFlowRelay {
     // Direct path: keyed by "host:port"
     private var nwConnections: [String: NWConnection] = [:]
     private var legacyEndpoints: [String: NWHostEndpoint] = [:]
+    // Exclude-match memoization: in exclude mode the linear CIDR scan would otherwise run
+    // per datagram against a country-size list (~5-8k ranges) for ALL routed UDP (QUIC
+    // included) — unlike include mode, where interception is CIDR-narrowed upstream and the
+    // autoclosure keeps the scan off the hot path. Keyed by destination host; the exclude
+    // set can only GROW mid-session (appMessage pushes resolved excluded-domain IPs), so
+    // invalidate on size change. A stale entry errs toward tunneling — the safe direction.
+    // All access on `queue` (same discipline as the connection dictionaries).
+    private var excludeVerdictCache: [String: Bool] = [:]
+    private var excludeCacheRangeCount = -1
     /// Guards the one-shot `didCloseOnce` test-and-set against finish paths arriving on different
     /// queues (NE flow callbacks vs the relay connection's queue). See `TCPFlowRelay.closeLock`.
     private let closeLock = NSLock()
@@ -80,6 +93,7 @@ final class UDPFlowRelay {
         signingID: String,
         routeThroughTunnel: Bool,
         dropTunneledUDP: Bool,
+        filterMode: DestinationFilterMode = .include,
         tunnelDNSHost: String? = nil,
         tunnelInterfaceName: String?,
         queue: DispatchQueue,
@@ -92,6 +106,7 @@ final class UDPFlowRelay {
         self.signingID = signingID
         self.routeThroughTunnel = routeThroughTunnel
         self.dropTunneledUDP = dropTunneledUDP
+        self.filterMode = filterMode
         self.tunnelDNSHost = tunnelDNSHost
         self.tunnelInterfaceName = tunnelInterfaceName
         self.queue = queue
@@ -158,15 +173,23 @@ final class UDPFlowRelay {
         // routable-private destination the user explicitly configured to tunnel is not bypassed.
         // tunnelRanges() (a lock-guarded live read) is only evaluated for local-literal remotes,
         // via the predicate's autoclosure.
+        // Exclude mode: a destination in the user's ranges goes DIRECT (tunnelRanges holds the
+        // exclude set); and a listed private CIDR can never mean "tunnel", so the bypass check
+        // gets no override ranges. Include mode is byte-for-byte the previous behavior.
+        let excluded = filterMode == .exclude && isExcluded(legacyEndpoint.hostname)
         var useTunnel = routeThroughTunnel
-            && !IPCIDRMatcher.shouldBypassLocal(legacyEndpoint.hostname, tunnelRanges: tunnelRanges())
+            && !excluded
+            && !IPCIDRMatcher.shouldBypassLocal(
+                legacyEndpoint.hostname,
+                tunnelRanges: filterMode == .exclude ? [] : tunnelRanges()
+            )
         // DNS redirect (WG mode only): a routed app's DNS query to a local/private resolver
         // would bypass to the — possibly hijacking/sinkholing — local network. Rewrite it to the
         // tunnel-side resolver and relay it through the tunnel instead. The flow key stays the
         // ORIGINAL endpoint, so responses are written back `sentBy` the resolver the app asked.
         var targetHost = legacyEndpoint.hostname
         var targetPort = legacyEndpoint.port
-        if routeThroughTunnel, !dropTunneledUDP, !useTunnel,
+        if routeThroughTunnel, !dropTunneledUDP, !useTunnel, !excluded,
            legacyEndpoint.port == "53", let redirect = tunnelDNSHost {
             useTunnel = true
             targetHost = redirect
@@ -190,6 +213,19 @@ final class UDPFlowRelay {
         } else {
             sendViaDirect(datagram: datagram, to: legacyEndpoint, key: key)
         }
+    }
+
+    /// Memoized exclude-set membership for `host` (see `excludeVerdictCache` doc).
+    private func isExcluded(_ host: String) -> Bool {
+        let ranges = tunnelRanges()
+        if ranges.count != excludeCacheRangeCount {
+            excludeVerdictCache.removeAll()
+            excludeCacheRangeCount = ranges.count
+        }
+        if let cached = excludeVerdictCache[host] { return cached }
+        let verdict = IPCIDRMatcher.literalMatches(host, ranges: ranges)
+        excludeVerdictCache[host] = verdict
+        return verdict
     }
 
     // MARK: - Tunnel path (XPC → packet-tunnel smoltcp UDP → BoringTun)
