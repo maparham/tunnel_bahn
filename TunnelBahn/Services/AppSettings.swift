@@ -51,9 +51,9 @@ final class AppSettings: ObservableObject {
     /// Set by AppState when a profile is selected; not persisted independently.
     @Published var destinationFilterMode: DestinationFilterMode = .include
 
-    /// Exclude mode only: when true, routed apps' DNS is not redirected to the tunnel
+    /// Profile-wide: when true, routed apps' DNS is not redirected to the tunnel
     /// resolver. Set by AppState when a profile is selected; not persisted independently.
-    @Published var localDNSForExcluded: Bool = false
+    @Published var resolveDNSLocally: Bool = false
 
     private enum Keys {
         static let autoReconnect = "autoReconnect"

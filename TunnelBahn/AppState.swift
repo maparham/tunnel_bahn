@@ -135,7 +135,7 @@ final class AppState: ObservableObject {
             .merge(with: settings.$destinationCustomRangesEnabled.dropFirst().map { _ in () }.eraseToAnyPublisher())
             .merge(with: settings.$destinationDomainNamesEnabled.dropFirst().map { _ in () }.eraseToAnyPublisher())
             .merge(with: settings.$destinationFilterMode.dropFirst().map { _ in () }.eraseToAnyPublisher())
-            .merge(with: settings.$localDNSForExcluded.dropFirst().map { _ in () }.eraseToAnyPublisher())
+            .merge(with: settings.$resolveDNSLocally.dropFirst().map { _ in () }.eraseToAnyPublisher())
             .debounce(for: .milliseconds(500), scheduler: DispatchQueue.main)
             .sink { [weak self] _ in
                 self?.saveCurrentSnapshot()
@@ -222,7 +222,7 @@ final class AppState: ObservableObject {
         settings.destinationCustomRangesEnabled = snapshot.customRangesEnabled
         settings.destinationDomainNamesEnabled = snapshot.domainNamesEnabled
         settings.destinationFilterMode = snapshot.filterMode
-        settings.localDNSForExcluded = snapshot.localDNSForExcluded
+        settings.resolveDNSLocally = snapshot.resolveDNSLocally
         domainResolutionCoordinator.resolveAll()
         if syncDestinationRouting {
             syncDestinationRoutingFileWithPreferences()
@@ -263,7 +263,7 @@ final class AppState: ObservableObject {
             bulkGroups: destinationRuleStore.bulkGroups,
             domainRules: destinationRuleStore.domainRules,
             filterMode: settings.destinationFilterMode,
-            localDNSForExcluded: settings.localDNSForExcluded
+            resolveDNSLocally: settings.resolveDNSLocally
         )
         profileRoutingStore.save(snapshot: snapshot, for: profileID)
     }

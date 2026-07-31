@@ -409,10 +409,9 @@ final class VPNManager: ObservableObject {
                     // Server-side DNS: only SSH mode can resolve names on the far end (via direct-tcpip).
                     // WireGuard mode must keep local resolution + numeric-IP relay, so gate strictly on transport.
                     remoteDNSResolution: profile.transport == .ssh,
-                    // SSH mode resolves remotely (SNI); exclude-mode profiles with "resolve DNS locally"
-                    // suppress the redirect so routed apps' DNS exits via the local-bypass direct path.
-                    tunnelDNSHost: (profile.transport == .ssh
-                            || (destinationFilterMode == .exclude && settings.localDNSForExcluded))
+                    // SSH mode resolves remotely (SNI); "Resolve DNS locally" is profile-wide and
+                    // suppresses the redirect so routed apps' DNS exits via the local-bypass direct path.
+                    tunnelDNSHost: (profile.transport == .ssh || settings.resolveDNSLocally)
                         ? nil
                         : (extensionProfile.interface.dnsServers.first(where: { $0.contains(".") }) ?? "1.1.1.1"),
                     filterMode: destinationFilterMode

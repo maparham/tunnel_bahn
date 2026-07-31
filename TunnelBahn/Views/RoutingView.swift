@@ -64,6 +64,9 @@ struct RoutingView: View {
     private static let excludeDestinationsTooltip =
         "Everything routed through this profile is tunneled EXCEPT destinations matching the lists below — e.g. import your country's IP ranges so domestic traffic stays direct and fast."
 
+    private static let resolveDNSLocallyTooltip =
+        "Routed apps' DNS uses the local (system) resolver instead of the tunnel resolver. Steers direct/domestic sites to nearby CDN edges, but the local resolver's filtering then applies — with \"Tunnel selected destinations\" a censored local resolver can break the very sites you tunnel. Off = DNS is redirected through the tunnel resolver. SSH profiles always resolve remotely."
+
 
     /// Destination routing is snapshotted to the extension at connect time. Editing is locked
     /// only while viewing the currently-connected profile; edits to a non-active profile go to
@@ -214,22 +217,13 @@ struct RoutingView: View {
                     }
                 }
 
-                Text(
-                    "TCP only and IP destinations only (no DNS). UDP isn’t included."
-                )
-                .font(.footnote)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-
-                if appState.settings.enforceDestinationFiltering,
-                   appState.settings.destinationFilterMode == .exclude {
-                    Toggle("Resolve DNS locally", isOn: $appState.settings.localDNSForExcluded)
+                HStack(spacing: 6) {
+                    Toggle("Resolve DNS locally", isOn: $appState.settings.resolveDNSLocally)
                         .toggleStyle(.checkbox)
                         .disabled(destinationRoutingEditingLocked)
-                    Text("Local DNS steers excluded (domestic) sites to nearby CDN edges, but the local resolver's filtering then applies to tunneled sites. Off = DNS goes through the tunnel resolver.")
-                        .font(.footnote)
+                    Image(systemName: "questionmark.circle")
                         .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
+                        .instantTooltip(Self.resolveDNSLocallyTooltip)
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
