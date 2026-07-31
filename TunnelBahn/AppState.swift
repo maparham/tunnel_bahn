@@ -438,7 +438,9 @@ final class AppState: ObservableObject {
                 bulkListsEnabled: settings.destinationBulkListsEnabled,
                 domainNamesEnabled: settings.destinationDomainNamesEnabled
             ),
-            filterMode: settings.destinationFilterMode
+            // Normalize: when enforce is off, pass include so a residual `.exclude` can never
+            // make the host-file snapshot declare exclude semantics on an enforce-off profile.
+            filterMode: settings.enforceDestinationFiltering ? settings.destinationFilterMode : .include
         )
     }
 

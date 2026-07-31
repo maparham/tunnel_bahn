@@ -385,7 +385,12 @@ final class VPNManager: ObservableObject {
                     traceLog("split-tunnel: proxy destination filter set to AllowedIPs (\(destinationRanges.count) CIDRs)")
                 } else {
                     destinationEnforce = settings.enforceDestinationFiltering
-                    destinationFilterMode = settings.destinationFilterMode
+                    // Normalize: an enforce-off connect must behave as include (tunnel-all)
+                    // regardless of the stored mode. Otherwise a residual `.exclude` (user picked
+                    // exclude, then switched back to "Tunnel all destinations", which clears
+                    // enforce but never resets the mode) would DECLINE flows to listed CIDRs at
+                    // the extension (silent en0 leak) and nil the anti-hijack DNS redirect below.
+                    destinationFilterMode = destinationEnforce ? settings.destinationFilterMode : .include
                     destinationRanges = destinationCidrStrings
                     persistDestinationRoutingFromHost(
                         enforceFiltering: destinationEnforce,

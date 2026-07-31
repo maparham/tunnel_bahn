@@ -28,3 +28,7 @@ Setup: import a small bulk CIDR group containing a known-direct test range
    still behaves as before.
 8. Non-routed apps: verify an app outside the profile is entirely unaffected
    in both modes.
+9. Residual-mode regression: select exclude mode, then switch back to "Tunnel all
+   destinations", reconnect — verify an IP inside the previously-excluded range
+   still TUNNELS (no `decision=exclude-direct` in logs) and DNS redirect behavior
+   matches step 5.

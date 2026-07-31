@@ -100,7 +100,8 @@ struct RoutingView: View {
                         Image(systemName: "exclamationmark.triangle.fill")
                             .foregroundStyle(.orange)
                             .font(.body)
-                        Text(appState.settings.destinationFilterMode == .exclude
+                        Text(appState.settings.enforceDestinationFiltering
+                            && appState.settings.destinationFilterMode == .exclude
                             ? "IPs matching a list here will **bypass the tunnel**; everything else is tunneled."
                             : "IPs not matching any list here will **bypass the tunnel**.")
                             .foregroundStyle(.primary)

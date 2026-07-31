@@ -420,7 +420,7 @@ public final class TransparentProxyProvider: NETransparentProxyProvider {
            !(remoteDNS && isTCPFlow && IPCIDRMatcher.literalMatches(literal, ranges: IPCIDRMatcher.overridablePrivateRanges)),
            // Exclude mode: a listed CIDR means DIRECT, so the "user configured this private range
            // for tunneling" override can never apply — pass no tunnel ranges.
-           IPCIDRMatcher.shouldBypassLocal(literal, tunnelRanges: filterMode == .exclude ? [] : preparedRanges) {
+           IPCIDRMatcher.shouldBypassLocal(literal, tunnelRanges: (enforce && filterMode == .exclude) ? [] : preparedRanges) {
             Self.log.notice("[APPSPLIT_FLOW] decision=bypass-local signingID=\(signingID) remote=\(literal)")
             return false
         }
@@ -429,7 +429,7 @@ public final class TransparentProxyProvider: NETransparentProxyProvider {
         // overridden by SNI (an SNI match would also mean direct), so the flow is declined at
         // open and the OS routes it out en0 natively — no relay, no peek. UDP flows carry no
         // remote at open; they are excluded per-datagram in UDPFlowRelay instead.
-        if filterMode == .exclude,
+        if enforce, filterMode == .exclude,
            let literal = literalRemoteHostname(from: flow),
            IPCIDRMatcher.literalMatches(literal, ranges: preparedRanges) {
             Self.log.notice("[APPSPLIT_FLOW] decision=exclude-direct signingID=\(signingID) remote=\(literal)")
@@ -521,7 +521,7 @@ public final class TransparentProxyProvider: NETransparentProxyProvider {
                 signingID: signingID,
                 routeThroughTunnel: routeThroughTunnel,
                 dropTunneledUDP: dropUDP,
-                filterMode: filterMode,
+                filterMode: enforce ? filterMode : .include,
                 tunnelDNSHost: dnsRedirectHost,
                 tunnelInterfaceName: ifaceName,
                 queue: flowQueue,

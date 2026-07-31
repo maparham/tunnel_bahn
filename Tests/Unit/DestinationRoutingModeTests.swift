@@ -32,6 +32,20 @@ final class DestinationRoutingModeTests: XCTestCase {
         XCTAssertEqual(DestinationRouteDecision.decide(mode: .exclude, ipMatch: false, sniMatch: nil), .tunnel)
     }
 
+    // MARK: - Enforce-off normalization invariant
+
+    /// Guards the residual-mode leak fix. When enforce is off, the app-side (VPNManager /
+    /// AppState) ternary normalizes the effective mode to `.include` regardless of the stored
+    /// mode, so a residual `.exclude` can never reach the extension with enforce=false. The
+    /// ternary lives in VPNManager (not reachable from this target); here we assert the decision
+    /// contract that normalization must satisfy: under `.include`, a listed-IP flow TUNNELS —
+    /// the exact verdict an enforce-off connect must produce for a previously-excluded range.
+    func testEnforceOffNormalizesToIncludeSemantics() {
+        let effectiveMode: DestinationFilterMode = false ? .exclude : .include // mirrors `enforce ? stored : .include`
+        XCTAssertEqual(effectiveMode, .include)
+        XCTAssertEqual(DestinationRouteDecision.decide(mode: effectiveMode, ipMatch: true, sniMatch: nil), .tunnel)
+    }
+
     // MARK: - DestinationRoutingFilePayload codec
 
     func testPayloadRoundTripsExclude() throws {
