@@ -13,6 +13,20 @@ struct RoutingView: View {
     @State private var importError: String?
     @State private var lastImportSummary: String?
     @State private var bulkPrefixBrowse: BulkPrefixBrowsePayload?
+
+    /// A mode radio the user selected while its rule set is empty: lists are shown and editable,
+    /// but enforcement stays off until the first effective destination exists. nil when the
+    /// selected radio state is fully captured by enforceDestinationFiltering + filterMode.
+    @State private var previewedEmptyMode: DestinationFilterMode?
+
+    /// Which mode's lists the sections display (always follows the filter mode).
+    private var displayedMode: DestinationFilterMode { appState.settings.destinationFilterMode }
+
+    /// True when "Tunnel all destinations" is the selected radio: sections dim and lock.
+    private var destinationSectionsInactive: Bool {
+        !appState.settings.enforceDestinationFiltering && previewedEmptyMode == nil
+    }
+
     private var bulkListsEnabled: Bool { appState.settings.activeSectionToggles.bulkLists }
     private var customRangesEnabled: Bool { appState.settings.activeSectionToggles.customRanges }
     private var domainNamesEnabled: Bool { appState.settings.activeSectionToggles.domainNames }
@@ -103,10 +117,11 @@ struct RoutingView: View {
                         Image(systemName: "exclamationmark.triangle.fill")
                             .foregroundStyle(.orange)
                             .font(.body)
-                        Text(appState.settings.enforceDestinationFiltering
-                            && appState.settings.destinationFilterMode == .exclude
-                            ? "IPs matching a list here will **bypass the tunnel**; everything else is tunneled."
-                            : "IPs not matching any list here will **bypass the tunnel**.")
+                        Text(destinationSectionsInactive
+                            ? "All network traffic is tunneled. Destination lists are inactive."
+                            : (displayedMode == .exclude
+                                ? "IPs matching a list here will **bypass the tunnel**; everything else is tunneled."
+                                : "IPs not matching any list here will **bypass the tunnel**."))
                             .foregroundStyle(.primary)
                             .font(.footnote)
                     }
@@ -118,6 +133,7 @@ struct RoutingView: View {
                     .padding(.horizontal, 16)
                     .padding(.vertical, 4)
                 }
+                .opacity(destinationSectionsInactive ? 0.5 : 1)
 
                 resolveDNSLocallySection()
             }
@@ -132,6 +148,9 @@ struct RoutingView: View {
         .onChange(of: hasAnyDestinations) { _, hasAny in
             if !hasAny {
                 appState.settings.enforceDestinationFiltering = false
+            } else if previewedEmptyMode == displayedMode {
+                appState.settings.enforceDestinationFiltering = true
+                previewedEmptyMode = nil
             }
         }
         .onChange(of: appState.settings.routingMode) { _, _ in
@@ -158,22 +177,34 @@ struct RoutingView: View {
         if appState.settings.routingMode == .fullTunnel,
            appState.settings.destinationFilterMode == .exclude {
             appState.settings.destinationFilterMode = .include
+            previewedEmptyMode = nil
         }
     }
 
-    private var destinationFilteringBinding: Binding<Bool> {
-        Binding(
-            get: { appState.settings.enforceDestinationFiltering },
-            set: { newValue in
-                if newValue && !hasAnyDestinations { return }
-                appState.settings.enforceDestinationFiltering = newValue
-                if !newValue {
-                    appState.settings.activeSectionToggles.bulkLists = false
-                    appState.settings.activeSectionToggles.customRanges = false
-                    appState.settings.activeSectionToggles.domainNames = false
-                }
-            }
-        )
+    private func selectTunnelAll() {
+        previewedEmptyMode = nil
+        appState.settings.enforceDestinationFiltering = false
+        appState.settings.activeSectionToggles = DestinationSectionToggles(
+            bulkLists: false, customRanges: false, domainNames: false
+        )  // preserves the existing "deselecting filtering turns sections off" behavior, per mode
+    }
+
+    private func selectMode(_ mode: DestinationFilterMode) {
+        appState.settings.destinationFilterMode = mode  // AppState sink swaps the store's arrays
+        if hasAnyDestinations {  // now evaluates against the newly displayed mode
+            appState.settings.enforceDestinationFiltering = true
+            previewedEmptyMode = nil
+        } else {
+            appState.settings.enforceDestinationFiltering = false
+            previewedEmptyMode = mode
+        }
+    }
+
+    private func modeGlyph(_ mode: DestinationFilterMode) -> some View {
+        Image(systemName: mode == .include ? "plus.circle" : "minus.circle")
+            .foregroundStyle(mode == .include ? Color.blue : Color.orange)
+            .imageScale(.medium)
+            .accessibilityLabel(mode == .include ? "Tunnel only selected" : "Tunnel all except selected")
     }
 
     /// Grouped card for the routing radio buttons.
@@ -183,59 +214,57 @@ struct RoutingView: View {
                 HStack(alignment: .top, spacing: 16) {
                     HStack(spacing: 6) {
                         RadioButton(
-                            isOn: !appState.settings.enforceDestinationFiltering,
+                            isOn: !appState.settings.enforceDestinationFiltering
+                                && previewedEmptyMode == nil,
                             label: "Tunnel all destinations",
                             disabled: destinationRoutingEditingLocked
-                        ) { destinationFilteringBinding.wrappedValue = false }
+                        ) { selectTunnelAll() }
                         Image(systemName: "questionmark.circle")
                             .foregroundStyle(.secondary)
                             .instantTooltip(Self.allDestinationsTooltip)
                     }
-                    VStack(alignment: .leading, spacing: 4) {
-                        HStack(spacing: 6) {
-                            RadioButton(
-                                isOn: appState.settings.enforceDestinationFiltering
-                                    && appState.settings.destinationFilterMode == .include,
-                                label: "Tunnel selected destinations",
-                                disabled: destinationRoutingEditingLocked || !hasAnyDestinations
-                            ) {
-                                destinationFilteringBinding.wrappedValue = true
-                                appState.settings.destinationFilterMode = .include
-                            }
-                            Image(systemName: "questionmark.circle")
-                                .foregroundStyle(.secondary)
-                                .instantTooltip(Self.selectedDestinationsTooltip)
-                        }
-                        if !hasAnyDestinations {
-                            Label(
-                                hasAnyRulesIgnoringSectionToggles
-                                    ? "Enable a section below to activate destination filtering."
-                                    : "Add destination IPs or CIDRs below to enable.",
-                                systemImage: "questionmark.circle.fill"
-                            )
-                            .font(.footnote)
-                            .foregroundStyle(.blue)
-                        }
+                    HStack(spacing: 6) {
+                        RadioButton(
+                            isOn: (appState.settings.enforceDestinationFiltering
+                                && displayedMode == .include)
+                                || previewedEmptyMode == .include,
+                            label: "Tunnel only selected destinations",
+                            disabled: destinationRoutingEditingLocked
+                        ) { selectMode(.include) }
+                        modeGlyph(.include)
+                        Image(systemName: "questionmark.circle")
+                            .foregroundStyle(.secondary)
+                            .instantTooltip(Self.selectedDestinationsTooltip)
                     }
                     HStack(spacing: 6) {
                         RadioButton(
-                            isOn: appState.settings.enforceDestinationFiltering
-                                && appState.settings.destinationFilterMode == .exclude
+                            isOn: ((appState.settings.enforceDestinationFiltering
+                                && displayedMode == .exclude)
+                                || previewedEmptyMode == .exclude)
                                 && appState.settings.routingMode != .fullTunnel,
                             label: "Tunnel all except selected",
                             // Exclude semantics are unsupported in full-tunnel routing mode (the
                             // packet tunnel narrows routes with include semantics); offered only in
                             // App-Tunnel mode. See excludeDestinationsTooltip.
-                            disabled: destinationRoutingEditingLocked || !hasAnyDestinations
+                            disabled: destinationRoutingEditingLocked
                                 || appState.settings.routingMode == .fullTunnel
-                        ) {
-                            destinationFilteringBinding.wrappedValue = true
-                            appState.settings.destinationFilterMode = .exclude
-                        }
+                        ) { selectMode(.exclude) }
+                        modeGlyph(.exclude)
                         Image(systemName: "questionmark.circle")
                             .foregroundStyle(.secondary)
                             .instantTooltip(Self.excludeDestinationsTooltip)
                     }
+                }
+
+                if previewedEmptyMode != nil {
+                    Label(
+                        hasAnyRulesIgnoringSectionToggles
+                            ? "Enable a section below to activate destination filtering."
+                            : "Add destination IPs or CIDRs below to enable.",
+                        systemImage: "questionmark.circle.fill"
+                    )
+                    .font(.footnote)
+                    .foregroundStyle(.blue)
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -283,6 +312,7 @@ struct RoutingView: View {
         GroupBox {
             VStack(alignment: .leading, spacing: 12) {
                 HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    modeGlyph(displayedMode)
                     Text("Bulk lists")
                         .font(.headline)
                     bulkListsFormatInfoIcon()
@@ -290,15 +320,15 @@ struct RoutingView: View {
                     Button("Import…") {
                         importCidrFromFile()
                     }
-                    .disabled(destinationRoutingEditingLocked || !bulkListsEnabled)
+                    .disabled(destinationRoutingEditingLocked || !bulkListsEnabled || destinationSectionsInactive)
                     Button("Paste List") {
                         importCidrFromPasteboard()
                     }
-                    .disabled(destinationRoutingEditingLocked || !bulkListsEnabled)
+                    .disabled(destinationRoutingEditingLocked || !bulkListsEnabled || destinationSectionsInactive)
                     Toggle("", isOn: bulkListsEnabledBinding)
                         .toggleStyle(.switch)
                         .labelsHidden()
-                        .disabled(destinationRoutingEditingLocked)
+                        .disabled(destinationRoutingEditingLocked || destinationSectionsInactive)
                 }
 
                 VStack(alignment: .leading, spacing: 8) {
@@ -310,7 +340,7 @@ struct RoutingView: View {
                         ForEach(appState.destinationRuleStore.bulkGroups) { group in
                             DestinationCidrBulkGroupRow(
                                 groupID: group.id,
-                                controlsDisabled: destinationRoutingEditingLocked || !bulkListsEnabled,
+                                controlsDisabled: destinationRoutingEditingLocked || !bulkListsEnabled || destinationSectionsInactive,
                                 editingLocked: destinationRoutingEditingLocked,
                                 onBrowse: {
                                     bulkPrefixBrowse = BulkPrefixBrowsePayload(
@@ -348,6 +378,7 @@ struct RoutingView: View {
             GroupBox {
                 VStack(alignment: .leading, spacing: 12) {
                     HStack(alignment: .firstTextBaseline, spacing: 6) {
+                        modeGlyph(displayedMode)
                         Text("Custom ranges")
                             .font(.headline)
                         Image(systemName: "questionmark.circle")
@@ -359,7 +390,7 @@ struct RoutingView: View {
                         Toggle("", isOn: customRangesEnabledBinding)
                             .toggleStyle(.switch)
                             .labelsHidden()
-                            .disabled(destinationRoutingEditingLocked)
+                            .disabled(destinationRoutingEditingLocked || destinationSectionsInactive)
                     }
 
                     Group {
@@ -371,14 +402,14 @@ struct RoutingView: View {
                             ForEach(appState.destinationRuleStore.customRules) { rule in
                                 DestinationCidrRuleRow(
                                     ruleID: rule.id,
-                                    controlsDisabled: destinationRoutingEditingLocked || !customRangesEnabled,
+                                    controlsDisabled: destinationRoutingEditingLocked || !customRangesEnabled || destinationSectionsInactive,
                                     editingLocked: destinationRoutingEditingLocked
                                 )
                                 .environmentObject(appState)
                             }
                         }
 
-                        addRow(sectionEnabled: customRangesEnabled)
+                        addRow(sectionEnabled: customRangesEnabled && !destinationSectionsInactive)
                             .opacity(customRangesEnabled ? 1 : 0.4)
                     }
                 }
@@ -490,6 +521,7 @@ struct RoutingView: View {
             GroupBox {
                 VStack(alignment: .leading, spacing: 12) {
                     HStack(alignment: .firstTextBaseline, spacing: 6) {
+                        modeGlyph(displayedMode)
                         Text("Domain names")
                             .font(.headline)
                         Image(systemName: "questionmark.circle")
@@ -505,12 +537,12 @@ struct RoutingView: View {
                             }
                             .buttonStyle(.borderless)
                             .instantTooltip("Remove all domains")
-                            .disabled(destinationRoutingEditingLocked)
+                            .disabled(destinationRoutingEditingLocked || destinationSectionsInactive)
                         }
                         Toggle("", isOn: domainNamesEnabledBinding)
                             .toggleStyle(.switch)
                             .labelsHidden()
-                            .disabled(destinationRoutingEditingLocked)
+                            .disabled(destinationRoutingEditingLocked || destinationSectionsInactive)
                     }
                     .confirmationDialog("Remove all domains?", isPresented: $confirmDeleteAllDomains) {
                         Button("Remove All", role: .destructive) {
@@ -525,7 +557,7 @@ struct RoutingView: View {
                                 .opacity(domainNamesEnabled ? 1 : 0.4)
                         } else {
                             ForEach(appState.destinationRuleStore.domainRules) { rule in
-                                DestinationDomainRuleRow(ruleID: rule.id, controlsDisabled: destinationRoutingEditingLocked || !domainNamesEnabled, editingLocked: destinationRoutingEditingLocked) {
+                                DestinationDomainRuleRow(ruleID: rule.id, controlsDisabled: destinationRoutingEditingLocked || !domainNamesEnabled || destinationSectionsInactive, editingLocked: destinationRoutingEditingLocked) {
                                     bulkPrefixBrowse = BulkPrefixBrowsePayload(
                                         id: rule.id,
                                         title: rule.domain,
@@ -536,7 +568,7 @@ struct RoutingView: View {
                             }
                         }
 
-                        domainAddRow(sectionEnabled: domainNamesEnabled)
+                        domainAddRow(sectionEnabled: domainNamesEnabled && !destinationSectionsInactive)
                             .opacity(domainNamesEnabled ? 1 : 0.4)
                     }
                 }
