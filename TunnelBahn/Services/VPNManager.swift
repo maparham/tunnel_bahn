@@ -1661,10 +1661,10 @@ final class VPNManager: ObservableObject {
         }
     }
 
-    /// Zeroes extension CPU/memory on disconnect. The live values can't come from
-    /// `ExtensionResourceStore` (the root extensions write it into a container this user host
-    /// can't read), so they're pulled over IPC by `refreshExtensionResourceStatsViaIPC()`; while
-    /// connected this leaves the last-fetched values in place so they don't flicker to zero.
+    /// Zeroes extension CPU/memory on disconnect. The live values can't come from a shared file
+    /// (the root extensions run in a container this user host can't read), so they're pulled
+    /// over IPC by `refreshExtensionResourceStatsViaIPC()`; while connected this leaves the
+    /// last-fetched values in place so they don't flicker to zero.
     private func syncExtensionResourceStats() {
         guard stats.state == .connected || stats.state == .reconnecting else {
             stats.packetTunnelCPUUsage = 0

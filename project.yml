@@ -3,6 +3,7 @@ options:
   createIntermediateGroups: true
   deploymentTarget:
     macOS: "14.0"
+  xcodeVersion: "26.6"
 configs:
   Debug: debug
   Release: release

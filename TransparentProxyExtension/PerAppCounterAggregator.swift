@@ -5,7 +5,8 @@ import os.log
 ///
 /// The aggregator is fed by relay handlers (TCP/UDP) on arbitrary queues and is drained
 /// by a periodic flush timer that rolls helper signing identifiers up to user-facing
-/// app names via `PerAppIdentityMap` and writes the result through `PerAppTransferStore`.
+/// app names via `PerAppIdentityMap` and caches the encoded snapshot for the host app's
+/// `getStats` provider IPC pull.
 ///
 /// Design notes:
 /// - In-memory totals are kept per signing identifier (cheaper than app-tunnel rollup on every
