@@ -603,9 +603,12 @@ struct RoutingView: View {
         }
     }
 
-    /// Extracts the host from a URL or bare domain string, then also adds the
-    /// parent domain when the host has more than two labels (e.g. www.youtube.com → youtube.com).
-    /// Returns an ordered, deduplicated list so the most-specific entry comes first.
+    /// Extracts exactly the host from a URL or bare domain string — no parent-domain expansion.
+    /// The proxy's SNI matcher is already suffix-based (`x.com` matches `api.x.com`), so entering a
+    /// specific host covers its subdomains going DOWN. The old behavior ALSO added the parent
+    /// (www.youtube.com → youtube.com), which broadened UP to the whole registrable domain and, with
+    /// no public-suffix awareness, turned `foo.blogspot.com` into a rule matching every blogspot
+    /// site. Exact-only mirrors the destination-IP policy: route precisely what the user entered.
     private static func extractDomains(from input: String) -> [String] {
         // Attempt URL parse; prepend scheme if missing so URLComponents can parse the host.
         let candidate = input.lowercased()
@@ -622,18 +625,7 @@ struct RoutingView: View {
         let bare = host.hasSuffix(".") ? String(host.dropLast()) : host
         guard !bare.isEmpty else { return [] }
 
-        var results: [String] = [bare]
-
-        // If host has ≥ 3 labels, also add the parent (drop the leading label).
-        let labels = bare.split(separator: ".", omittingEmptySubsequences: false)
-        if labels.count >= 3 {
-            let parent = labels.dropFirst().joined(separator: ".")
-            if parent != bare {
-                results.append(parent)
-            }
-        }
-
-        return results
+        return [bare]
     }
 }
 

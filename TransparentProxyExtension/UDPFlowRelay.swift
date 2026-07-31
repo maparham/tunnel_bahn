@@ -275,8 +275,15 @@ final class UDPFlowRelay {
                 self.queue.async {
                     // Per-destination teardown only (a UDP flow multiplexes many remotes); the
                     // app flow itself stays up. Removing the entry lets a later datagram retry.
+                    // Also drop the matching legacyEndpoints entry: without this, tunnel-path keys
+                    // leak (only direct-path teardown pruned them), so a long-lived multiplexed UDP
+                    // flow hitting many destinations grows the map unbounded. Guard on identity so a
+                    // reopened flow's fresh entry isn't nuked; a later datagram re-adds it in `send`.
                     if let cur = self.tunnelFlows[key], cur === tunnelFlow {
                         self.tunnelFlows.removeValue(forKey: key)
+                        if self.nwConnections[key] == nil {
+                            self.legacyEndpoints.removeValue(forKey: key)
+                        }
                     }
                     if let error {
                         Self.log.debug("UDP tunnel XPC flow closed key=\(key): \(error)")

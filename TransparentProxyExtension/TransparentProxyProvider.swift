@@ -118,6 +118,41 @@ public final class TransparentProxyProvider: NETransparentProxyProvider {
     /// (SSH mode).
     private var tunnelDNSHost: String?
 
+    /// Signature of the last `includedNetworkRules` handed to `setTunnelNetworkSettings`, so an
+    /// `applyDestinationPayload` that would republish an identical rule set can skip the push. Without
+    /// this, exclude mode (built rules are always catch-all, independent of the CIDR set) re-pushed
+    /// the same rules on every appMessage range growth — needless churn, and each push risks the
+    /// "macOS diverting nothing" reconfiguration window. Guarded by its own lock: the flush timer and
+    /// an async appMessage can both reach the push path. Reset in `stopProxy`.
+    private let ruleSignatureLock = NSLock()
+    private var lastPublishedRuleSignature: String?
+
+    /// Stable order-independent fingerprint of a rule set (protocol + remote network/prefix +
+    /// direction), used only to elide identical republishes.
+    private static func ruleSignature(_ rules: [NENetworkRule]) -> String {
+        rules.map { rule in
+            let net = rule.matchRemoteEndpoint.map { "\($0.hostname):\($0.port)" } ?? "*"
+            return "\(rule.matchProtocol.rawValue)|\(net)/\(rule.matchRemotePrefix)|\(rule.matchDirection.rawValue)"
+        }.sorted().joined(separator: ",")
+    }
+
+    /// Records the just-published signature. Returns false if it equals the last one (caller may
+    /// skip the push). Under `ruleSignatureLock` for cross-queue safety.
+    private func shouldPublishRules(_ rules: [NENetworkRule]) -> Bool {
+        let sig = Self.ruleSignature(rules)
+        ruleSignatureLock.lock()
+        defer { ruleSignatureLock.unlock() }
+        if lastPublishedRuleSignature == sig { return false }
+        lastPublishedRuleSignature = sig
+        return true
+    }
+
+    private func resetPublishedRuleSignature() {
+        ruleSignatureLock.lock()
+        lastPublishedRuleSignature = nil
+        ruleSignatureLock.unlock()
+    }
+
     /// Suffix match: `api.x.com` matches rule `x.com`; `notx.com` does not. `names` are lowercased.
     private static func sniMatches(_ host: String, names: [String]) -> Bool {
         let h = host.lowercased()
@@ -185,6 +220,9 @@ public final class TransparentProxyProvider: NETransparentProxyProvider {
         let settings = NETransparentProxyNetworkSettings(tunnelRemoteAddress: "127.0.0.1")
         let includeRules = buildIncludedNetworkRules()
         settings.includedNetworkRules = includeRules
+        // Seed the published-rule signature so the first flushOnce/appMessage doesn't republish this
+        // identical set (this startProxy push below is the baseline).
+        _ = shouldPublishRules(includeRules)
 
         // TEMP INSTRUMENTATION (first-run domain-bypass diagnosis) — remove after diagnosis.
         // Prints, per activation, the EXACT destination CIDRs and rule shape the OS is given. If
@@ -194,8 +232,8 @@ public final class TransparentProxyProvider: NETransparentProxyProvider {
         // domain regardless of IPs (only happens in app-tunnel mode).
         startProxyActivationCount += 1
         let (diagCidrs, diagEnforce, _) = currentDestinationState()
-        let sniMode = diagEnforce && !destinationDomainNames.isEmpty
         destinationLock.lock()
+        let sniMode = diagEnforce && !destinationDomainNames.isEmpty
         let diagRemoteDNS = remoteDNSResolution
         let diagMode = destinationFilterMode
         destinationLock.unlock()
@@ -249,6 +287,8 @@ public final class TransparentProxyProvider: NETransparentProxyProvider {
         tunnelDNSHost = nil
         destinationFilterMode = .include
         destinationLock.unlock()
+        // Next session must republish from its own baseline, not be elided as "unchanged".
+        resetPublishedRuleSignature()
         completionHandler()
     }
 
@@ -1038,6 +1078,12 @@ public final class TransparentProxyProvider: NETransparentProxyProvider {
         // Best-effort re-check: don't push rules built from pre-stop state onto a provider that
         // stopped between the unlock above and here.
         guard generation == currentSessionGeneration() else { return }
+        // Skip if the rule set is byte-for-byte what we last published (e.g. exclude mode, whose
+        // catch-all rules don't change when the CIDR set grows) — avoids needless reconfiguration.
+        guard shouldPublishRules(settings.includedNetworkRules ?? []) else {
+            Self.log.notice("applyDestinationPayload: rules unchanged — skipping setTunnelNetworkSettings")
+            return
+        }
         setTunnelNetworkSettings(settings) { error in
             if let error {
                 Self.log.error("applyDestinationPayload setTunnelNetworkSettings failed: \(error.localizedDescription)")
