@@ -2,6 +2,7 @@ import Foundation
 import Darwin
 import Network
 import NetworkExtension
+import os
 import os.log
 
 public final class PacketTunnelProvider: NEPacketTunnelProvider {
@@ -149,18 +150,24 @@ public final class PacketTunnelProvider: NEPacketTunnelProvider {
         let conn = NWConnection(host: nwHost, port: nwPort, using: params)
         let started = DispatchTime.now()
         let probeQueue = DispatchQueue(label: "com.tunnelbahn.mac.networkextension.wgtcp.probe")
+        let logger = self.logger
         await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
-            // All closures below are dispatched on the serial `probeQueue`, so this plain flag needs
-            // no atomics. `.waiting` never finishes; only `.ready`/`.failed`/timeout do.
-            var resolved = false
-            func elapsedMs() -> String {
+            // All closures below are dispatched on the serial `probeQueue`; the lock exists only
+            // because `@Sendable` can't see that serialization. `.waiting` never finishes; only
+            // `.ready`/`.failed`/timeout do.
+            let resolved = OSAllocatedUnfairLock(initialState: false)
+            @Sendable func elapsedMs() -> String {
                 let ms = Double(DispatchTime.now().uptimeNanoseconds - started.uptimeNanoseconds) / 1_000_000
                 return String(format: "%.0f", ms)
             }
-            func finish(_ msg: String) {
-                guard !resolved else { return }
-                resolved = true
-                self.logger.notice("[APPSPLIT_WGTCP_PROBE] \(msg) elapsed=\(elapsedMs())ms")
+            @Sendable func finish(_ msg: String) {
+                let isFirst = resolved.withLock { done -> Bool in
+                    if done { return false }
+                    done = true
+                    return true
+                }
+                guard isFirst else { return }
+                logger.notice("[APPSPLIT_WGTCP_PROBE] \(msg) elapsed=\(elapsedMs())ms")
                 conn.cancel()
                 cont.resume()
             }
@@ -175,7 +182,7 @@ public final class PacketTunnelProvider: NEPacketTunnelProvider {
                     finish("TCP .failed to \(host):\(port) err=\(err)")
                 case let .waiting(err):
                     // Transient — log and KEEP waiting (do not finish).
-                    self.logger.notice("[APPSPLIT_WGTCP_PROBE] TCP .waiting (transient) to \(host):\(port) err=\(err) elapsed=\(elapsedMs())ms")
+                    logger.notice("[APPSPLIT_WGTCP_PROBE] TCP .waiting (transient) to \(host):\(port) err=\(err) elapsed=\(elapsedMs())ms")
                 default: break
                 }
             }

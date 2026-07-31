@@ -18,7 +18,12 @@ import Security
 ///     masked WG init arrives at wg-exit scrambled (type byte 0x7d instead of 0x01), is dropped
 ///     before peer attribution, and the handshake never completes. We therefore emit UNMASKED frames
 ///     (mask bit = 0), exactly as wstunnel's own client does.
-final class WGTCPWrapperRelay: NSObject {
+///
+/// `@unchecked Sendable`: `self` is captured by `@Sendable` dispatch/Network.framework callbacks,
+/// but all mutable state is confined to the serial `queue` — every handler runs on it and
+/// `stop()`/`resolveOpen` hop onto it; the few setup writes made off-queue during `start()`
+/// happen-before the corresponding listener/connection is started on the queue.
+final class WGTCPWrapperRelay: NSObject, @unchecked Sendable {
     private let config: WireGuardTCPWrapper
     private let queue = DispatchQueue(label: "com.tunnelbahn.mac.wgtcp.relay")
     private let logger = Logger(subsystem: "com.tunnelbahn.mac.networkextension", category: "WGTCPRelay")

@@ -158,13 +158,18 @@ final class SSHFlowTransport: RelayFlowTransport, @unchecked Sendable {
             // reachable via public API — noted as a follow-up.
             .channelOption(ChannelOptions.socketOption(.so_keepalive), value: 1)
             .channelInitializer { channel in
-                let sshHandler = NIOSSHHandler(
-                    role: .client(.init(userAuthDelegate: authDelegate,
-                                        serverAuthDelegate: serverAuth)),
-                    allocator: channel.allocator,
-                    inboundChildChannelInitializer: nil)
-                let authObserver = AuthCompletionHandler(promise: authPromise, log: Self.log)
-                return channel.pipeline.addHandlers([sshHandler, authObserver])
+                // The initializer runs on the channel's event loop, so add the handlers via
+                // `syncOperations` — the async `pipeline.addHandlers` would require the
+                // non-`Sendable` `NIOSSHHandler` to cross a concurrency boundary.
+                channel.eventLoop.makeCompletedFuture {
+                    let sshHandler = NIOSSHHandler(
+                        role: .client(.init(userAuthDelegate: authDelegate,
+                                            serverAuthDelegate: serverAuth)),
+                        allocator: channel.allocator,
+                        inboundChildChannelInitializer: nil)
+                    let authObserver = AuthCompletionHandler(promise: authPromise, log: Self.log)
+                    try channel.pipeline.syncOperations.addHandlers([sshHandler, authObserver])
+                }
             }
 
         let channel: Channel
@@ -379,34 +384,38 @@ final class SSHFlowTransport: RelayFlowTransport, @unchecked Sendable {
         let originator = (try? SocketAddress(ipAddress: "0.0.0.0", port: 0))
             ?? (try! SocketAddress(unixDomainSocketPath: "/"))
 
-        // `NIOSSHHandler.createChannel` must run on the parent channel's event loop.
-        // `pipeline.handler(type:)` completes on that loop, so the whole open runs there.
-        channel.pipeline.handler(type: NIOSSHHandler.self).whenComplete { [weak self] result in
+        // `NIOSSHHandler.createChannel` must run on the parent channel's event loop. Hop there with
+        // `execute` and grab the handler via `syncOperations` — `NIOSSHHandler` is not `Sendable`,
+        // so it must never travel through a future's `@Sendable` completion; created and consumed
+        // entirely on the loop, it never crosses a concurrency boundary.
+        channel.eventLoop.execute { [weak self] in
             guard let self = self else { return }
-            switch result {
-            case .failure(let error):
+            let sshHandler: NIOSSHHandler
+            do {
+                sshHandler = try channel.pipeline.syncOperations.handler(type: NIOSSHHandler.self)
+            } catch {
                 self.removeAndReportClosed(flowID: flowID, reason: "SSH handler unavailable: \(error)")
-            case .success(let sshHandler):
-                let target = SSHChannelType.DirectTCPIP(targetHost: remoteHost,
-                                                        targetPort: Int(remotePort),
-                                                        originatorAddress: originator)
-                let openPromise = channel.eventLoop.makePromise(of: Channel.self)
-                sshHandler.createChannel(openPromise, channelType: .directTCPIP(target)) { childChannel, _ in
-                    let handler = SSHChannelHandler(
-                        flowID: flowID,
-                        onData: { [weak self] fid, data in self?.onPayloadFromFlow?(fid, data) },
-                        onClose: { [weak self] fid, reason in
-                            self?.removeAndReportClosed(flowID: fid, reason: reason)
-                        })
-                    return childChannel.pipeline.addHandler(handler)
-                }
-                openPromise.futureResult.whenComplete { openResult in
-                    switch openResult {
-                    case .success(let childChannel):
-                        self.activateFlow(flowID: flowID, childChannel: childChannel)
-                    case .failure(let error):
-                        self.removeAndReportClosed(flowID: flowID, reason: "channel open failed: \(error)")
-                    }
+                return
+            }
+            let target = SSHChannelType.DirectTCPIP(targetHost: remoteHost,
+                                                    targetPort: Int(remotePort),
+                                                    originatorAddress: originator)
+            let openPromise = channel.eventLoop.makePromise(of: Channel.self)
+            sshHandler.createChannel(openPromise, channelType: .directTCPIP(target)) { childChannel, _ in
+                let handler = SSHChannelHandler(
+                    flowID: flowID,
+                    onData: { [weak self] fid, data in self?.onPayloadFromFlow?(fid, data) },
+                    onClose: { [weak self] fid, reason in
+                        self?.removeAndReportClosed(flowID: fid, reason: reason)
+                    })
+                return childChannel.pipeline.addHandler(handler)
+            }
+            openPromise.futureResult.whenComplete { openResult in
+                switch openResult {
+                case .success(let childChannel):
+                    self.activateFlow(flowID: flowID, childChannel: childChannel)
+                case .failure(let error):
+                    self.removeAndReportClosed(flowID: flowID, reason: "channel open failed: \(error)")
                 }
             }
         }
@@ -885,7 +894,11 @@ private struct SSHBlobReader {
 /// Offers the configured private key for `publickey` authentication. Offers the key exactly once;
 /// if the server rejects it and asks again, fails the challenge (nil offer) to avoid an infinite
 /// re-offer loop.
-private final class PrivateKeyAuth: NIOSSHClientUserAuthenticationDelegate {
+///
+/// `@unchecked Sendable`: crosses into the `@Sendable` channelInitializer, but `offered` is only
+/// mutated from `nextAuthenticationType`, which NIOSSH invokes serially on the connection's event
+/// loop; everything else is immutable.
+private final class PrivateKeyAuth: NIOSSHClientUserAuthenticationDelegate, @unchecked Sendable {
     private let username: String
     private let privateKey: NIOSSHPrivateKey
     private let log: AppLog
@@ -922,7 +935,11 @@ private final class PrivateKeyAuth: NIOSSHClientUserAuthenticationDelegate {
 /// Validates the server host key against the `SSHHostKeyStore` (TOFU) or an explicit pin.
 /// On mismatch it FAILS the validation promise — a changed host key is a hard MITM failure and is
 /// never auto-trusted.
-private final class HostKeyValidator: NIOSSHClientServerAuthenticationDelegate {
+///
+/// `@unchecked Sendable`: crosses into the `@Sendable` channelInitializer, but the only mutable
+/// state (`rejectionReason`) is written on the event loop before the validation promise fails and
+/// read by `start()` only after awaiting that failure (happens-after, documented on the property).
+private final class HostKeyValidator: NIOSSHClientServerAuthenticationDelegate, @unchecked Sendable {
     private let host: String
     private let store: SSHHostKeyStore
     private let explicitPin: String?
