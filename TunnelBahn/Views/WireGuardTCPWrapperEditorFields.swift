@@ -33,7 +33,7 @@ struct WireGuardTCPWrapperEditorFields: View {
                     Toggle("Use TLS (wss)", isOn: $tls)
                         .instantTooltip("On = wss (TLS). Off = plaintext ws for a non-TLS server.")
                     Toggle("Verify server certificate", isOn: $verifyCert)
-                        .instantTooltip("Off (default) matches wstunnel and is required for the bare-IP reference server whose cert won't validate against an IP.")
+                        .instantTooltip("Off matches wstunnel and is required for bare-IP servers whose cert won't validate.")
 
                     Text("Secret path prefix").font(.caption).foregroundStyle(.secondary)
                     TextField("path prefix from your server", text: $pathPrefix)
@@ -48,7 +48,7 @@ struct WireGuardTCPWrapperEditorFields: View {
                         TextField("51840", text: $forwardPort)
                             .textFieldStyle(.roundedBorder).frame(maxWidth: 80)
                     }
-                    .instantTooltip("Where the server unwraps UDP to — the WireGuard listener behind the wstunnel server (usually 127.0.0.1:51840).")
+                    .instantTooltip("The WireGuard listener behind the wstunnel server, usually 127.0.0.1:51840.")
                 }
             }
             .padding(.top, 4)

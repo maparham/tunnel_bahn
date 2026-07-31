@@ -631,7 +631,7 @@ struct ProfilesView: View {
         // NSPanel defaults to isReleasedWhenClosed == true; with no strong reference held,
         // the close button would over-release the panel under ARC and crash.
         panel.isReleasedWhenClosed = false
-        panel.title = "QR Code — \(profile.name)"
+        panel.title = "QR Code: \(profile.name)"
         panel.contentView = hosting
         panel.level = .floating
         panel.center()

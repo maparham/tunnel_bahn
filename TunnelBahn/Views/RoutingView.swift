@@ -47,7 +47,7 @@ struct RoutingView: View {
 
     /// Shown as the macOS tooltip on the bulk-lists info icon (Import… and Paste List share one parser).
     private static let bulkListsImportPasteHelpText =
-        "Plain UTF-8: IPv4/IPv6 CIDRs, one per line or comma-separated on a line. Lines starting with # are comments. Invalid tokens and duplicates are skipped."
+        "IPv4/IPv6 CIDRs, one per line or comma-separated. # starts a comment. Invalid and duplicate entries are skipped."
 
     private static let allDestinationsTooltip =
         "All network traffic is routed through the VPN regardless of destination."
@@ -56,16 +56,16 @@ struct RoutingView: View {
         "Only traffic to the CIDRs and domains you configure below is routed through the VPN."
 
     private static let customRangesTooltip =
-        "Manually enter individual IPv4/IPv6 CIDRs (e.g. 10.0.0.0/8). Only traffic to these ranges is routed through the VPN when destination filtering is on."
+        "Individual IPv4/IPv6 CIDRs, e.g. 10.0.0.0/8."
 
     private static let domainNamesTooltip =
-        "Enter domain names (e.g. x.com). Their IP addresses are resolved at connect time and treated as destination CIDRs. Re-resolved every 30 seconds."
+        "Domain names, e.g. x.com. Resolved to IPs at connect time and re-resolved every 30 seconds."
 
     private static let excludeDestinationsTooltip =
-        "Everything routed through this profile is tunneled EXCEPT destinations matching the lists below — e.g. import your country's IP ranges so domestic traffic stays direct and fast. Available in App-Tunnel mode only; not supported with full-tunnel routing."
+        "Tunnel everything except the destinations below, e.g. your country's IP ranges. App-Tunnel mode only."
 
     private static let resolveDNSLocallyTooltip =
-        "Routed apps' DNS uses the local (system) resolver instead of the tunnel resolver. Steers direct/domestic sites to nearby CDN edges, but the local resolver's filtering then applies — with \"Tunnel selected destinations\" a censored local resolver can break the very sites you tunnel. Off = DNS is redirected through the tunnel resolver. SSH profiles always resolve remotely."
+        "Use the local resolver instead of the tunnel resolver, steering direct sites to nearby CDN edges. A censored local resolver can break tunneled sites. SSH profiles always resolve remotely."
 
 
     /// Destination routing is snapshotted to the extension at connect time. Editing is locked

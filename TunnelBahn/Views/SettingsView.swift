@@ -43,7 +43,7 @@ struct SettingsView: View {
                             Text("Run connectivity check after connect")
                             Image(systemName: "questionmark.circle")
                                 .foregroundStyle(.secondary)
-                                .instantTooltip("After the VPN connects, automatically checks that the tunnel is working by verifying your public IP and making a test HTTPS/DNS request.")
+                                .instantTooltip("After connect, verifies the tunnel works via a public-IP check and a test HTTPS/DNS request.")
                         }
                     }
                     Toggle(isOn: $appState.settings.includeHostAppInPerAppRulesForProbe) {
@@ -51,7 +51,7 @@ struct SettingsView: View {
                             Text("Route this app through the VPN during the check")
                             Image(systemName: "questionmark.circle")
                                 .foregroundStyle(.secondary)
-                                .instantTooltip("When using per-app VPN rules, TunnelBahn itself is normally excluded from the tunnel. Turn this on to route TunnelBahn through the VPN while the connectivity check runs, so the check tests the tunnel directly.")
+                                .instantTooltip("Routes TunnelBahn itself through the VPN while the check runs, so the check tests the tunnel directly.")
                         }
                     }
                     .disabled(!AppConstants.isPerAppSplitTunnelEnabled)

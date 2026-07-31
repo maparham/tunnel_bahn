@@ -187,7 +187,7 @@ struct ProfileDetailView: View {
                         Text("Fingerprint:")
                             .foregroundStyle(.secondary)
                             .frame(width: 150, alignment: .trailing)
-                        Text("Trust on first use — pinned on first connect.")
+                        Text("Trust on first use; pinned on first connect.")
                             .foregroundStyle(.secondary)
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }
@@ -198,10 +198,8 @@ struct ProfileDetailView: View {
                         .frame(width: 150, alignment: .trailing)
                     Button("Reset Host Key Trust", action: onResetHostKey)
                         .instantTooltip(
-                            "TunnelBahn trusts this server's host key on first connect (trust-on-first-use) and "
-                            + "rejects any later change as a possible man-in-the-middle. Reset clears the pinned key "
-                            + "so the next connection re-establishes trust — use this only if you intentionally "
-                            + "changed the server's host key."
+                            "Clears the pinned host key so the next connect re-establishes trust. "
+                            + "Use only if you intentionally changed the server's host key."
                         )
                     Spacer(minLength: 0)
                 }
