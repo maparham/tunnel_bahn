@@ -17,16 +17,6 @@ final class WireGuardProfileTCPWrapperTests: XCTestCase {
         )
         let data = try JSONEncoder().encode(sampleProfile(wrapper: wrapper))
         let decoded = try JSONDecoder().decode(WireGuardProfile.self, from: data)
-        XCTAssertEqual(decoded.tcpWrapper, wrapper)   // guards the CodingKeys hazard
-    }
-
-    func testLegacyProfileDecodesWrapperAsNil() throws {
-        // A profile JSON produced before this field existed has no tcpWrapper key.
-        let data = try JSONEncoder().encode(sampleProfile(wrapper: nil))
-        var obj = try JSONSerialization.jsonObject(with: data) as! [String: Any]
-        obj.removeValue(forKey: "tcpWrapper")
-        let stripped = try JSONSerialization.data(withJSONObject: obj)
-        let decoded = try JSONDecoder().decode(WireGuardProfile.self, from: stripped)
-        XCTAssertNil(decoded.tcpWrapper)
+        XCTAssertEqual(decoded.tcpWrapper, wrapper)
     }
 }

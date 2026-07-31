@@ -11,7 +11,6 @@ enum DebugSelfChecks {
     /// Call once from the app's launch path (`TunnelBahnApp`).
     static func run() {
         checkSSHProfileRoundTrips()
-        checkLegacyProfileDefaultsToWireGuard()
         checkHostKeyTOFU()
         checkRemoteDNSTargetSelection()
         log.notice("[DEBUG_SELF_CHECKS] all checks passed")
@@ -44,19 +43,6 @@ enum DebugSelfChecks {
         assert(decoded == ssh, "SSHProfile Codable round-trip mismatch")
     }
 
-    private static func checkLegacyProfileDefaultsToWireGuard() {
-        // A profile JSON written before this feature has no `transport` key, and also
-        // predates `interface`/`peers` being required in this exact shape — this is just
-        // the minimal legacy payload needed to exercise the defaulting decoder path.
-        let legacy = """
-        {"id":"\(UUID().uuidString)","name":"Home","peers":[],\
-        "interface":{"privateKeyRef":"kc-1","addresses":[],"dnsServers":[]},\
-        "createdAt":0,"updatedAt":0}
-        """.data(using: .utf8)!
-        let decoded = try! JSONDecoder().decode(WireGuardProfile.self, from: legacy)
-        assert(decoded.transport == .wireguard, "legacy profile must default to .wireguard")
-        assert(decoded.ssh == nil, "legacy profile must have no ssh block")
-    }
 }
 
 /// In-memory `HostKeyBacking` double for the TOFU self-check. Must be a *class* (reference

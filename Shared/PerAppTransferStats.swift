@@ -5,24 +5,17 @@ import Foundation
 /// This is the JSON payload returned by the transparent proxy's `getStats` provider IPC reply:
 /// the extension encodes its current snapshot on request and the host app decodes it directly,
 /// with no intermediate file.
-/// - `schemaVersion` is mandatory and lets future format changes coexist with older app/extension
-///   pairs without crashing.
 struct PerAppTransferStats: Codable {
-    static let currentSchemaVersion: Int = 2
-
-    /// Bumped when the reply format changes incompatibly. Readers MUST ignore unknown versions.
-    var schemaVersion: Int
     /// Keyed by user-facing display name (e.g. "Google Chrome"), not signing identifier.
     /// Helper signing IDs (Chrome's 6 helpers, Safari's WebKit.Networking, etc.) are rolled up
     /// into the parent app entry by `PerAppIdentityMap` before being written here.
     var apps: [String: AppTransferEntry]
     /// Wall-clock timestamp of the last extension flush. Useful for staleness detection in the UI.
     var lastUpdate: Date
-    /// TCP-only per-(app, remote literal) session totals; empty for legacy v1 files on read.
+    /// TCP-only per-(app, remote literal) session totals.
     var perDestination: [PerDestinationTransferRow]
 
     static let empty = PerAppTransferStats(
-        schemaVersion: PerAppTransferStats.currentSchemaVersion,
         apps: [:],
         lastUpdate: .distantPast,
         perDestination: []

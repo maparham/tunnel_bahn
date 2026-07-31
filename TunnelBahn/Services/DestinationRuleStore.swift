@@ -10,23 +10,6 @@ private struct DestinationRoutingPersisted: Codable {
     var customRules: [DestinationCidrRule]
     var bulkGroups: [DestinationCidrBulkGroup]
     var domainRules: [DestinationDomainRule]
-
-    enum CodingKeys: String, CodingKey {
-        case customRules, bulkGroups, domainRules
-    }
-
-    init(customRules: [DestinationCidrRule], bulkGroups: [DestinationCidrBulkGroup], domainRules: [DestinationDomainRule]) {
-        self.customRules = customRules
-        self.bulkGroups = bulkGroups
-        self.domainRules = domainRules
-    }
-
-    init(from decoder: Decoder) throws {
-        let c = try decoder.container(keyedBy: CodingKeys.self)
-        customRules = try c.decodeIfPresent([DestinationCidrRule].self, forKey: .customRules) ?? []
-        bulkGroups = try c.decodeIfPresent([DestinationCidrBulkGroup].self, forKey: .bulkGroups) ?? []
-        domainRules = try c.decodeIfPresent([DestinationDomainRule].self, forKey: .domainRules) ?? []
-    }
 }
 
 @MainActor
@@ -371,37 +354,11 @@ final class DestinationRuleStore: ObservableObject {
         guard let data = AppGroupStore.defaults.data(forKey: defaultsKey) else {
             return
         }
-        let decoder = JSONDecoder()
-        if let v2 = try? decoder.decode(DestinationRoutingPersisted.self, from: data) {
-            customRules = v2.customRules
-            bulkGroups = v2.bulkGroups
-            domainRules = v2.domainRules
+        guard let persisted = try? JSONDecoder().decode(DestinationRoutingPersisted.self, from: data) else {
             return
         }
-        if let legacy = try? decoder.decode([DestinationCidrRule].self, from: data) {
-            let bulkThreshold = 150
-            if legacy.count > bulkThreshold {
-                let allEnabled = legacy.allSatisfy(\.isEnabled)
-                let allDisabled = legacy.allSatisfy { !$0.isEnabled }
-                if allEnabled || allDisabled {
-                    let cidrs = legacy.map { $0.cidr.trimmingCharacters(in: .whitespacesAndNewlines) }
-                        .filter { !$0.isEmpty }
-                    customRules = []
-                    bulkGroups = [
-                        DestinationCidrBulkGroup(
-                            title: "Migrated list",
-                            cidrs: cidrs,
-                            isEnabled: allEnabled
-                        ),
-                    ]
-                    save()
-                    return
-                }
-            }
-            customRules = legacy
-            bulkGroups = []
-            save()
-            return
-        }
+        customRules = persisted.customRules
+        bulkGroups = persisted.bulkGroups
+        domainRules = persisted.domainRules
     }
 }

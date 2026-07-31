@@ -43,10 +43,10 @@ extension DestinationDomainRule: Codable {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         id = try c.decode(UUID.self, forKey: .id)
         domain = try c.decode(String.self, forKey: .domain)
-        isEnabled = try c.decodeIfPresent(Bool.self, forKey: .isEnabled) ?? true
-        resolvedCidrs = try c.decodeIfPresent([String].self, forKey: .resolvedCidrs) ?? []
+        isEnabled = try c.decode(Bool.self, forKey: .isEnabled)
+        resolvedCidrs = try c.decode([String].self, forKey: .resolvedCidrs)
         resolvedAt = try c.decodeIfPresent(Date.self, forKey: .resolvedAt)
-        resolvedTTL = try c.decodeIfPresent(TimeInterval.self, forKey: .resolvedTTL) ?? 0
+        resolvedTTL = try c.decode(TimeInterval.self, forKey: .resolvedTTL)
         // Reflect persisted IPs so they're shown as resolved and enforced immediately on launch,
         // while the coordinator re-resolves in the background to refresh/grow the set.
         status = resolvedCidrs.isEmpty ? .pending : .resolved(cidrCount: resolvedCidrs.count)

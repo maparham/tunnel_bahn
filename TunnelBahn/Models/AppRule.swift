@@ -29,41 +29,6 @@ struct AppRule: Codable, Identifiable, Hashable {
         get { action == .routeVPN }
         set { action = newValue ? .routeVPN : .bypass }
     }
-
-    private enum CodingKeys: String, CodingKey {
-        case id
-        case displayName
-        case bundleIdentifier
-        case appPath
-        case action
-        case useVPN
-        case bookmarkData
-    }
-
-    init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        id = try container.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
-        displayName = try container.decode(String.self, forKey: .displayName)
-        bundleIdentifier = try container.decode(String.self, forKey: .bundleIdentifier)
-        appPath = try container.decode(String.self, forKey: .appPath)
-        if let action = try container.decodeIfPresent(RoutingAction.self, forKey: .action) {
-            self.action = action
-        } else {
-            let useVPN = try container.decodeIfPresent(Bool.self, forKey: .useVPN) ?? false
-            action = useVPN ? .routeVPN : .bypass
-        }
-        bookmarkData = try container.decodeIfPresent(Data.self, forKey: .bookmarkData)
-    }
-
-    func encode(to encoder: Encoder) throws {
-        var container = encoder.container(keyedBy: CodingKeys.self)
-        try container.encode(id, forKey: .id)
-        try container.encode(displayName, forKey: .displayName)
-        try container.encode(bundleIdentifier, forKey: .bundleIdentifier)
-        try container.encode(appPath, forKey: .appPath)
-        try container.encode(action, forKey: .action)
-        try container.encodeIfPresent(bookmarkData, forKey: .bookmarkData)
-    }
 }
 
 struct DiscoveredApp: Identifiable, Hashable {

@@ -102,14 +102,14 @@ public final class TransparentProxyProvider: NETransparentProxyProvider {
     /// resolved IP, defeating local DNS hijacking. Populated from
     /// `TransparentProxyRuntimeConfig.remoteDNSResolution` in `refreshDestinationConfig`
     /// alongside `dropTunneledUDP` (same session-static, `destinationLock`-guarded field).
-    /// Defaults false (WireGuard and legacy configs unaffected).
+    /// Defaults false (WireGuard configs unaffected).
     private var remoteDNSResolution = false
     /// WG mode: tunnel-side DNS resolver IP. `UDPFlowRelay` rewrites a routed app's UDP DNS
     /// query aimed at a local/private resolver to this server and relays it THROUGH the tunnel,
     /// defeating hijacking/sinkholing local resolvers. Populated from
     /// `TransparentProxyRuntimeConfig.tunnelDNSHost` in `refreshDestinationConfig` (same
     /// session-static, `destinationLock`-guarded pattern as `dropTunneledUDP`). nil = disabled
-    /// (SSH mode / legacy configs).
+    /// (SSH mode).
     private var tunnelDNSHost: String?
 
     /// Suffix match: `api.x.com` matches rule `x.com`; `notx.com` does not. `names` are lowercased.
@@ -562,7 +562,6 @@ public final class TransparentProxyProvider: NETransparentProxyProvider {
     private func persistObservedForeignProxySigningIDs(_ ids: Set<String>) {
         guard let url = SharedPaths.observedForeignProxySigningIDsFileURL() else { return }
         let payload: [String: Any] = [
-            "schemaVersion": 1,
             "signingIdentifiers": Array(ids).sorted(),
         ]
         do {
@@ -963,7 +962,6 @@ public final class TransparentProxyProvider: NETransparentProxyProvider {
             )
         }
         let stats = PerAppTransferStats(
-            schemaVersion: PerAppTransferStats.currentSchemaVersion,
             apps: rolledUp,
             lastUpdate: .now,
             perDestination: perDestination

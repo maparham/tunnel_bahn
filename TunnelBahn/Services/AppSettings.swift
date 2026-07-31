@@ -66,15 +66,7 @@ final class AppSettings: ObservableObject {
         runTunnelConnectivityProbe = AppGroupStore.defaults.object(forKey: Keys.runTunnelConnectivityProbe) as? Bool ?? true
         includeHostAppInPerAppRulesForProbe =
             AppGroupStore.defaults.object(forKey: Keys.includeHostAppInPerAppRulesForProbe) as? Bool ?? true
-        if let migrated = AppGroupStore.defaults.object(forKey: Keys.showTrafficRates) as? Bool {
-            showTrafficRates = migrated
-        } else if let legacy = UserDefaults.standard.object(forKey: Keys.showTrafficRates) as? Bool {
-            showTrafficRates = legacy
-            AppGroupStore.defaults.set(legacy, forKey: Keys.showTrafficRates)
-            UserDefaults.standard.removeObject(forKey: Keys.showTrafficRates)
-        } else {
-            showTrafficRates = true
-        }
+        showTrafficRates = AppGroupStore.defaults.object(forKey: Keys.showTrafficRates) as? Bool ?? true
     }
 
     private func save() {

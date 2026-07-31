@@ -27,20 +27,16 @@ struct TransparentProxyRuntimeConfig: Codable, Equatable {
     /// True when the active profile's transport is SSH (as opposed to WireGuard). SSH forwards only
     /// TCP, so tunneled UDP has no backing path in this mode — `UDPFlowRelay` uses this to drop
     /// would-be-tunneled datagrams instead of dialing the WG-dependent `RelayOutboundConnection` path
-    /// (see project memory: SSH transport UDP no-leak requirement). Defaults to `false` so legacy
-    /// (pre-SSH-transport) encoded configs, which have no such key, decode to the existing WG
-    /// behavior unchanged.
+    /// (see project memory: SSH transport UDP no-leak requirement).
     var dropTunneledUDP: Bool
     /// True when the active profile's transport is SSH (as opposed to WireGuard). SSH mode
     /// resolves DNS on the far end (like `ssh -D` remote DNS) to defeat local DNS hijacking;
-    /// nothing consumes this yet (wired up in a later task). Defaults to `false` so legacy
-    /// (pre-remote-DNS) encoded configs, which have no such key, decode to the existing
-    /// local-resolution behavior unchanged, and WireGuard connects always carry `false`.
+    /// nothing consumes this yet (wired up in a later task). WireGuard connects always carry `false`.
     var remoteDNSResolution: Bool
     /// WG mode: tunnel-side DNS resolver IP. A routed app's UDP DNS query aimed at a
     /// local/private resolver (the typical hijacking/sinkholing setup) is rewritten to this
     /// server and sent THROUGH the tunnel instead of being bypassed to the local resolver.
-    /// `nil` (SSH mode / legacy configs) disables the redirect.
+    /// `nil` (SSH mode) disables the redirect.
     var tunnelDNSHost: String?
 
     static let providerConfigurationKey = "proxyConfigB64"
@@ -61,32 +57,6 @@ struct TransparentProxyRuntimeConfig: Codable, Equatable {
         self.dropTunneledUDP = dropTunneledUDP
         self.remoteDNSResolution = remoteDNSResolution
         self.tunnelDNSHost = tunnelDNSHost
-    }
-
-    private enum CodingKeys: String, CodingKey {
-        case signingIdentifiers
-        case routeAllIdentifiedFlows
-        case destinationRouting
-        case packetTunnelInterfaceName
-        case dropTunneledUDP
-        case remoteDNSResolution
-        case tunnelDNSHost
-    }
-
-    init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        signingIdentifiers = try container.decode([String].self, forKey: .signingIdentifiers)
-        routeAllIdentifiedFlows = try container.decode(Bool.self, forKey: .routeAllIdentifiedFlows)
-        destinationRouting = try container.decode(DestinationRoutingFilePayload.self, forKey: .destinationRouting)
-        packetTunnelInterfaceName = try container.decodeIfPresent(String.self, forKey: .packetTunnelInterfaceName)
-        // Legacy configs (encoded before Task 7) have no `dropTunneledUDP` key — default false
-        // preserves today's WG behavior (tunnel path never drops UDP) for any config in flight.
-        dropTunneledUDP = try container.decodeIfPresent(Bool.self, forKey: .dropTunneledUDP) ?? false
-        // Legacy configs (encoded before this task) have no `remoteDNSResolution` key — default
-        // false preserves today's local-resolution behavior for any config in flight.
-        remoteDNSResolution = try container.decodeIfPresent(Bool.self, forKey: .remoteDNSResolution) ?? false
-        // Legacy configs have no `tunnelDNSHost` key — nil disables the WG DNS redirect.
-        tunnelDNSHost = try container.decodeIfPresent(String.self, forKey: .tunnelDNSHost)
     }
 
     static func encodeBase64(_ config: TransparentProxyRuntimeConfig) throws -> String {
