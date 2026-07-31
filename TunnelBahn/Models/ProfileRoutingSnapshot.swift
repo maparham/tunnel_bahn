@@ -10,6 +10,10 @@ struct ProfileRoutingSnapshot: Codable {
     var customCidrRules: [DestinationCidrRule]
     var bulkGroups: [DestinationCidrBulkGroup]
     var domainRules: [DestinationDomainRule]
+    var filterMode: DestinationFilterMode
+    /// Exclude mode only: suppress the tunnel-DNS redirect so routed apps resolve via the
+    /// local resolver (better domestic CDN steering; local DNS filtering applies).
+    var localDNSForExcluded: Bool
 
     static var `default`: ProfileRoutingSnapshot {
         ProfileRoutingSnapshot(
@@ -34,7 +38,9 @@ struct ProfileRoutingSnapshot: Codable {
         appRules: [AppRule],
         customCidrRules: [DestinationCidrRule],
         bulkGroups: [DestinationCidrBulkGroup],
-        domainRules: [DestinationDomainRule] = []
+        domainRules: [DestinationDomainRule] = [],
+        filterMode: DestinationFilterMode = .include,
+        localDNSForExcluded: Bool = false
     ) {
         self.routingMode = routingMode
         self.enforceDestinationFiltering = enforceDestinationFiltering
@@ -45,5 +51,7 @@ struct ProfileRoutingSnapshot: Codable {
         self.customCidrRules = customCidrRules
         self.bulkGroups = bulkGroups
         self.domainRules = domainRules
+        self.filterMode = filterMode
+        self.localDNSForExcluded = localDNSForExcluded
     }
 }

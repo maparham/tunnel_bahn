@@ -356,6 +356,7 @@ final class VPNManager: ObservableObject {
 
 
             var destinationEnforce = false
+            var destinationFilterMode: DestinationFilterMode = .include
             var destinationRanges: [String] = []
 
             if useAppTunnelNEStack || isFullTunnelDestFilterShape {
@@ -379,15 +380,18 @@ final class VPNManager: ObservableObject {
                 if !profileOkForAccounting && profile.transport == .wireguard {
                     destinationRanges = extensionProfile.peers.flatMap { $0.allowedIPs }
                     destinationEnforce = true
+                    // Split-tunnel AllowedIPs are inherently include-semantics; user filter mode does not apply.
                     persistDestinationRoutingFromHost(enforceFiltering: true, ranges: destinationRanges)
                     traceLog("split-tunnel: proxy destination filter set to AllowedIPs (\(destinationRanges.count) CIDRs)")
                 } else {
                     destinationEnforce = settings.enforceDestinationFiltering
+                    destinationFilterMode = settings.destinationFilterMode
                     destinationRanges = destinationCidrStrings
                     persistDestinationRoutingFromHost(
                         enforceFiltering: destinationEnforce,
                         ranges: destinationRanges,
-                        domainNames: destinationDomainNames
+                        domainNames: destinationDomainNames,
+                        filterMode: destinationFilterMode
                     )
                 }
                 pendingTransparentProxyConfig = makeTransparentProxyRuntimeConfig(
@@ -400,16 +404,16 @@ final class VPNManager: ObservableObject {
                     // Server-side DNS: only SSH mode can resolve names on the far end (via direct-tcpip).
                     // WireGuard mode must keep local resolution + numeric-IP relay, so gate strictly on transport.
                     remoteDNSResolution: profile.transport == .ssh,
-                    // WG mode: UDP DNS aimed at a local/private resolver is rewritten to this
-                    // tunnel-side resolver and relayed through the tunnel (defeats resolver
-                    // hijacking/sinkholing). Prefer the profile's own DNS server; 1.1.1.1 as a
-                    // reliable fallback. SSH mode uses SNI remote-DNS instead — nil disables.
-                    tunnelDNSHost: profile.transport == .ssh
+                    // SSH mode resolves remotely (SNI); exclude-mode profiles with "resolve DNS locally"
+                    // suppress the redirect so routed apps' DNS exits via the local-bypass direct path.
+                    tunnelDNSHost: (profile.transport == .ssh
+                            || (destinationFilterMode == .exclude && settings.localDNSForExcluded))
                         ? nil
-                        : (extensionProfile.interface.dnsServers.first(where: { $0.contains(".") }) ?? "1.1.1.1")
+                        : (extensionProfile.interface.dnsServers.first(where: { $0.contains(".") }) ?? "1.1.1.1"),
+                    filterMode: destinationFilterMode
                 )
                 traceLog(
-                    "transparent proxy runtime config: signingIDs=\(pendingTransparentProxyConfig?.signingIdentifiers.count ?? 0) routeAll=\(!hasAppTunnelSelection) destRanges=\(destinationRanges.count) destDomains=\(destinationDomainNames.count) names=[\(destinationDomainNames.prefix(12).joined(separator: ","))]"
+                    "transparent proxy runtime config: signingIDs=\(pendingTransparentProxyConfig?.signingIdentifiers.count ?? 0) routeAll=\(!hasAppTunnelSelection) destRanges=\(destinationRanges.count) destDomains=\(destinationDomainNames.count) names=[\(destinationDomainNames.prefix(12).joined(separator: ","))] mode=\(destinationFilterMode.rawValue)"
                 )
                 traceLog(
                     "VPN accounting stack: tunnel DNS servers=[\(extensionProfile.interface.dnsServers.joined(separator: ", "))]"
@@ -651,8 +655,8 @@ final class VPNManager: ObservableObject {
     /// reads it when running; keeping it aligned while disconnected avoids stale `enforce` if the tunnel
     /// stops outside TunnelBahn and is started again).
     @MainActor
-    func syncDestinationRoutingFromHostActivity(enforceFiltering: Bool, flattenedRangeStrings: [String]) {
-        persistDestinationRoutingFromHost(enforceFiltering: enforceFiltering, ranges: flattenedRangeStrings)
+    func syncDestinationRoutingFromHostActivity(enforceFiltering: Bool, flattenedRangeStrings: [String], filterMode: DestinationFilterMode = .include) {
+        persistDestinationRoutingFromHost(enforceFiltering: enforceFiltering, ranges: flattenedRangeStrings, filterMode: filterMode)
     }
 
     /// Live-push the connected per-app-split profile's merged destination CIDRs to the running
@@ -1385,7 +1389,8 @@ final class VPNManager: ObservableObject {
         destinationDomainNames: [String],
         dropTunneledUDP: Bool,
         remoteDNSResolution: Bool,
-        tunnelDNSHost: String? = nil
+        tunnelDNSHost: String? = nil,
+        filterMode: DestinationFilterMode = .include
     ) -> TransparentProxyRuntimeConfig {
         TransparentProxyRuntimeConfig(
             signingIdentifiers: routeAllIdentifiedFlows ? [] : signingIdentifiers(from: appRules),
@@ -1393,7 +1398,8 @@ final class VPNManager: ObservableObject {
             destinationRouting: DestinationRoutingFilePayload(
                 enforceDestinationFiltering: enforceDestinationFiltering,
                 ranges: destinationRanges,
-                domainNames: destinationDomainNames
+                domainNames: destinationDomainNames,
+                filterMode: filterMode
             ),
             dropTunneledUDP: dropTunneledUDP,
             remoteDNSResolution: remoteDNSResolution,
@@ -1470,15 +1476,15 @@ final class VPNManager: ObservableObject {
         removeDestinationRoutingFile()
     }
 
-    private func persistDestinationRoutingFromHost(enforceFiltering: Bool, ranges: [String], domainNames: [String] = []) {
+    private func persistDestinationRoutingFromHost(enforceFiltering: Bool, ranges: [String], domainNames: [String] = [], filterMode: DestinationFilterMode = .include) {
         guard let fileURL = SharedPaths.destinationRangesFileURL() else {
             traceLog("WARNING: unable to locate destination routing App Group URL")
             return
         }
-        let payload = DestinationRoutingFilePayload(enforceDestinationFiltering: enforceFiltering, ranges: ranges, domainNames: domainNames)
+        let payload = DestinationRoutingFilePayload(enforceDestinationFiltering: enforceFiltering, ranges: ranges, domainNames: domainNames, filterMode: filterMode)
         do {
             try DestinationRoutingFileStore.write(payload, to: fileURL)
-            traceLog("destination routing file written enforce=\(enforceFiltering) rawRangeCount=\(ranges.count) domainNames=\(domainNames.count)")
+            traceLog("destination routing file written enforce=\(enforceFiltering) rawRangeCount=\(ranges.count) domainNames=\(domainNames.count) mode=\(filterMode.rawValue)")
         } catch {
             traceLog("WARNING: destination routing write failed: \(error.localizedDescription)")
         }

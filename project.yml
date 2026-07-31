@@ -137,6 +137,13 @@ targets:
       - path: Shared/WGTCPWrapperRelay.swift
       - path: Shared/DestinationRouting.swift
       - path: Shared/TransparentProxyRuntimeConfig.swift
+      - path: TunnelBahn/Models/ProfileRoutingSnapshot.swift
+      - path: TunnelBahn/Models/RoutingMode.swift
+      - path: TunnelBahn/Models/AppRule.swift
+      - path: Shared/RoutingAction.swift
+      - path: TunnelBahn/Models/DestinationCidrRule.swift
+      - path: TunnelBahn/Models/DestinationCidrBulkGroup.swift
+      - path: TunnelBahn/Models/DestinationDomainRule.swift
     settings:
       base:
         INFOPLIST_FILE: Tests/Unit/Info.plist

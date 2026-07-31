@@ -86,6 +86,12 @@ public final class TransparentProxyProvider: NETransparentProxyProvider {
     /// Prepared form of `destinationRawCIDRs`, rebuilt only when the CIDR set changes, so the
     /// per-flow SNI decider can IP-match without re-parsing CIDR strings on the hot path.
     private var cachedPreparedRanges: [IPCIDRMatcher.PreparedRange] = []
+    /// Session-static destination-filter semantics (include = tunnel listed, exclude = tunnel
+    /// all EXCEPT listed). Populated from `TransparentProxyRuntimeConfig.destinationRouting`
+    /// in `refreshDestinationConfig` (same session-static, `destinationLock`-guarded pattern
+    /// as `dropTunneledUDP`); the appMessage live-push never changes it. Defaults `.include`
+    /// so legacy configs keep the historical whitelist behavior.
+    private var destinationFilterMode: DestinationFilterMode = .include
     /// The WireGuard utun interface name (e.g. "utun3"), populated from
     /// `TransparentProxyRuntimeConfig.packetTunnelInterfaceName` on each config refresh.
     private var tunnelInterfaceName: String?
@@ -187,9 +193,10 @@ public final class TransparentProxyProvider: NETransparentProxyProvider {
         let sniMode = diagEnforce && !destinationDomainNames.isEmpty
         destinationLock.lock()
         let diagRemoteDNS = remoteDNSResolution
+        let diagMode = destinationFilterMode
         destinationLock.unlock()
         Self.log.notice(
-            "[FIRSTRUN-DIAG] activation #\(self.startProxyActivationCount) enforce=\(diagEnforce) sniMode=\(sniMode) includeRuleCount=\(includeRules.count) destCidrCount=\(diagCidrs.count) remoteDNS=\(diagRemoteDNS) cidrs=[\(diagCidrs.prefix(24).joined(separator: ","))]"
+            "[FIRSTRUN-DIAG] activation #\(self.startProxyActivationCount) enforce=\(diagEnforce) sniMode=\(sniMode) includeRuleCount=\(includeRules.count) destCidrCount=\(diagCidrs.count) remoteDNS=\(diagRemoteDNS) mode=\(diagMode) cidrs=[\(diagCidrs.prefix(24).joined(separator: ","))]"
         )
 
         setTunnelNetworkSettings(settings) { [weak self] error in
@@ -236,6 +243,7 @@ public final class TransparentProxyProvider: NETransparentProxyProvider {
         dropTunneledUDP = false
         remoteDNSResolution = false
         tunnelDNSHost = nil
+        destinationFilterMode = .include
         destinationLock.unlock()
         completionHandler()
     }
@@ -697,8 +705,9 @@ public final class TransparentProxyProvider: NETransparentProxyProvider {
         let enforce = enforceDestinationFiltering
         let cidrs = destinationRawCIDRs
         let hasDomainNames = !destinationDomainNames.isEmpty
+        let mode = destinationFilterMode
         destinationLock.unlock()
-        return buildIncludedNetworkRules(enforce: enforce, cidrs: cidrs, hasDomainNames: hasDomainNames)
+        return buildIncludedNetworkRules(enforce: enforce, cidrs: cidrs, hasDomainNames: hasDomainNames, mode: mode)
     }
 
     /// Pure rule builder over an explicit destination-state snapshot. Kept off the
@@ -707,11 +716,19 @@ public final class TransparentProxyProvider: NETransparentProxyProvider {
     /// concurrent `stopProxy` zero them between the write and this read and publish the catch-all
     /// rule set (full-tunnel for routed apps). The no-arg overload above reads a fresh locked
     /// snapshot, which is the right behavior for `startProxy`.
-    private func buildIncludedNetworkRules(enforce: Bool, cidrs: [String], hasDomainNames: Bool) -> [NENetworkRule] {
+    private func buildIncludedNetworkRules(enforce: Bool, cidrs: [String], hasDomainNames: Bool, mode: DestinationFilterMode) -> [NENetworkRule] {
         let catchAll: [NENetworkRule] = [
             NENetworkRule(remoteNetwork: nil, remotePrefix: 0, localNetwork: nil, localPrefix: 0, protocol: .TCP, direction: .outbound),
             NENetworkRule(remoteNetwork: nil, remotePrefix: 0, localNetwork: nil, localPrefix: 0, protocol: .UDP, direction: .outbound),
         ]
+
+        // Exclude mode: every routed-app flow must reach handleNewFlow so the per-flow (TCP)
+        // and per-datagram (UDP) logic can send LISTED destinations direct and tunnel the rest.
+        // NENetworkRule cannot express negation, so interception is catch-all for both protocols.
+        if enforce, mode == .exclude {
+            Self.log.notice("buildIncludedNetworkRules: exclude mode — catch-all TCP+UDP")
+            return catchAll
+        }
 
         // SNI mode: filtering on AND domain rules present. Intercept ALL outbound TCP so the proxy
         // can peek every flow's TLS SNI (the leaking CDN IPs are in no CIDR), but keep UDP narrowed
@@ -828,6 +845,7 @@ public final class TransparentProxyProvider: NETransparentProxyProvider {
                 dropTunneledUDP = config.dropTunneledUDP
                 remoteDNSResolution = config.remoteDNSResolution
                 tunnelDNSHost = config.tunnelDNSHost
+                destinationFilterMode = config.destinationRouting.filterMode
             }
             destinationLock.unlock()
             applyDestinationPayload(
@@ -853,6 +871,11 @@ public final class TransparentProxyProvider: NETransparentProxyProvider {
         }
         do {
             let payload = try JSONDecoder().decode(DestinationRoutingFilePayload.self, from: data)
+            destinationLock.lock()
+            if generation == currentSessionGeneration() {
+                destinationFilterMode = payload.filterMode
+            }
+            destinationLock.unlock()
             applyDestinationPayload(
                 enforce: payload.enforceDestinationFiltering,
                 rawCIDRs: payload.ranges,
@@ -882,6 +905,7 @@ public final class TransparentProxyProvider: NETransparentProxyProvider {
             Self.log.notice("applyDestinationPayload: stale generation, dropped source=\(source)")
             return
         }
+        let mode = destinationFilterMode
         // Union, never replace, within a session. Three writers race for this set — `startProxy`
         // (providerConfiguration baseline), the 1.5s `flushOnce` (re-reads the same baseline), and
         // host `appMessage` pushes (newly-resolved IPs) — and they can arrive in any order. A
@@ -919,7 +943,7 @@ public final class TransparentProxyProvider: NETransparentProxyProvider {
         // the unlock above and rule-building, making a re-read return — and publish — the
         // catch-all set (full-tunnel for routed apps) instead of the CIDR-narrowed rules.
         settings.includedNetworkRules = buildIncludedNetworkRules(
-            enforce: enforce, cidrs: merged, hasDomainNames: !newNames.isEmpty
+            enforce: enforce, cidrs: merged, hasDomainNames: !newNames.isEmpty, mode: mode
         )
         // Best-effort re-check: don't push rules built from pre-stop state onto a provider that
         // stopped between the unlock above and here.

@@ -134,6 +134,8 @@ final class AppState: ObservableObject {
             .merge(with: settings.$destinationBulkListsEnabled.dropFirst().map { _ in () }.eraseToAnyPublisher())
             .merge(with: settings.$destinationCustomRangesEnabled.dropFirst().map { _ in () }.eraseToAnyPublisher())
             .merge(with: settings.$destinationDomainNamesEnabled.dropFirst().map { _ in () }.eraseToAnyPublisher())
+            .merge(with: settings.$destinationFilterMode.dropFirst().map { _ in () }.eraseToAnyPublisher())
+            .merge(with: settings.$localDNSForExcluded.dropFirst().map { _ in () }.eraseToAnyPublisher())
             .debounce(for: .milliseconds(500), scheduler: DispatchQueue.main)
             .sink { [weak self] _ in
                 self?.saveCurrentSnapshot()
@@ -219,6 +221,8 @@ final class AppState: ObservableObject {
         settings.destinationBulkListsEnabled = snapshot.bulkListsEnabled
         settings.destinationCustomRangesEnabled = snapshot.customRangesEnabled
         settings.destinationDomainNamesEnabled = snapshot.domainNamesEnabled
+        settings.destinationFilterMode = snapshot.filterMode
+        settings.localDNSForExcluded = snapshot.localDNSForExcluded
         domainResolutionCoordinator.resolveAll()
         if syncDestinationRouting {
             syncDestinationRoutingFileWithPreferences()
@@ -257,7 +261,9 @@ final class AppState: ObservableObject {
             appRules: appRuleStore.rules,
             customCidrRules: destinationRuleStore.customRules,
             bulkGroups: destinationRuleStore.bulkGroups,
-            domainRules: destinationRuleStore.domainRules
+            domainRules: destinationRuleStore.domainRules,
+            filterMode: settings.destinationFilterMode,
+            localDNSForExcluded: settings.localDNSForExcluded
         )
         profileRoutingStore.save(snapshot: snapshot, for: profileID)
     }
@@ -431,7 +437,8 @@ final class AppState: ObservableObject {
                 customRangesEnabled: settings.destinationCustomRangesEnabled,
                 bulkListsEnabled: settings.destinationBulkListsEnabled,
                 domainNamesEnabled: settings.destinationDomainNamesEnabled
-            )
+            ),
+            filterMode: settings.destinationFilterMode
         )
     }
 
