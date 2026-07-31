@@ -144,6 +144,8 @@ targets:
       - path: TunnelBahn/Models/DestinationCidrRule.swift
       - path: TunnelBahn/Models/DestinationCidrBulkGroup.swift
       - path: TunnelBahn/Models/DestinationDomainRule.swift
+      - path: TunnelBahn/Models/DestinationModeRuleSet.swift
+      - path: TunnelBahn/Models/DestinationSectionToggles.swift
     settings:
       base:
         INFOPLIST_FILE: Tests/Unit/Info.plist
