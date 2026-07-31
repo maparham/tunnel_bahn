@@ -127,6 +127,15 @@ so profile switching just works.
 - E2E (tunnel up, Iranian CIDR bulk group excluded, verify direct vs tunneled paths)
   remains manual, consistent with the rest of the codebase.
 
+## Accepted residual risk: extension version skew
+
+A stale (pre-filterMode) system extension decoding an exclude-mode config ignores the
+unknown `filterMode` key and treats the rule list as a whitelist — tunneling ONLY the
+excluded CIDRs and leaking everything else, silently. Decision (2026-07-31): no
+app↔extension capability handshake. Old extensions are the user's responsibility to
+remove/approve; app and extension ship together and build numbers auto-bump to force
+sysext redeploy, so the skew window exists only while an update sits unapproved.
+
 ## Out of scope
 
 - Built-in or downloadable country IP lists (GeoIP).

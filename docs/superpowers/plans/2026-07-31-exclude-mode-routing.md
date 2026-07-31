@@ -15,6 +15,7 @@
 - **No xcodebuild without user OK (project standing rule, see 2026-07-23 plan):** ask the user for a go-ahead before ANY `xcodebuild` build/test invocation (a blanket OK at session start counts). Never launch the app or touch the running tunnel/system extension yourself — jammed-sysext state is a known hazard (see project memory).
 - **`project.yml` is the source of truth** for the Xcode project. After editing it, run `xcodegen generate` from the repo root (this rewrites `TunnelBahn.xcodeproj`).
 - **Decode tolerance:** every new Codable key must decode with a default when absent — `filterMode → .include`, `localDNSForExcluded → false`. Never bump `schemaVersion`.
+- **Version skew is ACCEPTED residual risk (user decision, 2026-07-31):** a stale pre-filterMode system extension reads an exclude config as a whitelist (tunnels only the excluded CIDRs, leaks the rest). No handshake/capability probe is to be built — old extensions are the user's responsibility to remove. Do not add compatibility shims for this; see the spec's "Accepted residual risk" section.
 - **Include mode must be byte-for-byte behavior-identical** to today. All new branches are gated on `mode == .exclude`.
 - Commit after each task with a conventional-commit message (`feat(...)`, `test(...)`), ending with the Claude co-author trailer used in this repo.
 - Test command (after user OK): `xcodebuild test -project TunnelBahn.xcodeproj -scheme TunnelBahn -only-testing:TunnelBahnUnitTests -configuration Debug 2>&1 | tail -30` (the scheme's test action runs `TunnelBahnUnitTests`).
@@ -323,7 +324,7 @@ In `bindChildStores`, in the merge chain that already lists `settings.$enforceDe
 
 - [ ] **Step 4: Thread mode into the host-side routing-file sync**
 
-`AppState.syncDestinationRoutingFileWithPreferences` calls `vpnManager.syncDestinationRoutingFromHostActivity(enforceFiltering:flattenedRangeStrings:)`. Add a `filterMode: settings.destinationFilterMode` argument here; the VPNManager side is changed in Task 4 — do BOTH signature ends in whichever of Tasks 3/4 runs second, or temporarily add the parameter to `syncDestinationRoutingFromHostActivity` now:
+`AppState.syncDestinationRoutingFileWithPreferences` calls `vpnManager.syncDestinationRoutingFromHostActivity(enforceFiltering:flattenedRangeStrings:)`. Add a `filterMode: settings.destinationFilterMode` argument at that call site, and update BOTH VPNManager functions it depends on now, in this task (the defaulted parameters keep every other call site compiling; Task 4 builds on these signatures):
 
 ```swift
 @MainActor
@@ -332,7 +333,7 @@ func syncDestinationRoutingFromHostActivity(enforceFiltering: Bool, flattenedRan
 }
 ```
 
-(This requires the `persistDestinationRoutingFromHost` change from Task 4 Step 2 — implement that small change here if executing tasks strictly in order: add `filterMode: DestinationFilterMode = .include` parameter and pass `filterMode: filterMode` into the `DestinationRoutingFilePayload(...)` it builds.)
+And in `persistDestinationRoutingFromHost`: add a `filterMode: DestinationFilterMode = .include` parameter and pass `filterMode: filterMode` into the `DestinationRoutingFilePayload(...)` it builds (Task 4 Step 2 then only adds its traceLog field).
 
 - [ ] **Step 5: Build check**
 
@@ -360,9 +361,9 @@ git commit -m "feat(app): filter-mode + local-DNS settings plumbed through profi
 
 Add parameter `filterMode: DestinationFilterMode = .include` and pass `filterMode: filterMode` into the `DestinationRoutingFilePayload(...)` it constructs.
 
-- [ ] **Step 2: Extend `persistDestinationRoutingFromHost`** (if not already done in Task 3 Step 4)
+- [ ] **Step 2: Extend `persistDestinationRoutingFromHost` logging**
 
-Add parameter `filterMode: DestinationFilterMode = .include`; pass into its `DestinationRoutingFilePayload(...)`; include `mode=\(filterMode.rawValue)` in its traceLog line.
+The `filterMode` parameter itself was added in Task 3 Step 4; here just include `mode=\(filterMode.rawValue)` in its traceLog line.
 
 - [ ] **Step 3: Thread mode through the connect path**
 
@@ -592,7 +593,19 @@ In `UDPFlowRelay`, after the `tunnelInterfaceName` property:
 private let filterMode: DestinationFilterMode
 ```
 
-Add `filterMode: DestinationFilterMode = .include,` to `init` (between `dropTunneledUDP` and `tunnelDNSHost`) and assign it.
+Add `filterMode: DestinationFilterMode = .include,` to `init` (between `dropTunneledUDP` and `tunnelDNSHost`) and assign it. Also add the memoization state next to the other `queue`-confined dictionaries (`nwConnections` etc.):
+
+```swift
+// Exclude-match memoization: in exclude mode the linear CIDR scan would otherwise run
+// per datagram against a country-size list (~5-8k ranges) for ALL routed UDP (QUIC
+// included) — unlike include mode, where interception is CIDR-narrowed upstream and the
+// autoclosure keeps the scan off the hot path. Keyed by destination host; the exclude
+// set can only GROW mid-session (appMessage pushes resolved excluded-domain IPs), so
+// invalidate on size change. A stale entry errs toward tunneling — the safe direction.
+// All access on `queue` (same discipline as the connection dictionaries).
+private var excludeVerdictCache: [String: Bool] = [:]
+private var excludeCacheRangeCount = -1
+```
 
 - [ ] **Step 2: Invert the per-datagram decision**
 
@@ -602,14 +615,30 @@ In `send(datagram:to:)`, replace the `useTunnel` computation (~lines 161-162) wi
 // Exclude mode: a destination in the user's ranges goes DIRECT (tunnelRanges holds the
 // exclude set); and a listed private CIDR can never mean "tunnel", so the bypass check
 // gets no override ranges. Include mode is byte-for-byte the previous behavior.
-let excluded = filterMode == .exclude
-    && IPCIDRMatcher.literalMatches(legacyEndpoint.hostname, ranges: tunnelRanges())
+let excluded = filterMode == .exclude && isExcluded(legacyEndpoint.hostname)
 var useTunnel = routeThroughTunnel
     && !excluded
     && !IPCIDRMatcher.shouldBypassLocal(
         legacyEndpoint.hostname,
         tunnelRanges: filterMode == .exclude ? [] : tunnelRanges()
     )
+```
+
+and add the cached-scan helper (runs on `queue`, like `send`):
+
+```swift
+/// Memoized exclude-set membership for `host` (see `excludeVerdictCache` doc).
+private func isExcluded(_ host: String) -> Bool {
+    let ranges = tunnelRanges()
+    if ranges.count != excludeCacheRangeCount {
+        excludeVerdictCache.removeAll()
+        excludeCacheRangeCount = ranges.count
+    }
+    if let cached = excludeVerdictCache[host] { return cached }
+    let verdict = IPCIDRMatcher.literalMatches(host, ranges: ranges)
+    excludeVerdictCache[host] = verdict
+    return verdict
+}
 ```
 
 In the DNS-redirect condition (~line 169), add `!excluded`:
@@ -677,6 +706,8 @@ static let excludeDestinationsTooltip =
 ```
 
 The empty-list safeguard (radio disabled when `!hasAnyDestinations`, `onAppear`/`onChange` forcing `enforceDestinationFiltering = false`) applies to exclude mode too — an empty exclude list (enforce off, catch-all intercept, tunnel everything) is behaviorally identical to what enforce-off already does, so nothing is lost.
+
+**Do not loosen the `destinationRoutingEditingLocked` gating** (`appState.isViewingConnectedProfile`): the provider treats `filterMode` as connect-time static (Task 5), so a mode flip only takes effect on reconnect — this lock is exactly what makes that safe UX-wise (no mid-session radio change that silently does nothing until reconnect). The new radio and DNS toggle must both carry it.
 
 - [ ] **Step 2: DNS toggle (exclude mode only)**
 
@@ -755,7 +786,11 @@ Setup: import a small bulk CIDR group containing a known-direct test range
    `[APPSPLIT_SNI] decision=direct reason=sni`.
 5. DNS with "Resolve DNS locally" OFF: `nslookup example.com` from the routed app —
    no leak to the local resolver (query rides the tunnel; check WG server or
-   tcpdump port 53 on en0 shows nothing from the app).
+   tcpdump port 53 on en0 shows nothing from the app). Scope note: the redirect
+   applies to queries aimed at LOCAL/private resolvers (the system default). An app
+   hardcoding a public non-excluded resolver (e.g. 8.8.8.8) tunnels to it; one
+   hardcoding an EXCLUDED resolver goes direct BY DESIGN (the user listed it) —
+   that is correct behavior, not a leak.
 6. Toggle "Resolve DNS locally" ON, reconnect: the same lookup now reaches the
    local resolver directly.
 7. Regression (include mode): switch the profile back to "Tunnel selected
