@@ -203,13 +203,6 @@ struct RoutingView: View {
         }
     }
 
-    private func modeGlyph(_ mode: DestinationFilterMode) -> some View {
-        Image(systemName: mode == .include ? "plus.circle" : "minus.circle")
-            .foregroundStyle(mode == .include ? Color.blue : Color.orange)
-            .imageScale(.medium)
-            .accessibilityLabel(mode == .include ? "Tunnel only selected" : "Tunnel all except selected")
-    }
-
     /// Grouped card for the routing radio buttons.
     private func restrictProxySection() -> some View {
         GroupBox {
@@ -234,7 +227,6 @@ struct RoutingView: View {
                             label: "Tunnel only selected destinations",
                             disabled: destinationRoutingEditingLocked
                         ) { selectMode(.include) }
-                        modeGlyph(.include)
                         Image(systemName: "questionmark.circle")
                             .foregroundStyle(.secondary)
                             .instantTooltip(Self.selectedDestinationsTooltip)
@@ -252,7 +244,6 @@ struct RoutingView: View {
                             disabled: destinationRoutingEditingLocked
                                 || appState.settings.routingMode == .fullTunnel
                         ) { selectMode(.exclude) }
-                        modeGlyph(.exclude)
                         Image(systemName: "questionmark.circle")
                             .foregroundStyle(.secondary)
                             .instantTooltip(Self.excludeDestinationsTooltip)
@@ -315,7 +306,6 @@ struct RoutingView: View {
         GroupBox {
             VStack(alignment: .leading, spacing: 12) {
                 HStack(alignment: .firstTextBaseline, spacing: 6) {
-                    modeGlyph(displayedMode)
                     Text("Bulk lists")
                         .font(.headline)
                     bulkListsFormatInfoIcon()
@@ -381,7 +371,6 @@ struct RoutingView: View {
             GroupBox {
                 VStack(alignment: .leading, spacing: 12) {
                     HStack(alignment: .firstTextBaseline, spacing: 6) {
-                        modeGlyph(displayedMode)
                         Text("Custom ranges")
                             .font(.headline)
                         Image(systemName: "questionmark.circle")
@@ -524,7 +513,6 @@ struct RoutingView: View {
             GroupBox {
                 VStack(alignment: .leading, spacing: 12) {
                     HStack(alignment: .firstTextBaseline, spacing: 6) {
-                        modeGlyph(displayedMode)
                         Text("Domain names")
                             .font(.headline)
                         Image(systemName: "questionmark.circle")
