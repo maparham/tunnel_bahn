@@ -170,7 +170,11 @@ public final class TransparentProxyProvider: NETransparentProxyProvider {
         // fd, the reply never arrives, and curl hangs forever.
         TransparentProxyRelayClient.shared.reset(reason: "startProxy")
         refreshRoutedSigningIdentifiers()
-        refreshDestinationConfig(generation: generation)
+        // Suppress the push here: startProxy issues its own setTunnelNetworkSettings below (line
+        // ~208) from the same freshly-written state. Without this, the first-activation
+        // `changed==true` made applyDestinationPayload fire a second, overlapping push — the
+        // documented "macOS diverting nothing" first-run domain-bypass race.
+        refreshDestinationConfig(generation: generation, suppressSettingsPush: true)
         // Reset the observed-competitor list on a fresh start. If the user removed the competing
         // proxy between connects, this prevents a stale warning from persisting forever.
         foreignProxyLock.lock()
@@ -418,9 +422,11 @@ public final class TransparentProxyProvider: NETransparentProxyProvider {
         let isTCPFlow = flow is NEAppProxyTCPFlow
         if let literal = literalRemoteHostname(from: flow),
            !(remoteDNS && isTCPFlow && IPCIDRMatcher.literalMatches(literal, ranges: IPCIDRMatcher.overridablePrivateRanges)),
-           // Exclude mode: a listed CIDR means DIRECT, so the "user configured this private range
-           // for tunneling" override can never apply — pass no tunnel ranges.
-           IPCIDRMatcher.shouldBypassLocal(literal, tunnelRanges: (enforce && filterMode == .exclude) ? [] : preparedRanges) {
+           // The "user configured this private range for tunneling" override is valid ONLY in
+           // enforce+include: exclude mode means a listed CIDR is DIRECT (no override), and with
+           // enforce OFF the shipped ranges are dormant — a dormant private CIDR must not tunnel
+           // (and black-hole) LAN traffic. Pass tunnel ranges only when include filtering is active.
+           IPCIDRMatcher.shouldBypassLocal(literal, tunnelRanges: (enforce && filterMode == .include) ? preparedRanges : []) {
             Self.log.notice("[APPSPLIT_FLOW] decision=bypass-local signingID=\(signingID) remote=\(literal)")
             return false
         }
@@ -442,6 +448,7 @@ public final class TransparentProxyProvider: NETransparentProxyProvider {
 
         if let tcp = flow as? NEAppProxyTCPFlow {
             let remoteLiteral = literalRemoteHostname(from: tcp)
+            let remotePort = (tcp.remoteEndpoint as? NWHostEndpoint).flatMap { UInt16($0.port) }
 
             // In SNI mode, hand the relay a decider that peeks the TLS ClientHello and routes by
             // hostname: tunnel if the SNI matches a domain rule (suffix) OR the remote IP is in a
@@ -480,12 +487,41 @@ public final class TransparentProxyProvider: NETransparentProxyProvider {
             // keeps `sniDecider` exactly as before: nil unless sniMode, unaffected by this branch.
             let forceRemoteDNSPeek = remoteDNS
                 && (remoteLiteral.map { IPCIDRMatcher.literalMatches($0, ranges: IPCIDRMatcher.overridablePrivateRanges) } ?? false)
-            let routeDecider: ((Data) -> Bool)? = forceRemoteDNSPeek ? (sniDecider ?? { _ in true }) : sniDecider
+
+            // The SNI peek is deadlock-safe ONLY where the app sends a TLS ClientHello first —
+            // HTTPS/443. Forcing it on server-speaks-first protocols (SMTP/IMAP/POP3/FTP/MySQL on
+            // 25/143/110/21/3306, …) hangs forever: `peekFirstChunk` blocks on `flow.readData` for
+            // the app's first bytes, which never come until the server banner does, which needs the
+            // outbound we haven't dialed. So gate the sniDecider peek on port 443; non-443 SNI-mode
+            // flows take an immediate IP-only decision here (domain rules still match by their
+            // resolved IPs, which are in `preparedRanges`). The SSH sinkhole peek (`forceRemoteDNSPeek`,
+            // always a private-IP candidate) is unchanged.
+            let sniPeekEligible = sniMode && remotePort == 443
+            let routeDecider: ((Data) -> Bool)?
+            let effectiveRouteThroughTunnel: Bool
+            if forceRemoteDNSPeek {
+                routeDecider = sniDecider ?? { _ in true }
+                effectiveRouteThroughTunnel = routeThroughTunnel
+            } else if sniPeekEligible {
+                routeDecider = sniDecider
+                effectiveRouteThroughTunnel = routeThroughTunnel
+            } else if sniMode {
+                // Non-443 in SNI mode: no ClientHello to peek — decide by IP only, no peek path.
+                routeDecider = nil
+                let ipMatch = remoteLiteral.map { IPCIDRMatcher.literalMatches($0, ranges: preparedRanges) } ?? false
+                effectiveRouteThroughTunnel = DestinationRouteDecision.decide(mode: filterMode, ipMatch: ipMatch, sniMatch: nil) == .tunnel
+                Self.log.notice("[APPSPLIT_SNI] decision=\(effectiveRouteThroughTunnel ? "tunnel" : "direct") reason=ip-noport443 signingID=\(signingID)")
+            } else {
+                // Non-SNI shapes: interception is already CIDR-narrowed (include) or exclude-declined
+                // upstream, so an intercepted flow always tunnels.
+                routeDecider = nil
+                effectiveRouteThroughTunnel = routeThroughTunnel
+            }
 
             let relay = TCPFlowRelay(
                 flow: tcp,
                 signingID: signingID,
-                routeThroughTunnel: routeThroughTunnel,
+                routeThroughTunnel: effectiveRouteThroughTunnel,
                 tunnelInterfaceName: ifaceName,
                 queue: flowQueue,
                 routeDecider: routeDecider,
@@ -525,12 +561,16 @@ public final class TransparentProxyProvider: NETransparentProxyProvider {
                 tunnelDNSHost: dnsRedirectHost,
                 tunnelInterfaceName: ifaceName,
                 queue: flowQueue,
-                tunnelRanges: { [weak self] in
+                // With enforce OFF, the shipped ranges are dormant: return none so the UDP
+                // shouldBypassLocal override can't tunnel (and black-hole) a dormant private CIDR.
+                // Exclude's `isExcluded` is never consulted here (filterMode collapses to .include
+                // above when !enforce), so an empty set is safe. Enforce-on keeps the live read.
+                tunnelRanges: enforce ? { [weak self] in
                     guard let self else { return [] }
                     self.destinationLock.lock()
                     defer { self.destinationLock.unlock() }
                     return self.cachedPreparedRanges
-                },
+                } : { [] },
                 onTx: { [weak self] in self?.aggregator.addTx($0, signingID: signingID) },
                 onRx: { [weak self] in self?.aggregator.addRx($0, signingID: signingID) },
                 onClose: { [weak self] in
@@ -715,8 +755,9 @@ public final class TransparentProxyProvider: NETransparentProxyProvider {
         let cidrs = destinationRawCIDRs
         let hasDomainNames = !destinationDomainNames.isEmpty
         let mode = destinationFilterMode
+        let dnsRedirectActive = tunnelDNSHost != nil
         destinationLock.unlock()
-        return buildIncludedNetworkRules(enforce: enforce, cidrs: cidrs, hasDomainNames: hasDomainNames, mode: mode)
+        return buildIncludedNetworkRules(enforce: enforce, cidrs: cidrs, hasDomainNames: hasDomainNames, mode: mode, dnsRedirectActive: dnsRedirectActive)
     }
 
     /// Pure rule builder over an explicit destination-state snapshot. Kept off the
@@ -725,7 +766,7 @@ public final class TransparentProxyProvider: NETransparentProxyProvider {
     /// concurrent `stopProxy` zero them between the write and this read and publish the catch-all
     /// rule set (full-tunnel for routed apps). The no-arg overload above reads a fresh locked
     /// snapshot, which is the right behavior for `startProxy`.
-    private func buildIncludedNetworkRules(enforce: Bool, cidrs: [String], hasDomainNames: Bool, mode: DestinationFilterMode) -> [NENetworkRule] {
+    private func buildIncludedNetworkRules(enforce: Bool, cidrs: [String], hasDomainNames: Bool, mode: DestinationFilterMode, dnsRedirectActive: Bool) -> [NENetworkRule] {
         let catchAll: [NENetworkRule] = [
             NENetworkRule(remoteNetwork: nil, remotePrefix: 0, localNetwork: nil, localPrefix: 0, protocol: .TCP, direction: .outbound),
             NENetworkRule(remoteNetwork: nil, remotePrefix: 0, localNetwork: nil, localPrefix: 0, protocol: .UDP, direction: .outbound),
@@ -743,18 +784,28 @@ public final class TransparentProxyProvider: NETransparentProxyProvider {
         // can peek every flow's TLS SNI (the leaking CDN IPs are in no CIDR), but keep UDP narrowed
         // to the known CIDRs — QUIC can't be SNI-peeked here, so it stays on the IP filter (same
         // coverage as before). The per-TCP-flow decider tunnels SNI/IP matches; the rest exit en0.
+        // Include-mode DNS-redirect interception (see `dnsRedirectInterceptRules`): UDP rules for
+        // local/private resolver ranges so a routed app's DNS to a hijacking local resolver
+        // reaches UDPFlowRelay and is redirected through the tunnel. Only meaningful in include mode
+        // (exclude already intercepts catch-all UDP above; enforce-off does too), and only when a
+        // redirect target is configured (`tunnelDNSHost != nil` — false when "Resolve DNS locally").
+        let dnsRedirectRules = dnsRedirectActive ? dnsRedirectInterceptRules() : []
+
         if enforce && hasDomainNames {
             let catchAllTCP = NENetworkRule(remoteNetwork: nil, remotePrefix: 0, localNetwork: nil, localPrefix: 0, protocol: .TCP, direction: .outbound)
             let udpRules = udpInterceptRules(for: cidrs)
-            Self.log.notice("buildIncludedNetworkRules: SNI mode — catch-all TCP + \(udpRules.count) UDP CIDR rules")
-            return [catchAllTCP] + udpRules
+            Self.log.notice("buildIncludedNetworkRules: SNI mode — catch-all TCP + \(udpRules.count) UDP CIDR rules + \(dnsRedirectRules.count) DNS-redirect rules")
+            return [catchAllTCP] + udpRules + dnsRedirectRules
         }
 
         guard enforce, !cidrs.isEmpty else { return catchAll }
 
         var rules: [NENetworkRule] = []
         for cidr in cidrs {
-            let routingCIDR = Self.widenIPv4HostRoute(Self.explicitPrefixCIDR(cidr))
+            // Exact match only — no /32→/24 widening. A bare literal becomes a /32 (v4) or /128
+            // (v6) host route; user-entered CIDRs keep their prefix. CDN rotation is followed by
+            // the 30s domain re-resolution + live push (new IPs unioned in), not by widening.
+            let routingCIDR = Self.explicitPrefixCIDR(cidr)
             let parts = routingCIDR.split(separator: "/")
             guard parts.count == 2, let prefix = Int(parts[1]) else { continue }
             let networkIP = String(parts[0])
@@ -766,19 +817,45 @@ public final class TransparentProxyProvider: NETransparentProxyProvider {
         if rules.isEmpty {
             // All CIDRs were unparseable — intercept nothing rather than falling back to catch-all,
             // which would route internet traffic into the tunnel (opposite of split-tunnel intent).
-            Self.log.error("buildIncludedNetworkRules: all CIDRs unparseable — using empty rule set")
-            return []
+            // Still honor DNS-redirect interception if configured, so anti-hijack survives.
+            Self.log.error("buildIncludedNetworkRules: all CIDRs unparseable — using \(dnsRedirectRules.count) DNS-redirect rules only")
+            return dnsRedirectRules
         }
-        Self.log.notice("buildIncludedNetworkRules: split-tunnel \(rules.count) rules for \(cidrs.count) CIDRs")
+        rules.append(contentsOf: dnsRedirectRules)
+        Self.log.notice("buildIncludedNetworkRules: split-tunnel \(rules.count) rules for \(cidrs.count) CIDRs (incl \(dnsRedirectRules.count) DNS-redirect)")
         return rules
     }
 
-    /// UDP-only intercept rules for the given CIDRs (widening /32 host routes to /24 for CDN
-    /// rotation), used in SNI mode where TCP is catch-all but UDP stays IP-narrowed.
+    /// UDP intercept rules for local/private resolver candidate ranges — the destinations the
+    /// UDPFlowRelay DNS redirect (`tunnelDNSHost`) actually acts on. Public resolvers (e.g. 8.8.8.8)
+    /// are deliberately NOT listed: they must stay un-intercepted and exit direct in include mode,
+    /// never tunneled. Multicast/broadcast are omitted (no unicast :53 resolver lives there).
+    /// No port qualifier: NE rejects port 53 in transparent-proxy network rules
+    /// ("53 cannot be specified as the port…"), so these are whole-range UDP intercepts. Still
+    /// safe — the relay redirects only dport-53 datagrams; other local UDP bypasses to direct.
+    private static let dnsRedirectInterceptCIDRs: [String] = [
+        "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "100.64.0.0/10",
+        "169.254.0.0/16", "127.0.0.0/8",
+        "::1/128", "fc00::/7", "fe80::/10",
+    ]
+
+    private func dnsRedirectInterceptRules() -> [NENetworkRule] {
+        var rules: [NENetworkRule] = []
+        for cidr in Self.dnsRedirectInterceptCIDRs {
+            let parts = cidr.split(separator: "/")
+            guard parts.count == 2, let prefix = Int(parts[1]) else { continue }
+            let endpoint = NWHostEndpoint(hostname: String(parts[0]), port: "0")
+            rules.append(NENetworkRule(remoteNetwork: endpoint, remotePrefix: prefix, localNetwork: nil, localPrefix: 0, protocol: .UDP, direction: .outbound))
+        }
+        return rules
+    }
+
+    /// UDP-only intercept rules for the given CIDRs (exact match; a bare literal becomes a /32 or
+    /// /128 host route), used in SNI mode where TCP is catch-all but UDP stays IP-narrowed.
     private func udpInterceptRules(for cidrs: [String]) -> [NENetworkRule] {
         var rules: [NENetworkRule] = []
         for cidr in cidrs {
-            let routingCIDR = Self.widenIPv4HostRoute(Self.explicitPrefixCIDR(cidr))
+            let routingCIDR = Self.explicitPrefixCIDR(cidr)
             let parts = routingCIDR.split(separator: "/")
             guard parts.count == 2, let prefix = Int(parts[1]) else { continue }
             let endpoint = NWHostEndpoint(hostname: String(parts[0]), port: "0")
@@ -830,19 +907,11 @@ public final class TransparentProxyProvider: NETransparentProxyProvider {
         return trimmed
     }
 
-    /// Widen resolved /32 host routes to /24 so CDN address rotation still matches intercept rules.
-    private static func widenIPv4HostRoute(_ cidr: String) -> String {
-        let parts = cidr.split(separator: "/")
-        guard parts.count == 2, let prefix = Int(parts[1]), prefix == 32 else { return cidr }
-        let ip = String(parts[0])
-        guard ip.contains(".") else { return cidr }
-        var octets = ip.split(separator: ".")
-        guard octets.count == 4 else { return cidr }
-        octets[3] = "0"
-        return "\(octets.joined(separator: "."))/24"
-    }
-
-    private func refreshDestinationConfig(generation: UInt64) {
+    /// `suppressSettingsPush` is forwarded to `applyDestinationPayload` so the `startProxy` refresh
+    /// only mutates state and lets `startProxy` issue the single `setTunnelNetworkSettings`. The
+    /// `flushOnce` re-affirm path leaves it false (its `changed` guard normally elides the push
+    /// anyway, but a genuine mid-session change must still publish).
+    private func refreshDestinationConfig(generation: UInt64, suppressSettingsPush: Bool = false) {
         if let config = runtimeConfigFromProvider() {
             // Session-static (tied to the profile's transport, which cannot change mid-session):
             // set directly here rather than threading through `applyDestinationPayload`, whose
@@ -863,19 +932,20 @@ public final class TransparentProxyProvider: NETransparentProxyProvider {
                 ifaceName: config.packetTunnelInterfaceName,
                 source: "providerConfiguration",
                 domainNames: config.destinationRouting.domainNames,
-                generation: generation
+                generation: generation,
+                suppressSettingsPush: suppressSettingsPush
             )
             return
         }
 
         guard let fileURL = SharedPaths.destinationRangesFileURL() else {
             Self.log.notice("refreshDestinationConfig fileURL nil")
-            applyDestinationPayload(enforce: false, rawCIDRs: [], ifaceName: nil, source: "none", generation: generation)
+            applyDestinationPayload(enforce: false, rawCIDRs: [], ifaceName: nil, source: "none", generation: generation, suppressSettingsPush: suppressSettingsPush)
             return
         }
         guard let data = try? Data(contentsOf: fileURL) else {
             Self.log.notice("refreshDestinationConfig: file missing/unreadable \(fileURL.lastPathComponent)")
-            applyDestinationPayload(enforce: false, rawCIDRs: [], ifaceName: nil, source: "none", generation: generation)
+            applyDestinationPayload(enforce: false, rawCIDRs: [], ifaceName: nil, source: "none", generation: generation, suppressSettingsPush: suppressSettingsPush)
             return
         }
         do {
@@ -891,20 +961,27 @@ public final class TransparentProxyProvider: NETransparentProxyProvider {
                 ifaceName: nil,
                 source: "sharedFile",
                 domainNames: payload.domainNames,
-                generation: generation
+                generation: generation,
+                suppressSettingsPush: suppressSettingsPush
             )
         } catch {
             Self.log.notice(
                 "refreshDestinationConfig decode failed \(error.localizedDescription)"
             )
-            applyDestinationPayload(enforce: false, rawCIDRs: [], ifaceName: nil, source: "none", generation: generation)
+            applyDestinationPayload(enforce: false, rawCIDRs: [], ifaceName: nil, source: "none", generation: generation, suppressSettingsPush: suppressSettingsPush)
         }
     }
 
     /// `domainNames == nil` leaves the SNI name set unchanged (used by the appMessage live-push,
     /// which only ever carries newly-resolved IPs — names are static for a session). A non-nil
     /// value replaces the set (lowercased).
-    private func applyDestinationPayload(enforce: Bool, rawCIDRs: [String], ifaceName: String?, source: String, domainNames: [String]? = nil, generation: UInt64) {
+    /// `suppressSettingsPush` skips this method's own `setTunnelNetworkSettings` — the state
+    /// mutation (union, prepared-range rebuild, iface) still runs under the lock. Set by the
+    /// `startProxy` refresh path, which issues its OWN `setTunnelNetworkSettings` right after: two
+    /// overlapping pushes on connect (this one from the first-activation `changed==true`, then
+    /// startProxy's at line ~202) can leave macOS "diverting nothing" — the first-run domain-bypass
+    /// symptom. The live appMessage/flushOnce paths keep the push (default false).
+    private func applyDestinationPayload(enforce: Bool, rawCIDRs: [String], ifaceName: String?, source: String, domainNames: [String]? = nil, generation: UInt64, suppressSettingsPush: Bool = false) {
         destinationLock.lock()
         // Checked under `destinationLock` because `stopProxy` bumps the generation BEFORE taking
         // this lock to clear the state: a stale writer either sees the new generation here and
@@ -915,6 +992,7 @@ public final class TransparentProxyProvider: NETransparentProxyProvider {
             return
         }
         let mode = destinationFilterMode
+        let dnsRedirectActive = tunnelDNSHost != nil
         // Union, never replace, within a session. Three writers race for this set — `startProxy`
         // (providerConfiguration baseline), the 1.5s `flushOnce` (re-reads the same baseline), and
         // host `appMessage` pushes (newly-resolved IPs) — and they can arrive in any order. A
@@ -944,15 +1022,18 @@ public final class TransparentProxyProvider: NETransparentProxyProvider {
         // mismatch (trailing dot, casing) is visible here instead of only inferable per-flow.
         let namesPreview = newNames.prefix(12).joined(separator: ",")
         Self.log.notice(
-            "applyDestinationPayload: enforce=\(enforce) ranges=\(merged.count) domains=\(newNames.count) names=[\(namesPreview)] iface=\(ifaceName ?? "nil") source=\(source)"
+            "applyDestinationPayload: enforce=\(enforce) ranges=\(merged.count) domains=\(newNames.count) names=[\(namesPreview)] iface=\(ifaceName ?? "nil") source=\(source) suppressPush=\(suppressSettingsPush)"
         )
+        // State is already committed under the lock above; the caller (startProxy) applies settings
+        // itself, so skip the redundant push to avoid a double setTunnelNetworkSettings on connect.
+        guard !suppressSettingsPush else { return }
         let settings = NETransparentProxyNetworkSettings(tunnelRemoteAddress: "127.0.0.1")
         // Build from the snapshot we just wrote under the lock (`enforce`/`merged`/`newNames`),
         // NOT a fresh re-read: a concurrent `stopProxy` could zero the destination state between
         // the unlock above and rule-building, making a re-read return — and publish — the
         // catch-all set (full-tunnel for routed apps) instead of the CIDR-narrowed rules.
         settings.includedNetworkRules = buildIncludedNetworkRules(
-            enforce: enforce, cidrs: merged, hasDomainNames: !newNames.isEmpty, mode: mode
+            enforce: enforce, cidrs: merged, hasDomainNames: !newNames.isEmpty, mode: mode, dnsRedirectActive: dnsRedirectActive
         )
         // Best-effort re-check: don't push rules built from pre-stop state onto a provider that
         // stopped between the unlock above and here.

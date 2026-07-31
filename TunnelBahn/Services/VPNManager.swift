@@ -309,9 +309,16 @@ final class VPNManager: ObservableObject {
             /// to filter all apps' flows by destination CIDR, but keep the standard (non-per-app)
             /// VPN manager so 0.0.0.0/0 → utun routes everything (including the proxy's own
             /// relay connections) through the tunnel without needing per-app attribution.
+            // Exclude semantics are NOT supported in full-tunnel routing mode: this shape narrows the
+            // packet tunnel's includedRoutes to the listed CIDRs (include semantics), which is exactly
+            // backwards for exclude (listed = direct) and both leaks non-proxy-handled flows and
+            // re-tunnels the excluded CIDRs. The UI blocks selecting exclude here; this guard is the
+            // safety net for any residual stored state — an exclude profile in full-tunnel mode falls
+            // through to plain full-tunnel (tunnel everything), never the broken narrowed-routes shape.
             let isFullTunnelDestFilterShape = AppConstants.isPerAppSplitTunnelEnabled
                 && !appTunnelModeSelected
                 && settings.enforceDestinationFiltering
+                && settings.destinationFilterMode == .include
                 && !destinationCidrStrings.isEmpty
                 && profileOkForAccounting
 
@@ -358,6 +365,9 @@ final class VPNManager: ObservableObject {
             var destinationEnforce = false
             var destinationFilterMode: DestinationFilterMode = .include
             var destinationRanges: [String] = []
+            // True only for the AllowedIPs-forced split-tunnel branch below. Consumed by the host's
+            // live-push gate so a domain re-resolution can't merge user CIDRs into the AllowedIPs set.
+            var destinationFilterIsAllowedIPsDerived = false
 
             if useAppTunnelNEStack || isFullTunnelDestFilterShape {
                 // Always stop the proxy before writing the destination routing file so that
@@ -380,6 +390,7 @@ final class VPNManager: ObservableObject {
                 if !profileOkForAccounting && profile.transport == .wireguard {
                     destinationRanges = extensionProfile.peers.flatMap { $0.allowedIPs }
                     destinationEnforce = true
+                    destinationFilterIsAllowedIPsDerived = true
                     // Split-tunnel AllowedIPs are inherently include-semantics; user filter mode does not apply.
                     persistDestinationRoutingFromHost(enforceFiltering: true, ranges: destinationRanges)
                     traceLog("split-tunnel: proxy destination filter set to AllowedIPs (\(destinationRanges.count) CIDRs)")
@@ -597,6 +608,7 @@ final class VPNManager: ObservableObject {
                     profileOkForAccounting: profileOkForAccounting,
                     rulesForVPNManagerCount: rulesForVPNManager.count,
                     destinationSplitActive: destinationSplitActive,
+                    destinationFilterIsAllowedIPsDerived: destinationFilterIsAllowedIPsDerived,
                     isFullTunnelDestFilterShape: isFullTunnelDestFilterShape
                 )
             case .connected:
@@ -608,6 +620,7 @@ final class VPNManager: ObservableObject {
                     profileOkForAccounting: profileOkForAccounting,
                     rulesForVPNManagerCount: rulesForVPNManager.count,
                     destinationSplitActive: destinationSplitActive,
+                    destinationFilterIsAllowedIPsDerived: destinationFilterIsAllowedIPsDerived,
                     isFullTunnelDestFilterShape: isFullTunnelDestFilterShape
                 )
             }
@@ -737,6 +750,7 @@ final class VPNManager: ObservableObject {
         profileOkForAccounting: Bool,
         rulesForVPNManagerCount: Int,
         destinationSplitActive: Bool,
+        destinationFilterIsAllowedIPsDerived: Bool = false,
         isFullTunnelDestFilterShape: Bool = false
     ) async {
         // Mirror the grace from waitForTunnelConnectOutcome: NE can flicker to .disconnected
@@ -760,6 +774,7 @@ final class VPNManager: ObservableObject {
                     profileOkForAccounting: profileOkForAccounting,
                     rulesForVPNManagerCount: rulesForVPNManagerCount,
                     destinationSplitActive: destinationSplitActive,
+                    destinationFilterIsAllowedIPsDerived: destinationFilterIsAllowedIPsDerived,
                     isFullTunnelDestFilterShape: isFullTunnelDestFilterShape
                 )
                 return
@@ -798,6 +813,7 @@ final class VPNManager: ObservableObject {
                 profileOkForAccounting: profileOkForAccounting,
                 rulesForVPNManagerCount: rulesForVPNManagerCount,
                 destinationSplitActive: destinationSplitActive,
+                destinationFilterIsAllowedIPsDerived: destinationFilterIsAllowedIPsDerived,
                 isFullTunnelDestFilterShape: isFullTunnelDestFilterShape
             )
             return
@@ -829,10 +845,11 @@ final class VPNManager: ObservableObject {
         profileOkForAccounting: Bool,
         rulesForVPNManagerCount: Int,
         destinationSplitActive: Bool,
+        destinationFilterIsAllowedIPsDerived: Bool = false,
         isFullTunnelDestFilterShape: Bool = false
     ) async {
         Self.osLog.notice(
-            "[connect] applySuccessfulConnectPostTunnel hasAppTunnelSelection=\(hasAppTunnelSelection) useAppTunnelNEStack=\(useAppTunnelNEStack) profileOkForAccounting=\(profileOkForAccounting) destinationSplitActive=\(destinationSplitActive) isFullTunnelDestFilterShape=\(isFullTunnelDestFilterShape)"
+            "[connect] applySuccessfulConnectPostTunnel hasAppTunnelSelection=\(hasAppTunnelSelection) useAppTunnelNEStack=\(useAppTunnelNEStack) profileOkForAccounting=\(profileOkForAccounting) destinationSplitActive=\(destinationSplitActive) allowedIPsDerived=\(destinationFilterIsAllowedIPsDerived) isFullTunnelDestFilterShape=\(isFullTunnelDestFilterShape)"
         )
         let useTransparentProxy = useAppTunnelNEStack || isFullTunnelDestFilterShape
         stats.state = .connected
@@ -843,6 +860,7 @@ final class VPNManager: ObservableObject {
             : extensionProfile.peers.first?.endpoint
         stats.perAppSplitTunnelActive = hasAppTunnelSelection && useAppTunnelNEStack
         stats.perAppStatsCollectionActive = useTransparentProxy
+        stats.destinationFilterAllowedIPsDerived = destinationFilterIsAllowedIPsDerived
         connectedTransportIsSSH = profile.transport == .ssh
         stats.tunnelHasDefaultRoute = profileOkForAccounting && !destinationSplitActive
 

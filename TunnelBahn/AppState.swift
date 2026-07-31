@@ -466,6 +466,12 @@ final class AppState: ObservableObject {
         // x.com CDN) to bypass the tunnel until the next reconnect.
         guard isTunnelActive, vpnManager.stats.perAppStatsCollectionActive else { return }
         guard settings.enforceDestinationFiltering else { return }
+        // Never push user destination CIDRs into an AllowedIPs-forced split-tunnel session: the
+        // connect path deliberately ignored user rules and set the filter to the peer's AllowedIPs
+        // (VPNManager: `destinationFilterIsAllowedIPsDerived`). The extension unions whatever we
+        // push, so a domain re-resolution here would merge user CIDRs into the AllowedIPs set and
+        // black-hole flows to destinations the WG peer has no route for.
+        guard !vpnManager.stats.destinationFilterAllowedIPsDerived else { return }
         guard let connectedID = vpnManager.stats.connectedProfileID,
               let loadedID = loadedProfileID,
               connectedID == loadedID else { return }

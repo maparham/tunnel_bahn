@@ -62,7 +62,7 @@ struct RoutingView: View {
         "Enter domain names (e.g. x.com). Their IP addresses are resolved at connect time and treated as destination CIDRs. Re-resolved every 30 seconds."
 
     private static let excludeDestinationsTooltip =
-        "Everything routed through this profile is tunneled EXCEPT destinations matching the lists below — e.g. import your country's IP ranges so domestic traffic stays direct and fast."
+        "Everything routed through this profile is tunneled EXCEPT destinations matching the lists below — e.g. import your country's IP ranges so domestic traffic stays direct and fast. Available in App-Tunnel mode only; not supported with full-tunnel routing."
 
     private static let resolveDNSLocallyTooltip =
         "Routed apps' DNS uses the local (system) resolver instead of the tunnel resolver. Steers direct/domestic sites to nearby CDN edges, but the local resolver's filtering then applies — with \"Tunnel selected destinations\" a censored local resolver can break the very sites you tunnel. Off = DNS is redirected through the tunnel resolver. SSH profiles always resolve remotely."
@@ -118,6 +118,8 @@ struct RoutingView: View {
                     .padding(.horizontal, 16)
                     .padding(.vertical, 4)
                 }
+
+                resolveDNSLocallySection()
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         }
@@ -125,11 +127,15 @@ struct RoutingView: View {
             if !hasAnyDestinations {
                 appState.settings.enforceDestinationFiltering = false
             }
+            normalizeExcludeModeForRoutingMode()
         }
         .onChange(of: hasAnyDestinations) { _, hasAny in
             if !hasAny {
                 appState.settings.enforceDestinationFiltering = false
             }
+        }
+        .onChange(of: appState.settings.routingMode) { _, _ in
+            normalizeExcludeModeForRoutingMode()
         }
         .navigationTitle("Advanced")
         .alert("Import Failed", isPresented: .init(
@@ -142,6 +148,16 @@ struct RoutingView: View {
         }
         .sheet(item: $bulkPrefixBrowse) { payload in
             BulkGroupPrefixesView(title: payload.title, cidrs: payload.cidrs)
+        }
+    }
+
+    /// Exclude mode is unsupported in full-tunnel routing mode (see `isFullTunnelDestFilterShape`).
+    /// Collapse a residual `.exclude` back to `.include` so the UI never shows a selected-but-
+    /// inert exclude radio and the connect-path shape stays consistent with what's displayed.
+    private func normalizeExcludeModeForRoutingMode() {
+        if appState.settings.routingMode == .fullTunnel,
+           appState.settings.destinationFilterMode == .exclude {
+            appState.settings.destinationFilterMode = .include
         }
     }
 
@@ -204,9 +220,14 @@ struct RoutingView: View {
                     HStack(spacing: 6) {
                         RadioButton(
                             isOn: appState.settings.enforceDestinationFiltering
-                                && appState.settings.destinationFilterMode == .exclude,
+                                && appState.settings.destinationFilterMode == .exclude
+                                && appState.settings.routingMode != .fullTunnel,
                             label: "Tunnel all except selected",
+                            // Exclude semantics are unsupported in full-tunnel routing mode (the
+                            // packet tunnel narrows routes with include semantics); offered only in
+                            // App-Tunnel mode. See excludeDestinationsTooltip.
                             disabled: destinationRoutingEditingLocked || !hasAnyDestinations
+                                || appState.settings.routingMode == .fullTunnel
                         ) {
                             destinationFilteringBinding.wrappedValue = true
                             appState.settings.destinationFilterMode = .exclude
@@ -216,15 +237,28 @@ struct RoutingView: View {
                             .instantTooltip(Self.excludeDestinationsTooltip)
                     }
                 }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.vertical, 4)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 16)
+        .padding(.top, 10)
+        .padding(.bottom, 8)
+    }
 
-                HStack(spacing: 6) {
-                    Toggle("Resolve DNS locally", isOn: $appState.settings.resolveDNSLocally)
-                        .toggleStyle(.checkbox)
-                        .disabled(destinationRoutingEditingLocked)
-                    Image(systemName: "questionmark.circle")
-                        .foregroundStyle(.secondary)
-                        .instantTooltip(Self.resolveDNSLocallyTooltip)
-                }
+    /// DNS-resolution toggle, placed at the bottom since it applies profile-wide
+    /// regardless of the routing mode selected above.
+    private func resolveDNSLocallySection() -> some View {
+        GroupBox {
+            HStack(spacing: 6) {
+                Toggle("Resolve DNS locally", isOn: $appState.settings.resolveDNSLocally)
+                    .toggleStyle(.checkbox)
+                    .disabled(destinationRoutingEditingLocked)
+                Image(systemName: "questionmark.circle")
+                    .foregroundStyle(.secondary)
+                    .instantTooltip(Self.resolveDNSLocallyTooltip)
+                Spacer(minLength: 0)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.vertical, 4)

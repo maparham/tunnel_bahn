@@ -75,6 +75,13 @@ struct ConnectionStats: Codable {
     /// full-traffic-accounting mode, where hints are intentionally unused). Not persisted.
     var competingProxySigningIDs: [String] = []
 
+    /// True when this session's destination filter was forced to the WireGuard peer's AllowedIPs
+    /// (a non-default-route split-tunnel profile), NOT derived from the user's destination rules.
+    /// The host must then suppress live destination-range pushes to the running proxy: the peer has
+    /// no route for user CIDRs, so intercepting those flows and relaying them into the tunnel would
+    /// black-hole them. Not persisted (session-scoped, set at connect).
+    var destinationFilterAllowedIPsDerived: Bool = false
+
     // Exclude connectivityProbeResult and competingProxySigningIDs from Codable synthesis.
     private enum CodingKeys: String, CodingKey {
         case state, connectedAt, lastInboundAt, lastError, bytesIn, bytesOut
