@@ -36,6 +36,12 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **Destination routing: new "Tunnel all except selected" (exclude) mode.** Tunnel everything
   except the listed CIDRs/domains (e.g. keep domestic IPs direct). Per-profile
   "Resolve DNS locally" toggle for exclude-mode profiles.
+- **Full-tunnel exclude mode.** "Tunnel all except selected" now works in Full Tunnel
+  routing mode: the tunnel keeps its default route while the enabled exclude-list CIDRs
+  bypass it (kernel `excludedRoutes` plus the same transparent-proxy verdicts App-Tunnel
+  exclude mode uses, preserving per-app/per-destination stats and live IP push). Exclude
+  CIDRs that would black-hole the tunnel's own DNS or virtual network are dropped from
+  kernel routes automatically.
 
 ### Fixed
 - SSH private-key material is no longer orphaned in the Keychain when a profile's

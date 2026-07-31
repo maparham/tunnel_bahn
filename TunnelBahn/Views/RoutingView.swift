@@ -76,7 +76,7 @@ struct RoutingView: View {
         "Domain names, e.g. x.com. Resolved to IPs at connect time and re-resolved every 30 seconds."
 
     private static let excludeDestinationsTooltip =
-        "Tunnel everything except the destinations below, e.g. your country's IP ranges. App-Tunnel mode only."
+        "Tunnel everything except the destinations below, e.g. your country's IP ranges."
 
     private static let resolveDNSLocallyTooltip =
         "Use the local resolver instead of the tunnel resolver, steering direct sites to nearby CDN edges. A censored local resolver can break tunneled sites. SSH profiles always resolve remotely."
@@ -143,7 +143,6 @@ struct RoutingView: View {
             if !hasAnyDestinations {
                 appState.settings.enforceDestinationFiltering = false
             }
-            normalizeExcludeModeForRoutingMode()
         }
         .onChange(of: hasAnyDestinations) { _, hasAny in
             if !hasAny {
@@ -152,9 +151,6 @@ struct RoutingView: View {
                 appState.settings.enforceDestinationFiltering = true
                 previewedEmptyMode = nil
             }
-        }
-        .onChange(of: appState.settings.routingMode) { _, _ in
-            normalizeExcludeModeForRoutingMode()
         }
         .onChange(of: appState.profileStore.selectedProfileID) { _, _ in
             previewedEmptyMode = nil
@@ -170,17 +166,6 @@ struct RoutingView: View {
         }
         .sheet(item: $bulkPrefixBrowse) { payload in
             BulkGroupPrefixesView(title: payload.title, cidrs: payload.cidrs)
-        }
-    }
-
-    /// Exclude mode is unsupported in full-tunnel routing mode (see `isFullTunnelDestFilterShape`).
-    /// Collapse a residual `.exclude` back to `.include` so the UI never shows a selected-but-
-    /// inert exclude radio and the connect-path shape stays consistent with what's displayed.
-    private func normalizeExcludeModeForRoutingMode() {
-        if appState.settings.routingMode == .fullTunnel,
-           appState.settings.destinationFilterMode == .exclude {
-            appState.settings.destinationFilterMode = .include
-            previewedEmptyMode = nil
         }
     }
 
@@ -233,16 +218,11 @@ struct RoutingView: View {
                     }
                     HStack(spacing: 6) {
                         RadioButton(
-                            isOn: ((appState.settings.enforceDestinationFiltering
+                            isOn: (appState.settings.enforceDestinationFiltering
                                 && displayedMode == .exclude)
-                                || previewedEmptyMode == .exclude)
-                                && appState.settings.routingMode != .fullTunnel,
+                                || previewedEmptyMode == .exclude,
                             label: "Tunnel all except selected",
-                            // Exclude semantics are unsupported in full-tunnel routing mode (the
-                            // packet tunnel narrows routes with include semantics); offered only in
-                            // App-Tunnel mode. See excludeDestinationsTooltip.
                             disabled: destinationRoutingEditingLocked
-                                || appState.settings.routingMode == .fullTunnel
                         ) { selectMode(.exclude) }
                         Image(systemName: "questionmark.circle")
                             .foregroundStyle(.secondary)
