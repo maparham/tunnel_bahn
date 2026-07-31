@@ -46,10 +46,17 @@ const TX_BACKPRESSURE_HIGH: usize = 512 * 1024;
 // Per-flow smoltcp UDP packet buffers. Sized for interactive datagram traffic (DNS, QUIC
 // handshakes, NTP): each direction holds up to N datagrams / B payload bytes; a full buffer
 // DROPS the datagram — correct UDP semantics, the app retransmits at its own layer.
-const UDP_RX_PACKETS: usize = 64;
-const UDP_RX_BUF: usize = 128 * 1024;
+//
+// Kept deliberately small: UDP flows are NOT idle-reaped (unlike TCP, UDP has no FIN), so each
+// live flow's buffers persist until the app's NEAppProxyUDPFlow closes, and they accumulate in
+// the memory-constrained packet-tunnel extension. Both directions are drained promptly (RX on
+// every poll_stack, TX flushed by poll_stack right after each send), so the byte buffers rarely
+// hold more than one or two datagrams in flight — 32KB per direction (~24 full-MTU datagrams)
+// is ample headroom for a QUIC burst while capping per-flow cost at 64KB (was 192KB).
+const UDP_RX_PACKETS: usize = 32;
+const UDP_RX_BUF: usize = 32 * 1024;
 const UDP_TX_PACKETS: usize = 32;
-const UDP_TX_BUF: usize = 64 * 1024;
+const UDP_TX_BUF: usize = 32 * 1024;
 
 struct RelayDevice {
     rx_queue: VecDeque<Vec<u8>>,
