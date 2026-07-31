@@ -175,6 +175,7 @@ final class BoringTunAdapter: @unchecked Sendable {
         with profile: WireGuardProfile,
         secrets: TunnelSecrets? = nil,
         appTunnelIncludedRoutes: [String]? = nil,
+        appTunnelExcludedRoutes: [String]? = nil,
         effectiveEndpointOverride: String? = nil
     ) async throws {
         guard let provider else { throw BoringTunAdapterError.missingProvider }
@@ -235,7 +236,8 @@ final class BoringTunAdapter: @unchecked Sendable {
         let networkSettings = Self.buildNetworkSettings(
             profile: profile,
             tunnelRemoteHost: endpointString,
-            appTunnelIncludedRoutes: appTunnelIncludedRoutes
+            appTunnelIncludedRoutes: appTunnelIncludedRoutes,
+            appTunnelExcludedRoutes: appTunnelExcludedRoutes
         )
         try await provider.setTunnelNetworkSettings(networkSettings)
 
@@ -877,13 +879,23 @@ final class BoringTunAdapter: @unchecked Sendable {
     private static func buildNetworkSettings(
         profile: WireGuardProfile,
         tunnelRemoteHost: String,
-        appTunnelIncludedRoutes: [String]? = nil
+        appTunnelIncludedRoutes: [String]? = nil,
+        appTunnelExcludedRoutes: [String]? = nil
     ) -> NEPacketTunnelNetworkSettings {
         let remote = tunnelRemoteHost.split(separator: ":").first.map(String.init) ?? "0.0.0.0"
         let settings = NEPacketTunnelNetworkSettings(tunnelRemoteAddress: remote)
 
         let allAllowedIPs = profile.peers.flatMap { $0.allowedIPs }
         let usingDestinationAppTunnel = appTunnelIncludedRoutes?.isEmpty == false
+        // Full-tunnel exclude shape: default route stays; the listed CIDRs bypass utun.
+        // The host guarantees the two overrides are mutually exclusive; if both ever
+        // arrive, include wins (fail toward over-tunneling, never toward a leak).
+        var usingDestinationExclude = appTunnelExcludedRoutes?.isEmpty == false
+        if usingDestinationAppTunnel && usingDestinationExclude {
+            log.error("both included and excluded route overrides present; ignoring excluded")
+            usingDestinationExclude = false
+        }
+        let excludeCIDRs = usingDestinationExclude ? (appTunnelExcludedRoutes ?? []) : []
         let routeCIDRs = usingDestinationAppTunnel ? appTunnelIncludedRoutes! : allAllowedIPs
         let hasDefaultRoute = !usingDestinationAppTunnel
             && (allAllowedIPs.contains("0.0.0.0/0") || allAllowedIPs.contains("::/0"))
@@ -911,6 +923,21 @@ final class BoringTunAdapter: @unchecked Sendable {
             return route
         }
 
+        // No gatewayAddress on excluded routes: excluded destinations exit via the
+        // physical interface, not the tunnel.
+        let v4ExcludedRoutes: [NEIPv4Route] = excludeCIDRs.compactMap { cidr in
+            guard cidr.contains(".") else { return nil }
+            let parts = cidr.split(separator: "/")
+            guard parts.count == 2, let prefix = Int(parts[1]) else { return nil }
+            return NEIPv4Route(destinationAddress: String(parts[0]), subnetMask: ipv4SubnetMask(prefix: prefix))
+        }
+        let v6ExcludedRoutes: [NEIPv6Route] = excludeCIDRs.compactMap { cidr in
+            guard cidr.contains(":") else { return nil }
+            let parts = cidr.split(separator: "/")
+            guard parts.count == 2, let prefix = Int(parts[1]) else { return nil }
+            return NEIPv6Route(destinationAddress: String(parts[0]), networkPrefixLength: NSNumber(value: min(max(prefix, 0), 128)))
+        }
+
         let v4CIDRs = profile.interface.addresses.filter { $0.contains(".") && $0.contains("/") }
         if !v4CIDRs.isEmpty {
             let addrs = v4CIDRs.map { String($0.split(separator: "/").first!) }
@@ -925,6 +952,8 @@ final class BoringTunAdapter: @unchecked Sendable {
                 : (v4AllowedRoutes.isEmpty ? (hasDefaultRoute ? [NEIPv4Route.default()] : []) : v4AllowedRoutes)
             if usingDestinationAppTunnel {
                 ipv4.excludedRoutes = [NEIPv4Route.default()]
+            } else if !v4ExcludedRoutes.isEmpty {
+                ipv4.excludedRoutes = v4ExcludedRoutes
             }
             settings.ipv4Settings = ipv4
         }
@@ -941,15 +970,19 @@ final class BoringTunAdapter: @unchecked Sendable {
             ipv6.includedRoutes = usingDestinationAppTunnel ? v6AllowedRoutes : (v6AllowedRoutes.isEmpty ? [] : v6AllowedRoutes)
             if usingDestinationAppTunnel {
                 ipv6.excludedRoutes = [NEIPv6Route.default()]
+            } else if !v6ExcludedRoutes.isEmpty {
+                ipv6.excludedRoutes = v6ExcludedRoutes
             }
             settings.ipv6Settings = ipv6
         }
 
-        if !profile.interface.dnsServers.isEmpty && hasDefaultRoute && !usingDestinationAppTunnel {
+        if !profile.interface.dnsServers.isEmpty && hasDefaultRoute
+            && !usingDestinationAppTunnel && !usingDestinationExclude {
             // Only apply tunnel DNS when a default route is present. With split-tunnel
             // AllowedIPs, setting dnsSettings with servers outside the AllowedIPs CIDRs
             // causes macOS to install a default route on utun to make those servers reachable,
             // overriding AllowedIPs and routing all traffic through the tunnel.
+            // The exclude filter shape also skips dnsSettings: DNS rides the proxy's port-53 redirect, same as the include shape.
             let dns = NEDNSSettings(servers: profile.interface.dnsServers)
             dns.matchDomains = [""]
             settings.dnsSettings = dns

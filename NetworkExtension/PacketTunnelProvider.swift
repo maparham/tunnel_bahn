@@ -46,6 +46,9 @@ public final class PacketTunnelProvider: NEPacketTunnelProvider {
         if let routes = runtime.appTunnelIncludedRoutes, !routes.isEmpty {
             logger.notice("destination app-tunnel included routes count=\(routes.count)")
         }
+        if let routes = runtime.appTunnelExcludedRoutes, !routes.isEmpty {
+            logger.notice("full-tunnel exclude routes count=\(routes.count)")
+        }
         adapter = BoringTunAdapter(provider: self)
         var effectiveEndpointOverride: String? = nil
         if let wrapper = runtime.profile.tcpWrapper {
@@ -99,6 +102,7 @@ public final class PacketTunnelProvider: NEPacketTunnelProvider {
                 with: runtime.profile,
                 secrets: runtime.secrets,
                 appTunnelIncludedRoutes: runtime.appTunnelIncludedRoutes,
+                appTunnelExcludedRoutes: runtime.appTunnelExcludedRoutes,
                 effectiveEndpointOverride: effectiveEndpointOverride
             )
         } catch {

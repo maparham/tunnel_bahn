@@ -32,6 +32,13 @@ struct TunnelRuntimeState: Codable {
     /// When set, per-app tunnel utun `includedRoutes` and outbound filtering use these CIDRs
     /// instead of the peer AllowedIPs default-route shape (destination-filtered app-tunnel).
     let appTunnelIncludedRoutes: [String]?
+    /// When set, the packet tunnel keeps its default route and installs these CIDRs as
+    /// utun `excludedRoutes` (full-tunnel exclude filter). Mutually exclusive with
+    /// `appTunnelIncludedRoutes` by construction in VPNManager; sanitized host-side so
+    /// it never contains the tunnel interface network or DNS server IPs. Optional so a
+    /// stale extension decoding an old payload (or an old extension decoding this one)
+    /// falls back to plain full-tunnel, which over-tunnels but never leaks.
+    let appTunnelExcludedRoutes: [String]?
     /// Present when `profile.transport == .ssh`; mirrors `profile.ssh` so the packet-tunnel
     /// extension has connection params without re-deriving them from the profile.
     let ssh: TunnelSSHParams?

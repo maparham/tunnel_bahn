@@ -1398,6 +1398,7 @@ final class VPNManager: ObservableObject {
             profile: profile,
             secrets: secrets,
             appTunnelIncludedRoutes: appTunnelIncludedRoutes,
+            appTunnelExcludedRoutes: nil,
             ssh: ssh
         )
         return try JSONEncoder().encode(payload)
