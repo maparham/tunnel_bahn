@@ -19,7 +19,6 @@
 		07F7A539ED04FC968DBC53FD /* DestinationDomainRule.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6DAD735EE52C2019E7D5E778 /* DestinationDomainRule.swift */; };
 		09BD4C6EA2737467C4AFA12E /* StatusView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F86BBF39930242EB8FF86F54 /* StatusView.swift */; };
 		09CAEB42501DEACADF2A280B /* AppLog.swift in Sources */ = {isa = PBXBuildFile; fileRef = C555A6EC9D28808AD8B285BE /* AppLog.swift */; };
-		0B075A858634A5CB7FA296CB /* ExtensionResourceStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 149E9ADC5338041B44F1899F /* ExtensionResourceStore.swift */; };
 		0B228C6ED6D1928E3D540EDC /* TCPFlowRelay.swift in Sources */ = {isa = PBXBuildFile; fileRef = F353E3CB30DD269B8D220A2E /* TCPFlowRelay.swift */; };
 		0B850D0B0F2D6A51CA73BA28 /* BuildInfo.swift in Sources */ = {isa = PBXBuildFile; fileRef = CE3E1BCC9751C9C8054A99B9 /* BuildInfo.swift */; };
 		0C581364B33F6F61D5722E55 /* SharedLogWriter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 748BFC2AF3A11879E344CF2E /* SharedLogWriter.swift */; };
@@ -40,7 +39,6 @@
 		1B074FE3D75C52EBC684C1B8 /* WGTunnelJWTTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CD2A25CB4B262C8C4CD8F675 /* WGTunnelJWTTests.swift */; };
 		1C8009F824AED9AC87F76376 /* RoutingMode.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1B55AE43555852786D1D7E49 /* RoutingMode.swift */; };
 		1D02DA48A9E6D787C631680F /* DestinationCidrBulkGroup.swift in Sources */ = {isa = PBXBuildFile; fileRef = 23799F926EEDE7443B12A296 /* DestinationCidrBulkGroup.swift */; };
-		1D8732750B9E312B27D6A289 /* ExtensionResourceStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 149E9ADC5338041B44F1899F /* ExtensionResourceStore.swift */; };
 		1DD70115E16E2BF47ADE14CB /* RoutingAction.swift in Sources */ = {isa = PBXBuildFile; fileRef = 50CB7F447B0157775A81E1F0 /* RoutingAction.swift */; };
 		2393A58EB0D57D1A567B9D6E /* WGTCPWrapperRelay.swift in Sources */ = {isa = PBXBuildFile; fileRef = 43688349C593EAABEBFB8120 /* WGTCPWrapperRelay.swift */; };
 		25DE2084079EB63FB5892E61 /* DomainResolver.swift in Sources */ = {isa = PBXBuildFile; fileRef = B7EB0419ECF06147A8E40DD9 /* DomainResolver.swift */; };
@@ -55,7 +53,6 @@
 		3533FC25D81A6824FAC2F1B5 /* LogsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 05001C79DA1982E77CB30793 /* LogsView.swift */; };
 		3753C67B8BE9E2C47198C295 /* SharedLogWriter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 748BFC2AF3A11879E344CF2E /* SharedLogWriter.swift */; };
 		3912BB21FF77CDAAAFC2F866 /* TunnelBahnApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1D0773D7DA0C4899C2FB05D9 /* TunnelBahnApp.swift */; };
-		3BBBA970D00D9384B9AB6D00 /* ExtensionResourceStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 149E9ADC5338041B44F1899F /* ExtensionResourceStore.swift */; };
 		3DF572A62EC0C1665D75EE09 /* ProcessResourceSampler.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6D115DCEFD0728C235552677 /* ProcessResourceSampler.swift */; };
 		3FF08897B094FB314A2576AE /* AppRule.swift in Sources */ = {isa = PBXBuildFile; fileRef = C6AEA83BAE6A6F9B4EFA66D3 /* AppRule.swift */; };
 		40F4EA71AC35412ED35A962A /* PerAppTransferStats.swift in Sources */ = {isa = PBXBuildFile; fileRef = F463C60E2BBFEA611BE9243A /* PerAppTransferStats.swift */; };
@@ -67,7 +64,6 @@
 		4817D2F3C9F3E41E833758FB /* BuildInfo.swift in Sources */ = {isa = PBXBuildFile; fileRef = CE3E1BCC9751C9C8054A99B9 /* BuildInfo.swift */; };
 		481F5086AA8C8D7AE27BA080 /* ProcessResourceSampler.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6D115DCEFD0728C235552677 /* ProcessResourceSampler.swift */; };
 		4D775B7E697727EB5FADB127 /* WGTunnelJWT.swift in Sources */ = {isa = PBXBuildFile; fileRef = 96F40C554C8EC710FF48B351 /* WGTunnelJWT.swift */; };
-		50C631D2E496E7A183B439C6 /* ExtensionResourceStats.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7FCEF79B779067B7D808572D /* ExtensionResourceStats.swift */; };
 		53602B80FA25CDD0EDFD9AAF /* DebugSelfChecks.swift in Sources */ = {isa = PBXBuildFile; fileRef = 419A1112BE970F26BC9AE3ED /* DebugSelfChecks.swift */; };
 		55F92A597C5E3200AA3A0696 /* Constants.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5FD44AFE7F187FA0508C1EC3 /* Constants.swift */; };
 		58AD33EA19800FF1A507C5DB /* NIOPosix in Frameworks */ = {isa = PBXBuildFile; productRef = 40196FBB930DD854269AB451 /* NIOPosix */; };
@@ -94,7 +90,6 @@
 		7AF4E8122C1AB7A331158962 /* TransparentProxyRuntimeConfig.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2B47182EE791A9342A1CFFB /* TransparentProxyRuntimeConfig.swift */; };
 		7E90A632EB40AB5B8B1A97E3 /* DestinationRouting.swift in Sources */ = {isa = PBXBuildFile; fileRef = D78392AE063F46CA11402F13 /* DestinationRouting.swift */; };
 		7F6E967524842A75F4E177EA /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8C066CA526386F398EAAD416 /* ContentView.swift */; };
-		7FE46529E271AA701B21343B /* PerAppTransferStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 804194AB9838F944A7CD9DD5 /* PerAppTransferStore.swift */; };
 		83F7A2736B5E56EC8342004F /* PacketTunnelProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = 575EA7FA92707A3BE5CF97E1 /* PacketTunnelProvider.swift */; };
 		8721D4813C2C2F9129DDCBC5 /* RelayOutboundBridge.m in Sources */ = {isa = PBXBuildFile; fileRef = F88247F5F75B562B2174478C /* RelayOutboundBridge.m */; };
 		882DEC93544C7133B5D36CCF /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = D6D846BC819705991149309C /* PrivacyInfo.xcprivacy */; };
@@ -103,13 +98,11 @@
 		8A75EC38FC5D685DDAA66E27 /* WireGuardProfile.swift in Sources */ = {isa = PBXBuildFile; fileRef = 597D1A15AF482ECB340F8519 /* WireGuardProfile.swift */; };
 		8D779E49B65DF290B43124A1 /* WireGuardConfigParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = 132EDEF0EA68675638E19645 /* WireGuardConfigParser.swift */; };
 		8DFBFB0DC5A51DB7C9BE3B93 /* BuildStampView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0B46E999C89C21E4365C8F0 /* BuildStampView.swift */; };
-		8E5AECD0D7BACDE0885CFA6B /* PerAppTransferStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 804194AB9838F944A7CD9DD5 /* PerAppTransferStore.swift */; };
 		90690117DEA38BA9F5242751 /* WireGuardConfigTCPWrapperTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 436CBF313E8934ED0DE2F9A8 /* WireGuardConfigTCPWrapperTests.swift */; };
 		90E609CF0B7509F6FC46372E /* RelayWireFrame.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8172D2F62168E74984689F83 /* RelayWireFrame.swift */; };
 		9218BD1308ABA5BBCDE2D1E6 /* AppGroup.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A326E604708829F35A2C2FE /* AppGroup.swift */; };
 		950889D4805B0B825BCFC1DC /* AppDiscoveryService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9C3EBCDA1A0C341A0630B092 /* AppDiscoveryService.swift */; };
 		9545405E11A1B8499351536D /* SSHHostKeyStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = DE60DF9A0143017FBC482723 /* SSHHostKeyStore.swift */; };
-		97E769A46D6263F7DFDDF9C1 /* ExtensionResourceStats.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7FCEF79B779067B7D808572D /* ExtensionResourceStats.swift */; };
 		99DBF552B25C9A2C55F509D4 /* BuildInfo.swift in Sources */ = {isa = PBXBuildFile; fileRef = CE3E1BCC9751C9C8054A99B9 /* BuildInfo.swift */; };
 		9A35E9242DE88AB9AEF5DF4B /* AppLog.swift in Sources */ = {isa = PBXBuildFile; fileRef = C555A6EC9D28808AD8B285BE /* AppLog.swift */; };
 		9C58252B83BCBFC4392969DD /* WGTCPWrapperRelay.swift in Sources */ = {isa = PBXBuildFile; fileRef = 43688349C593EAABEBFB8120 /* WGTCPWrapperRelay.swift */; };
@@ -126,7 +119,6 @@
 		A7236DEDC5D196CAE299BE89 /* ProfileListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0E0A94BF06DD5B0AE3302B9C /* ProfileListView.swift */; };
 		A795F9984DD264323A8560DC /* PerAppSigningCatalog.swift in Sources */ = {isa = PBXBuildFile; fileRef = 58E05756E27A7F82EAE7E623 /* PerAppSigningCatalog.swift */; };
 		A86E88A2EAE8BE3B64B79F5D /* ResourceMonitor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8662E8905AA143B0792E3460 /* ResourceMonitor.swift */; };
-		AA62ADAA37627A2E2634060E /* PerAppTransferStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 804194AB9838F944A7CD9DD5 /* PerAppTransferStore.swift */; };
 		AD04AD58E4051D15E0B23E00 /* TCPWrapperConfigCodec.swift in Sources */ = {isa = PBXBuildFile; fileRef = 83C0A2650F93F783E2DEFF8A /* TCPWrapperConfigCodec.swift */; };
 		AE002EF8D50B5715C57F9BDD /* PerAppSigningCatalog.swift in Sources */ = {isa = PBXBuildFile; fileRef = 58E05756E27A7F82EAE7E623 /* PerAppSigningCatalog.swift */; };
 		AE83F95512B56CE6958D60DF /* UDPFlowRelay.swift in Sources */ = {isa = PBXBuildFile; fileRef = D0D68D44B503472B582223E8 /* UDPFlowRelay.swift */; };
@@ -147,7 +139,6 @@
 		BACAD0D8374F49DBFB3D903E /* PerAppTransferStats.swift in Sources */ = {isa = PBXBuildFile; fileRef = F463C60E2BBFEA611BE9243A /* PerAppTransferStats.swift */; };
 		BB6EC204C7FC5589F969B2BF /* PacketTunnelRelayServer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 28D71ABF54C747293AA24B64 /* PacketTunnelRelayServer.swift */; };
 		BB703606DF596A4448F6C2F7 /* DestinationCidrRule.swift in Sources */ = {isa = PBXBuildFile; fileRef = E8DB280E40DE01D8F9752BFC /* DestinationCidrRule.swift */; };
-		BD4371FA20777B5B5E85FACC /* ExtensionResourceStats.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7FCEF79B779067B7D808572D /* ExtensionResourceStats.swift */; };
 		BE601A1140EB15A110FDA267 /* SSHChannelHandler.swift in Sources */ = {isa = PBXBuildFile; fileRef = EA2B50DEF01484534D8A482F /* SSHChannelHandler.swift */; };
 		BF6A0F8E4E3ADF9E7AB709C8 /* ConnectionStats.swift in Sources */ = {isa = PBXBuildFile; fileRef = 147A18331F2C2E8D4BE615DC /* ConnectionStats.swift */; };
 		BFABB3077F5AB679E5233108 /* AppRule.swift in Sources */ = {isa = PBXBuildFile; fileRef = C6AEA83BAE6A6F9B4EFA66D3 /* AppRule.swift */; };
@@ -240,7 +231,6 @@
 		0FF498AA49464F1ADD8B8D60 /* DestinationRuleStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DestinationRuleStore.swift; sourceTree = "<group>"; };
 		132EDEF0EA68675638E19645 /* WireGuardConfigParser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WireGuardConfigParser.swift; sourceTree = "<group>"; };
 		147A18331F2C2E8D4BE615DC /* ConnectionStats.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectionStats.swift; sourceTree = "<group>"; };
-		149E9ADC5338041B44F1899F /* ExtensionResourceStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExtensionResourceStore.swift; sourceTree = "<group>"; };
 		1B55AE43555852786D1D7E49 /* RoutingMode.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RoutingMode.swift; sourceTree = "<group>"; };
 		1D0773D7DA0C4899C2FB05D9 /* TunnelBahnApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TunnelBahnApp.swift; sourceTree = "<group>"; };
 		1D32AC00BFF4EF350D983C23 /* RoutingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RoutingView.swift; sourceTree = "<group>"; };
@@ -287,8 +277,6 @@
 		7A326E604708829F35A2C2FE /* AppGroup.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppGroup.swift; sourceTree = "<group>"; };
 		7AAA1FCAD780732BB9EAA949 /* WGTCPWrapperRelayTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WGTCPWrapperRelayTests.swift; sourceTree = "<group>"; };
 		7F22EBE852B002DD9D18D127 /* RelayOutboundBridge.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = RelayOutboundBridge.h; sourceTree = "<group>"; };
-		7FCEF79B779067B7D808572D /* ExtensionResourceStats.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExtensionResourceStats.swift; sourceTree = "<group>"; };
-		804194AB9838F944A7CD9DD5 /* PerAppTransferStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PerAppTransferStore.swift; sourceTree = "<group>"; };
 		8108BE3F731F12F6601FB84C /* EndpointBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EndpointBridge.swift; sourceTree = "<group>"; };
 		8172D2F62168E74984689F83 /* RelayWireFrame.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RelayWireFrame.swift; sourceTree = "<group>"; };
 		832330F2308BBB09BCD44A43 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
@@ -563,13 +551,10 @@
 				C555A6EC9D28808AD8B285BE /* AppLog.swift */,
 				5FD44AFE7F187FA0508C1EC3 /* Constants.swift */,
 				D78392AE063F46CA11402F13 /* DestinationRouting.swift */,
-				7FCEF79B779067B7D808572D /* ExtensionResourceStats.swift */,
-				149E9ADC5338041B44F1899F /* ExtensionResourceStore.swift */,
 				B8E4AA7BE0C447E51BE149BC /* KeychainService.swift */,
 				925B86B12D5DC6FCBB010E74 /* PerAppIdentityMap.swift */,
 				58E05756E27A7F82EAE7E623 /* PerAppSigningCatalog.swift */,
 				F463C60E2BBFEA611BE9243A /* PerAppTransferStats.swift */,
-				804194AB9838F944A7CD9DD5 /* PerAppTransferStore.swift */,
 				6D115DCEFD0728C235552677 /* ProcessResourceSampler.swift */,
 				8172D2F62168E74984689F83 /* RelayWireFrame.swift */,
 				50CB7F447B0157775A81E1F0 /* RoutingAction.swift */,
@@ -930,15 +915,12 @@
 				58B1CD61A8B7AD2B22D59579 /* DestinationCidrRule.swift in Sources */,
 				EE39C14A0E9C59FD35F288B3 /* DestinationDomainRule.swift in Sources */,
 				7E90A632EB40AB5B8B1A97E3 /* DestinationRouting.swift in Sources */,
-				50C631D2E496E7A183B439C6 /* ExtensionResourceStats.swift in Sources */,
-				0B075A858634A5CB7FA296CB /* ExtensionResourceStore.swift in Sources */,
 				139A74645FABEA868BEFD896 /* KeychainService.swift in Sources */,
 				83F7A2736B5E56EC8342004F /* PacketTunnelProvider.swift in Sources */,
 				BB6EC204C7FC5589F969B2BF /* PacketTunnelRelayServer.swift in Sources */,
 				F8440CEDF1137AA7D8D5D0B1 /* PerAppIdentityMap.swift in Sources */,
 				A795F9984DD264323A8560DC /* PerAppSigningCatalog.swift in Sources */,
 				BACAD0D8374F49DBFB3D903E /* PerAppTransferStats.swift in Sources */,
-				7FE46529E271AA701B21343B /* PerAppTransferStore.swift in Sources */,
 				481F5086AA8C8D7AE27BA080 /* ProcessResourceSampler.swift in Sources */,
 				9C96C74B7E5F615BDED14A8D /* ProfileRoutingSnapshot.swift in Sources */,
 				B07E67D4623CD026D62CCC0D /* RelayFlowTransport.swift in Sources */,
@@ -991,8 +973,6 @@
 				700C61FBDAF08267932AF206 /* DestinationRuleStore.swift in Sources */,
 				9F0656D786AA084B8C0D1C60 /* DomainResolutionCoordinator.swift in Sources */,
 				25DE2084079EB63FB5892E61 /* DomainResolver.swift in Sources */,
-				BD4371FA20777B5B5E85FACC /* ExtensionResourceStats.swift in Sources */,
-				1D8732750B9E312B27D6A289 /* ExtensionResourceStore.swift in Sources */,
 				D09AEE5FB1067A952BE70E74 /* InstantTooltip.swift in Sources */,
 				428F287EAFBF9878D30436DC /* KeychainService.swift in Sources */,
 				A685DC94E4525F366418659B /* LaunchAtLoginService.swift in Sources */,
@@ -1004,7 +984,6 @@
 				C9D75798CF250E9839C6DBAB /* PerAppSigningCatalog.swift in Sources */,
 				0393E05DDE08CCC0854817CD /* PerAppStatsProxyManager.swift in Sources */,
 				40F4EA71AC35412ED35A962A /* PerAppTransferStats.swift in Sources */,
-				8E5AECD0D7BACDE0885CFA6B /* PerAppTransferStore.swift in Sources */,
 				5E0249FEE3548CAA4114D3AB /* ProcessResourceSampler.swift in Sources */,
 				014C2FCBF12405FEFD835E63 /* ProfileDetailView.swift in Sources */,
 				6A875DEF40282A9C962FB171 /* ProfileEditorSheet.swift in Sources */,
@@ -1058,14 +1037,11 @@
 				34A9290E6781D96543A43326 /* DestinationDomainRule.swift in Sources */,
 				F433B9A3B49C35D7A4A03AE4 /* DestinationRouting.swift in Sources */,
 				0E304F12798C57930DC3DB52 /* EndpointBridge.swift in Sources */,
-				97E769A46D6263F7DFDDF9C1 /* ExtensionResourceStats.swift in Sources */,
-				3BBBA970D00D9384B9AB6D00 /* ExtensionResourceStore.swift in Sources */,
 				DE8098D54768316DFCDA0BC3 /* KeychainService.swift in Sources */,
 				DB47FCCFDD0A705F0FBA98C9 /* PerAppCounterAggregator.swift in Sources */,
 				10972EE8489BBB0959E38D42 /* PerAppIdentityMap.swift in Sources */,
 				AE002EF8D50B5715C57F9BDD /* PerAppSigningCatalog.swift in Sources */,
 				D6097D76FE808A9A7C33AFCD /* PerAppTransferStats.swift in Sources */,
-				AA62ADAA37627A2E2634060E /* PerAppTransferStore.swift in Sources */,
 				6CA153D164DFC4C20347F757 /* PerDestinationCounterAggregator.swift in Sources */,
 				3DF572A62EC0C1665D75EE09 /* ProcessResourceSampler.swift in Sources */,
 				14973825B3CDC6A78F4C5892 /* ProfileRoutingSnapshot.swift in Sources */,

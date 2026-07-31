@@ -21,9 +21,7 @@ public final class PacketTunnelProvider: NEPacketTunnelProvider {
         queue.setSpecific(key: PacketTunnelProvider.resourceSampleQueueKey, value: ())
         return queue
     }()
-    private var resourceSampleTimer: DispatchSourceTimer?
     private let resourceSampler = ProcessResourceSampler()
-    private static let resourceSampleInterval: DispatchTimeInterval = .seconds(2)
 
     override public func startTunnel(options _: [String: NSObject]? = nil) async throws {
         logger.log("startTunnel invoked")
@@ -132,7 +130,6 @@ public final class PacketTunnelProvider: NEPacketTunnelProvider {
             }
         }
         logger.log("startTunnel completed adapter started")
-        startResourceSampler()
     }
 
     /// DIAGNOSTIC (temporary): bare TCP-only connect to `host:port` from inside the extension
@@ -286,7 +283,6 @@ public final class PacketTunnelProvider: NEPacketTunnelProvider {
         try await setTunnelNetworkSettings(settings)
 
         logger.notice("[APPSPLIT_EXT_SUMMARY] outcome=started transport=ssh host=\(params.host) port=\(params.port) user=\(params.username)")
-        startResourceSampler()
     }
 
     /// Tears down the SSH relay server then the SSH transport (order matters: stop feeding the
@@ -299,8 +295,6 @@ public final class PacketTunnelProvider: NEPacketTunnelProvider {
     }
 
     override public func stopTunnel(with _: NEProviderStopReason) async {
-        resourceSampleTimer?.cancel()
-        resourceSampleTimer = nil
         // Relay server is shared by both transports; stop it first, then whichever egress is active.
         relayServer?.stop()
         relayServer = nil
@@ -429,35 +423,9 @@ public final class PacketTunnelProvider: NEPacketTunnelProvider {
         }
     }
 
-    private func startResourceSampler() {
-        let timer = DispatchSource.makeTimerSource(queue: resourceSampleQueue)
-        timer.schedule(deadline: .now() + Self.resourceSampleInterval, repeating: Self.resourceSampleInterval)
-        timer.setEventHandler { [weak self] in
-            self?.sampleAndPublishExtensionResources()
-        }
-        timer.resume()
-        resourceSampleTimer = timer
-    }
-
-    private func sampleAndPublishExtensionResources() {
-        // Runs on `resourceSampleQueue` (via the sample timer).
-        let sample = sampleResources()
-        var merged = ExtensionResourceStore.read()
-        merged.packetTunnelCPU = sample.cpuPercent
-        merged.packetTunnelMemory = sample.memoryBytes
-        merged.lastUpdate = .now
-        merged.schemaVersion = ExtensionResourceStats.currentSchemaVersion
-        do {
-            try ExtensionResourceStore.write(merged)
-        } catch {
-            logger.error("failed to write extension resource stats: \(error.localizedDescription)")
-        }
-    }
-
     /// Serializes `resourceSampler` on `resourceSampleQueue`. The sampler carries time-delta state
-    /// between calls and is not thread-safe, while the `resourceStats` IPC reply arrives on a
-    /// different queue than the sample timer — funneling both through one queue keeps the smoothed
-    /// value coherent.
+    /// between calls and is not thread-safe; `resourceStats` IPC replies can arrive on arbitrary
+    /// queues, so all sampling funnels through one queue to keep the smoothed value coherent.
     private func sampleResources() -> ProcessResourceSampler.Sample {
         if DispatchQueue.getSpecific(key: Self.resourceSampleQueueKey) != nil {
             return resourceSampler.sample()

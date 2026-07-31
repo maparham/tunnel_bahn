@@ -839,7 +839,6 @@ final class VPNManager: ObservableObject {
         stats.tunnelHasDefaultRoute = profileOkForAccounting && !destinationSplitActive
 
         if useTransparentProxy {
-            PerAppTransferStore.reset()
             Self.osLog.notice("[connect] calling perAppStatsProxy.enable() destinationSplit=\(destinationSplitActive)")
             do {
                 guard var proxyConfig = pendingTransparentProxyConfig else {
@@ -1297,8 +1296,6 @@ final class VPNManager: ObservableObject {
         publicIPRefreshTask?.cancel()
         publicIPRefreshTask = nil
         await perAppStatsProxy.disable()
-        PerAppTransferStore.reset()
-        ExtensionResourceStore.reset()
         clearPersistedPerAppRoutedSigningIdentifiers()
 
         manager.connection.stopVPNTunnel()

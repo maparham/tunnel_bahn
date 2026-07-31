@@ -11,9 +11,8 @@ import os.log
 /// - In-memory totals are kept per signing identifier (cheaper than app-tunnel rollup on every
 ///   packet). Rollup only happens at flush time.
 /// - Totals are MONOTONIC for the lifetime of the proxy session. The host app diffs them
-///   to compute rates if it wants to. On disconnect the host app calls
-///   `PerAppTransferStore.reset()` which clears the file but the in-memory totals here
-///   reset on `stopProxy` because the provider instance is torn down.
+///   to compute rates if it wants to. The in-memory totals reset on `stopProxy` because
+///   the provider instance is torn down.
 final class PerAppCounterAggregator {
     private static let log = AppLog(
         subsystem: "com.tunnelbahn.mac.transparentproxy",
