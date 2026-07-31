@@ -61,6 +61,9 @@ struct RoutingView: View {
     private static let domainNamesTooltip =
         "Enter domain names (e.g. x.com). Their IP addresses are resolved at connect time and treated as destination CIDRs. Re-resolved every 30 seconds."
 
+    private static let excludeDestinationsTooltip =
+        "Everything routed through this profile is tunneled EXCEPT destinations matching the lists below — e.g. import your country's IP ranges so domestic traffic stays direct and fast."
+
 
     /// Destination routing is snapshotted to the extension at connect time. Editing is locked
     /// only while viewing the currently-connected profile; edits to a non-active profile go to
@@ -97,7 +100,9 @@ struct RoutingView: View {
                         Image(systemName: "exclamationmark.triangle.fill")
                             .foregroundStyle(.orange)
                             .font(.body)
-                        Text("IPs not matching any list here will **bypass the tunnel**.")
+                        Text(appState.settings.destinationFilterMode == .exclude
+                            ? "IPs matching a list here will **bypass the tunnel**; everything else is tunneled."
+                            : "IPs not matching any list here will **bypass the tunnel**.")
                             .foregroundStyle(.primary)
                             .font(.footnote)
                     }
@@ -169,10 +174,14 @@ struct RoutingView: View {
                     VStack(alignment: .leading, spacing: 4) {
                         HStack(spacing: 6) {
                             RadioButton(
-                                isOn: appState.settings.enforceDestinationFiltering,
+                                isOn: appState.settings.enforceDestinationFiltering
+                                    && appState.settings.destinationFilterMode == .include,
                                 label: "Tunnel selected destinations",
                                 disabled: destinationRoutingEditingLocked || !hasAnyDestinations
-                            ) { destinationFilteringBinding.wrappedValue = true }
+                            ) {
+                                destinationFilteringBinding.wrappedValue = true
+                                appState.settings.destinationFilterMode = .include
+                            }
                             Image(systemName: "questionmark.circle")
                                 .foregroundStyle(.secondary)
                                 .instantTooltip(Self.selectedDestinationsTooltip)
@@ -188,6 +197,20 @@ struct RoutingView: View {
                             .foregroundStyle(.blue)
                         }
                     }
+                    HStack(spacing: 6) {
+                        RadioButton(
+                            isOn: appState.settings.enforceDestinationFiltering
+                                && appState.settings.destinationFilterMode == .exclude,
+                            label: "Tunnel all except selected",
+                            disabled: destinationRoutingEditingLocked || !hasAnyDestinations
+                        ) {
+                            destinationFilteringBinding.wrappedValue = true
+                            appState.settings.destinationFilterMode = .exclude
+                        }
+                        Image(systemName: "questionmark.circle")
+                            .foregroundStyle(.secondary)
+                            .instantTooltip(Self.excludeDestinationsTooltip)
+                    }
                 }
 
                 Text(
@@ -196,6 +219,17 @@ struct RoutingView: View {
                 .font(.footnote)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
+
+                if appState.settings.enforceDestinationFiltering,
+                   appState.settings.destinationFilterMode == .exclude {
+                    Toggle("Resolve DNS locally", isOn: $appState.settings.localDNSForExcluded)
+                        .toggleStyle(.checkbox)
+                        .disabled(destinationRoutingEditingLocked)
+                    Text("Local DNS steers excluded (domestic) sites to nearby CDN edges, but the local resolver's filtering then applies to tunneled sites. Off = DNS goes through the tunnel resolver.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.vertical, 4)

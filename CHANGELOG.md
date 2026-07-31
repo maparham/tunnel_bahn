@@ -33,6 +33,9 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   runs in-process in the network extension; the WireGuard data plane is unchanged. Cert
   verification defaults off (matching wstunnel); single-connection, WebSocket-transport
   only, no auto-reconnect in this release.
+- **Destination routing: new "Tunnel all except selected" (exclude) mode.** Tunnel everything
+  except the listed CIDRs/domains (e.g. keep domestic IPs direct). Per-profile
+  "Resolve DNS locally" toggle for exclude-mode profiles.
 
 ### Fixed
 - SSH private-key material is no longer orphaned in the Keychain when a profile's
