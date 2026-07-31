@@ -156,6 +156,9 @@ struct RoutingView: View {
         .onChange(of: appState.settings.routingMode) { _, _ in
             normalizeExcludeModeForRoutingMode()
         }
+        .onChange(of: appState.profileStore.selectedProfileID) { _, _ in
+            previewedEmptyMode = nil
+        }
         .navigationTitle("Advanced")
         .alert("Import Failed", isPresented: .init(
             get: { importError != nil },
@@ -341,7 +344,7 @@ struct RoutingView: View {
                             DestinationCidrBulkGroupRow(
                                 groupID: group.id,
                                 controlsDisabled: destinationRoutingEditingLocked || !bulkListsEnabled || destinationSectionsInactive,
-                                editingLocked: destinationRoutingEditingLocked,
+                                editingLocked: destinationRoutingEditingLocked || destinationSectionsInactive,
                                 onBrowse: {
                                     bulkPrefixBrowse = BulkPrefixBrowsePayload(
                                         id: group.id,
@@ -403,7 +406,7 @@ struct RoutingView: View {
                                 DestinationCidrRuleRow(
                                     ruleID: rule.id,
                                     controlsDisabled: destinationRoutingEditingLocked || !customRangesEnabled || destinationSectionsInactive,
-                                    editingLocked: destinationRoutingEditingLocked
+                                    editingLocked: destinationRoutingEditingLocked || destinationSectionsInactive
                                 )
                                 .environmentObject(appState)
                             }
@@ -557,7 +560,7 @@ struct RoutingView: View {
                                 .opacity(domainNamesEnabled ? 1 : 0.4)
                         } else {
                             ForEach(appState.destinationRuleStore.domainRules) { rule in
-                                DestinationDomainRuleRow(ruleID: rule.id, controlsDisabled: destinationRoutingEditingLocked || !domainNamesEnabled || destinationSectionsInactive, editingLocked: destinationRoutingEditingLocked) {
+                                DestinationDomainRuleRow(ruleID: rule.id, controlsDisabled: destinationRoutingEditingLocked || !domainNamesEnabled || destinationSectionsInactive, editingLocked: destinationRoutingEditingLocked || destinationSectionsInactive) {
                                     bulkPrefixBrowse = BulkPrefixBrowsePayload(
                                         id: rule.id,
                                         title: rule.domain,
