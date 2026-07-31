@@ -127,6 +127,7 @@ struct AppsView: View {
                                     Task {
                                         if let app = await appState.appDiscovery.pickAndRegisterApp() {
                                             appState.appRuleStore.setRule(for: app, action: .routeVPN)
+                                            autoSwitchToAppTunnelOnAdd()
                                         }
                                     }
                                 }
@@ -213,6 +214,13 @@ struct AppsView: View {
 
     private func addSelectedApp(_ app: DiscoveredApp) {
         appState.appRuleStore.setRule(for: app, action: .routeVPN)
+        autoSwitchToAppTunnelOnAdd()
+    }
+
+    private func autoSwitchToAppTunnelOnAdd() {
+        guard AppConstants.isPerAppSplitTunnelEnabled else { return }
+        guard !rulesLocked else { return }
+        appState.settings.routingMode = .appTunnel
     }
 
     private func removeSelectedApp(_ rule: AppRule) {
