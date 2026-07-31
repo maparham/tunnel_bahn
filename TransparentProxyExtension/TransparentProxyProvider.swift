@@ -968,35 +968,11 @@ public final class TransparentProxyProvider: NETransparentProxyProvider {
             lastUpdate: .now,
             perDestination: perDestination
         )
-        // Cache for the host's `getStats` IPC pull — this, not the file write below, is what
-        // actually reaches the host across the uid boundary.
+        // Cache for the host's `getStats` IPC pull — the only path that crosses the uid boundary.
         if let payload = try? Self.statsEncoder.encode(stats) {
             statsLock.lock()
             latestStatsPayload = payload
             statsLock.unlock()
-        }
-        do {
-            try PerAppTransferStore.write(stats)
-        } catch {
-            Self.log.error("failed to flush app-tunnel stats: \(error.localizedDescription)")
-        }
-
-        flushExtensionResourceStats()
-    }
-
-    private func flushExtensionResourceStats() {
-        // Runs on `flushQueue` (via the flush timer). `sampleResources()` keeps all sampler
-        // access on that one queue so its cross-sample state can't race the IPC reader.
-        let sample = sampleResources()
-        var merged = ExtensionResourceStore.read()
-        merged.transparentProxyCPU = sample.cpuPercent
-        merged.transparentProxyMemory = sample.memoryBytes
-        merged.lastUpdate = .now
-        merged.schemaVersion = ExtensionResourceStats.currentSchemaVersion
-        do {
-            try ExtensionResourceStore.write(merged)
-        } catch {
-            Self.log.error("failed to flush extension resource stats: \(error.localizedDescription)")
         }
     }
 
