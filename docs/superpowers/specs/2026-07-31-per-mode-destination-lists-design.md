@@ -89,10 +89,9 @@ rules; resolution results are stored into that mode's set.
 Single-stack layout retained; the mode radios swap the three sections in place.
 
 - **Rename:** radio label becomes "Tunnel only selected destinations".
-- **Glyphs:** each section header leads with a small tinted SF Symbol identifying the mode
-  whose lists are shown: blue `plus.circle` for include, orange `minus.circle` for exclude.
-  The same glyph appears next to its radio label so the mapping is self-teaching. No
-  "for: <mode>" text labels.
+- **Mode identity:** no glyphs and no "for: <mode>" text labels (glyphs were tried and
+  removed by user decision 2026-08-01). The selected radio and the warning banner wording
+  are the only mode indicators.
 - **Radios always clickable:** the include/exclude radios are no longer disabled when no
   destinations exist (that would be a dead end — a mode's set always starts empty). Selecting
   a mode with an empty set shows the existing blue hint ("Add destination IPs or CIDRs below
