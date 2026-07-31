@@ -1,18 +1,23 @@
 import Foundation
 import Network
 import os
+import Security
 
 /// In-process wstunnel-v10 UDP-over-WebSocket client. Binds a loopback UDP socket (WireGuard's
 /// effective endpoint) and relays each datagram to the server as one WebSocket binary frame over a
-/// single TLS WebSocket connection, and back. Wire-compatible with `wstunnel` v10: path
-/// `/<pathPrefix>/events`, subprotocol `v1, authorization.bearer.<jwt>`.
+/// single TLS connection, and back. Wire-compatible with `wstunnel` v10: path `/<pathPrefix>/events`,
+/// subprotocol `v1, authorization.bearer.<jwt>`.
 ///
-/// The WebSocket carrier is built on Network.framework `NWConnection` + `NWProtocolWebSocket`, NOT
-/// `URLSessionWebSocketTask`. Inside a NEPacketTunnelProvider the extension runs as a heavily
-/// sandboxed root process; URLSession's TLS trust evaluation reaches out to a system daemon the
-/// sandbox blocks, so wss handshakes there fail with `-1200` even though the bare TCP connect
-/// succeeds. `NWConnection` runs TLS in-process (verify handled by a `sec_protocol` block), which is
-/// the sanctioned networking API for network extensions and works in that context.
+/// The carrier is a raw `NWConnection` + `NWProtocolTLS`; the WebSocket layer (HTTP Upgrade + frame
+/// codec) is hand-rolled on top rather than using `NWProtocolWebSocket`. Two reasons:
+///  1. Inside a NEPacketTunnelProvider the extension is a heavily sandboxed root process;
+///     URLSession's TLS trust evaluation reaches a system daemon the sandbox blocks (wss fails with
+///     -1200). `NWConnection` runs TLS in-process, which is the sanctioned API for network extensions.
+///  2. `NWProtocolWebSocket` MASKS every client frame (RFC 6455 mandates it, no opt-out). wstunnel
+///     runs with `websocket_mask_frame: false` and does NOT unmask incoming client frames — so a
+///     masked WG init arrives at wg-exit scrambled (type byte 0x7d instead of 0x01), is dropped
+///     before peer attribution, and the handshake never completes. We therefore emit UNMASKED frames
+///     (mask bit = 0), exactly as wstunnel's own client does.
 final class WGTCPWrapperRelay: NSObject {
     private let config: WireGuardTCPWrapper
     private let queue = DispatchQueue(label: "com.tunnelbahn.mac.wgtcp.relay")
@@ -20,19 +25,24 @@ final class WGTCPWrapperRelay: NSObject {
 
     private var listener: NWListener?
     private var udpConnection: NWConnection?      // the single peer = BoringTun's NWUDPSession
-    private var wsConnection: NWConnection?        // the wss carrier to the server
+    private var wsConnection: NWConnection?        // the raw TLS carrier to the server
     private(set) var localUDPPort: UInt16 = 0
+
+    /// Carrier lifecycle: TLS connecting → HTTP Upgrade sent, awaiting 101 → open (framing).
+    private enum Phase { case connecting, awaitingUpgrade, open }
+    private var phase: Phase = .connecting
+    /// Bytes received on the carrier not yet consumed: HTTP response headers first, then WS frames.
+    private var recvBuffer = Data()
 
     // Data-plane frame counters (mutated only on `queue`). Logged first-of-direction + periodically
     // so the WG handshake round-trip is observable in the unified log without a wire capture:
     // UDP->WS counting up but WS->UDP stuck at 0 => BoringTun is sending but the server never
-    // replies (framing / server-forward); both climbing => data plane is live.
+    // replies; both climbing => data plane is live.
     private var udpToWsCount = 0
     private var wsToUdpCount = 0
-    private var wsRxCallbacks = 0   // every receiveMessage callback, pre-filter
 
-    /// Resumed exactly once by the connection state handler — success on `.ready` (WS upgrade
-    /// complete), failure on `.failed` or the timeout. `start()` awaits it.
+    /// Resumed exactly once — success once the HTTP 101 upgrade is parsed, failure on `.failed`,
+    /// a non-101 response, or the timeout. `start()` awaits it.
     private var openContinuation: CheckedContinuation<Void, Error>?
     private var openResolved = false
 
@@ -51,22 +61,20 @@ final class WGTCPWrapperRelay: NSObject {
     func start() async throws {
         do {
             try startUDPListener()
-            try await startWebSocket()      // returns once the WS handshake has completed (or throws)
+            try await startCarrier()        // returns once the HTTP 101 upgrade has completed (or throws)
         } catch {
             stop()          // queue-serialized; tears down the bound listener/connection
             throw error
         }
-        receiveFromWebSocket()
     }
 
     func stop() {
         // Fail a still-pending start() so its continuation can't leak.
         resolveOpen(.failure(NSError(domain: "WGTCPWrapperRelay", code: 5,
                                      userInfo: [NSLocalizedDescriptionKey: "relay stopped before open"])))
-        // Resource teardown touches the same shared vars that receiveFromUDP and
-        // receiveFromWebSocket (both on `queue`) read/write, so it must be serialized on `queue`
-        // too — async, not sync, so a stop() reached from a callback already running on `queue`
-        // can't deadlock.
+        // Resource teardown touches the same shared vars the receive callbacks (all on `queue`)
+        // read/write, so it must be serialized on `queue` too — async, not sync, so a stop() reached
+        // from a callback already running on `queue` can't deadlock.
         queue.async { [weak self] in
             guard let self else { return }
             self.wsConnection?.cancel(); self.wsConnection = nil
@@ -123,14 +131,13 @@ final class WGTCPWrapperRelay: NSObject {
         }
     }
 
-    // MARK: WebSocket side
+    // MARK: Carrier (TLS + hand-rolled WebSocket)
 
-    private func startWebSocket() async throws {
-        let scheme = config.tls ? "wss" : "ws"
-        guard let url = URL(string: "\(scheme)://\(config.serverHost):\(config.serverPort)/\(config.pathPrefix)/events") else {
-            throw NSError(domain: "WGTCPWrapperRelay", code: 2, userInfo: [NSLocalizedDescriptionKey: "bad server URL"])
+    private func startCarrier() async throws {
+        let host = NWEndpoint.Host(config.serverHost)
+        guard let port = NWEndpoint.Port(rawValue: config.serverPort) else {
+            throw NSError(domain: "WGTCPWrapperRelay", code: 2, userInfo: [NSLocalizedDescriptionKey: "bad server port"])
         }
-        let jwt = WGTunnelJWT.makeUDP(forwardHost: config.forwardHost, forwardPort: config.forwardPort)
 
         let params: NWParameters
         if config.tls {
@@ -152,25 +159,9 @@ final class WGTCPWrapperRelay: NSObject {
             params = NWParameters.tcp
         }
 
-        // The WebSocket subprotocol list carries the wstunnel request: the server selects "v1" and
-        // reads the tunnel config from `authorization.bearer.<jwt>` (validated against the live
-        // server). NWConnection sends these as `Sec-WebSocket-Protocol: v1, authorization.bearer.<jwt>`.
-        let ws = NWProtocolWebSocket.Options()
-        ws.setSubprotocols(["v1", "authorization.bearer.\(jwt)"])
-        // wstunnel keeps the carrier alive with WebSocket ping/pong. Auto-pong incoming pings;
-        // without this the server's keepalive ping goes unanswered and it closes the WS (observed:
-        // carrier established, then dropped).
-        ws.autoReplyPing = true
-        params.defaultProtocolStack.applicationProtocols.insert(ws, at: 0)
-
-        // NWEndpoint.url carries both the connect target (host:port) and the upgrade request path
-        // (`/<pathPrefix>/events`).
-        let conn = NWConnection(to: .url(url), using: params)
+        let conn = NWConnection(host: host, port: port, using: params)
         self.wsConnection = conn
 
-        // Await the HTTP upgrade completing: `.ready` fires once the WebSocket handshake succeeds.
-        // A single stored continuation is resolved by whichever fires first: .ready (success),
-        // .failed (failure), the timeout, or stop(). `resolveOpen` guarantees exactly-once resume.
         try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
             queue.async {
                 self.openContinuation = cont
@@ -184,18 +175,18 @@ final class WGTCPWrapperRelay: NSObject {
                     guard let self else { return }
                     switch state {
                     case .ready:
-                        self.logger.notice("[APPSPLIT_WGTCP] carrier .ready (WS upgrade complete)")
-                        self.resolveOpen(.success(()))
+                        // TLS is up (or bare TCP for ws://). Send the HTTP Upgrade and start reading.
+                        self.logger.notice("[APPSPLIT_WGTCP] carrier TLS/TCP .ready — sending WS upgrade")
+                        self.sendUpgradeRequest()
+                        self.phase = .awaitingUpgrade
+                        self.receiveCarrier()
                     case let .failed(err):
-                        // Fires for a pre-open failure (fails start()) and for a post-open drop
-                        // (resolveOpen is then a no-op, but the log makes the drop visible).
                         self.logger.error("[APPSPLIT_WGTCP] carrier .failed err=\(String(describing: err), privacy: .public) udp->ws=\(self.udpToWsCount, privacy: .public) ws->udp=\(self.wsToUdpCount, privacy: .public)")
                         self.resolveOpen(.failure(err))
                     case .cancelled:
                         self.logger.notice("[APPSPLIT_WGTCP] carrier .cancelled udp->ws=\(self.udpToWsCount, privacy: .public) ws->udp=\(self.wsToUdpCount, privacy: .public)")
                     case let .waiting(err):
-                        // .waiting is transient (Network.framework auto-retries); keep waiting until
-                        // .ready, .failed, or the timeout fires.
+                        // .waiting is transient (Network.framework auto-retries); keep waiting.
                         self.logger.notice("[APPSPLIT_WGTCP] carrier .waiting err=\(String(describing: err), privacy: .public)")
                     default:
                         break
@@ -206,8 +197,193 @@ final class WGTCPWrapperRelay: NSObject {
         }
     }
 
-    /// Resume the open continuation at most once — the state handler, the timeout, and stop() can
-    /// all race. First caller wins; the rest are no-ops. Must run (and only run) on `queue`.
+    private func sendUpgradeRequest() {
+        let jwt = WGTunnelJWT.makeUDP(forwardHost: config.forwardHost, forwardPort: config.forwardPort)
+        let wsKey = Self.randomBase64(16)
+        let hostHeader = "\(config.serverHost):\(config.serverPort)"
+        let request =
+            "GET /\(config.pathPrefix)/events HTTP/1.1\r\n" +
+            "Host: \(hostHeader)\r\n" +
+            "Upgrade: websocket\r\n" +
+            "Connection: Upgrade\r\n" +
+            "Sec-WebSocket-Key: \(wsKey)\r\n" +
+            "Sec-WebSocket-Version: 13\r\n" +
+            "Sec-WebSocket-Protocol: v1, authorization.bearer.\(jwt)\r\n" +
+            "\r\n"
+        wsConnection?.send(content: Data(request.utf8), completion: .contentProcessed { [weak self] err in
+            if let err {
+                self?.resolveOpen(.failure(err))
+            }
+        })
+    }
+
+    /// Single receive loop for the carrier. Appends to `recvBuffer`, then either parses the HTTP
+    /// upgrade response (awaitingUpgrade) or drains complete WS frames (open).
+    private func receiveCarrier() {
+        wsConnection?.receive(minimumIncompleteLength: 1, maximumLength: 65536) { [weak self] data, _, isComplete, error in
+            guard let self else { return }
+            if let data, !data.isEmpty {
+                self.recvBuffer.append(data)
+                switch self.phase {
+                case .awaitingUpgrade: self.consumeUpgradeResponse()
+                case .open: self.drainFrames()
+                case .connecting: break
+                }
+            }
+            if let error {
+                self.logger.error("[APPSPLIT_WGTCP] carrier receive error=\(String(describing: error), privacy: .public)")
+                self.resolveOpen(.failure(error))
+                return
+            }
+            if isComplete {
+                // Server closed the stream. Nothing more will arrive; provider observes tunnel loss.
+                self.logger.notice("[APPSPLIT_WGTCP] carrier EOF udp->ws=\(self.udpToWsCount, privacy: .public) ws->udp=\(self.wsToUdpCount, privacy: .public)")
+                self.resolveOpen(.failure(NSError(domain: "WGTCPWrapperRelay", code: 6,
+                    userInfo: [NSLocalizedDescriptionKey: "carrier closed before upgrade"])))
+                return
+            }
+            self.receiveCarrier()   // keep receiving
+        }
+    }
+
+    /// Parse the HTTP response headers. On `101 Switching Protocols`, flip to framing; leftover
+    /// bytes after the header terminator are the first WS frame(s).
+    private func consumeUpgradeResponse() {
+        // Header block ends at the first CRLFCRLF.
+        let terminator = Data([0x0d, 0x0a, 0x0d, 0x0a])
+        guard let range = recvBuffer.range(of: terminator) else { return }   // headers incomplete, wait
+        let headerData = recvBuffer.subdata(in: recvBuffer.startIndex..<range.lowerBound)
+        recvBuffer.removeSubrange(recvBuffer.startIndex..<range.upperBound)   // keep any WS bytes that followed
+
+        let statusLine = String(decoding: headerData, as: UTF8.self)
+            .split(separator: "\r\n", maxSplits: 1).first.map(String.init) ?? ""
+        guard statusLine.contains(" 101 ") else {
+            logger.error("[APPSPLIT_WGTCP] upgrade rejected: \(statusLine, privacy: .public)")
+            resolveOpen(.failure(NSError(domain: "WGTCPWrapperRelay", code: 4,
+                userInfo: [NSLocalizedDescriptionKey: "WebSocket upgrade failed: \(statusLine)"])))
+            return
+        }
+        logger.notice("[APPSPLIT_WGTCP] WS upgrade complete (101)")
+        phase = .open
+        resolveOpen(.success(()))
+        drainFrames()   // any frames that arrived in the same segment as the 101
+    }
+
+    // MARK: WebSocket frame codec (unmasked send; tolerant read)
+
+    private struct WSOpcode {
+        static let continuation: UInt8 = 0x0
+        static let text: UInt8 = 0x1
+        static let binary: UInt8 = 0x2
+        static let close: UInt8 = 0x8
+        static let ping: UInt8 = 0x9
+        static let pong: UInt8 = 0xA
+    }
+
+    /// Send one datagram to the server as a single UNMASKED binary WebSocket frame.
+    private func sendToWebSocket(_ data: Data) {
+        guard let conn = wsConnection, phase == .open else { return }
+        udpToWsCount += 1
+        if udpToWsCount == 1 || udpToWsCount % 50 == 0 {
+            logger.notice("[APPSPLIT_WGTCP] UDP->WS frames=\(self.udpToWsCount, privacy: .public) lastLen=\(data.count, privacy: .public)")
+        }
+        conn.send(content: Self.encodeFrame(opcode: WSOpcode.binary, payload: data),
+                  completion: .contentProcessed { _ in })
+    }
+
+    /// Drain as many complete frames as `recvBuffer` holds. Server→client frames are unmasked.
+    private func drainFrames() {
+        while true {
+            guard let (opcode, payload, consumed) = Self.decodeFrame(recvBuffer) else { break }
+            recvBuffer.removeSubrange(recvBuffer.startIndex..<recvBuffer.startIndex.advanced(by: consumed))
+            switch opcode {
+            case WSOpcode.binary, WSOpcode.text, WSOpcode.continuation:
+                if !payload.isEmpty {
+                    wsToUdpCount += 1
+                    if wsToUdpCount == 1 || wsToUdpCount % 50 == 0 {
+                        logger.notice("[APPSPLIT_WGTCP] WS->UDP frames=\(self.wsToUdpCount, privacy: .public) lastLen=\(payload.count, privacy: .public)")
+                    }
+                    udpConnection?.send(content: payload, completion: .contentProcessed { _ in })
+                }
+            case WSOpcode.ping:
+                // Keep the carrier alive: echo the payload back as a pong (unmasked).
+                wsConnection?.send(content: Self.encodeFrame(opcode: WSOpcode.pong, payload: payload),
+                                   completion: .contentProcessed { _ in })
+            case WSOpcode.pong:
+                break
+            case WSOpcode.close:
+                logger.notice("[APPSPLIT_WGTCP] server sent WS close")
+                wsConnection?.cancel()
+                return
+            default:
+                break
+            }
+        }
+    }
+
+    /// Encode a WebSocket frame with FIN=1, no mask (mask bit = 0). Extended length for >125 bytes.
+    private static func encodeFrame(opcode: UInt8, payload: Data) -> Data {
+        var frame = Data()
+        frame.append(0x80 | (opcode & 0x0f))     // FIN + opcode
+        let len = payload.count
+        if len < 126 {
+            frame.append(UInt8(len))              // mask bit = 0
+        } else if len < 65536 {
+            frame.append(126)
+            frame.append(UInt8((len >> 8) & 0xff))
+            frame.append(UInt8(len & 0xff))
+        } else {
+            frame.append(127)
+            var l = UInt64(len).bigEndian
+            withUnsafeBytes(of: &l) { frame.append(contentsOf: $0) }
+        }
+        frame.append(payload)
+        return frame
+    }
+
+    /// Decode one frame from the front of `buffer`. Returns (opcode, payload, bytesConsumed) or nil
+    /// if a full frame isn't buffered yet. Unmasks if the server ever sets the mask bit (it won't).
+    private static func decodeFrame(_ buffer: Data) -> (opcode: UInt8, payload: Data, consumed: Int)? {
+        let bytes = [UInt8](buffer)
+        guard bytes.count >= 2 else { return nil }
+        let opcode = bytes[0] & 0x0f
+        let masked = (bytes[1] & 0x80) != 0
+        var len = Int(bytes[1] & 0x7f)
+        var offset = 2
+        if len == 126 {
+            guard bytes.count >= offset + 2 else { return nil }
+            len = (Int(bytes[offset]) << 8) | Int(bytes[offset + 1])
+            offset += 2
+        } else if len == 127 {
+            guard bytes.count >= offset + 8 else { return nil }
+            len = 0
+            for i in 0..<8 { len = (len << 8) | Int(bytes[offset + i]) }
+            offset += 8
+        }
+        var maskKey = [UInt8](repeating: 0, count: 4)
+        if masked {
+            guard bytes.count >= offset + 4 else { return nil }
+            maskKey = Array(bytes[offset..<offset + 4])
+            offset += 4
+        }
+        guard bytes.count >= offset + len else { return nil }
+        var payload = Array(bytes[offset..<offset + len])
+        if masked {
+            for i in 0..<payload.count { payload[i] ^= maskKey[i % 4] }
+        }
+        return (opcode, Data(payload), offset + len)
+    }
+
+    private static func randomBase64(_ count: Int) -> String {
+        var bytes = [UInt8](repeating: 0, count: count)
+        _ = SecRandomCopyBytes(kSecRandomDefault, count, &bytes)
+        return Data(bytes).base64EncodedString()
+    }
+
+    // MARK: continuation plumbing
+
+    /// Resume the open continuation at most once — the state handler, the reader, the timeout, and
+    /// stop() can all race. First caller wins; the rest are no-ops. Must run (and only run) on `queue`.
     private func resolveOpen(_ result: Result<Void, Error>) {
         queue.async {
             guard !self.openResolved else { return }
@@ -219,53 +395,5 @@ final class WGTCPWrapperRelay: NSObject {
             case let .failure(err): cont?.resume(throwing: err)
             }
         }
-    }
-
-    /// Send one datagram to the server as a single binary WebSocket frame.
-    private func sendToWebSocket(_ data: Data) {
-        guard let conn = wsConnection else { return }
-        udpToWsCount += 1
-        if udpToWsCount == 1 || udpToWsCount % 50 == 0 {
-            logger.notice("[APPSPLIT_WGTCP] UDP->WS frames=\(self.udpToWsCount, privacy: .public) lastLen=\(data.count, privacy: .public)")
-        }
-        let meta = NWProtocolWebSocket.Metadata(opcode: .binary)
-        let ctx = NWConnection.ContentContext(identifier: "wgDatagram", metadata: [meta])
-        conn.send(content: data, contentContext: ctx, isComplete: true, completion: .contentProcessed { _ in })
-    }
-
-    private func receiveFromWebSocket() {
-        wsConnection?.receiveMessage { [weak self] data, context, _, error in
-            guard let self else { return }
-            // Unconditional raw-receive trace BEFORE any filtering: proves whether the server ever
-            // sends anything back at all (vs. a frame that the isDataFrame gate silently drops, an
-            // empty frame, or a receive error). Without this, "no WS->UDP line" is ambiguous.
-            let op = (context?.protocolMetadata(definition: NWProtocolWebSocket.definition)
-                        as? NWProtocolWebSocket.Metadata).map { "\($0.opcode)" } ?? "nil-meta"
-            self.wsRxCallbacks += 1
-            if self.wsRxCallbacks <= 5 || self.wsRxCallbacks % 50 == 0 {
-                self.logger.notice("[APPSPLIT_WGTCP] WS RX cb#\(self.wsRxCallbacks, privacy: .public) len=\(data?.count ?? -1, privacy: .public) opcode=\(op, privacy: .public) err=\(String(describing: error), privacy: .public)")
-            }
-            // Deliver binary/text payloads to the UDP peer; ignore control frames (close/ping/pong).
-            if let data, !data.isEmpty, self.isDataFrame(context) {
-                self.wsToUdpCount += 1
-                if self.wsToUdpCount == 1 || self.wsToUdpCount % 50 == 0 {
-                    self.logger.notice("[APPSPLIT_WGTCP] WS->UDP frames=\(self.wsToUdpCount, privacy: .public) lastLen=\(data.count, privacy: .public)")
-                }
-                self.udpConnection?.send(content: data, completion: .contentProcessed { _ in })
-            }
-            if error == nil, self.wsConnection != nil {
-                self.receiveFromWebSocket()   // keep receiving
-            }
-            // On error the carrier is gone; stop pumping. Provider observes tunnel loss. (No
-            // auto-reconnect in v1.)
-        }
-    }
-
-    /// True for binary/text WebSocket messages (the ones carrying WG datagrams). A close frame or a
-    /// context-less delivery is not forwarded.
-    private func isDataFrame(_ context: NWConnection.ContentContext?) -> Bool {
-        guard let meta = context?.protocolMetadata(definition: NWProtocolWebSocket.definition)
-            as? NWProtocolWebSocket.Metadata else { return false }
-        return meta.opcode == .binary || meta.opcode == .text
     }
 }
