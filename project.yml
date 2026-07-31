@@ -136,6 +136,7 @@ targets:
       - path: Shared/WGTunnelJWT.swift
       - path: Shared/WGTCPWrapperRelay.swift
       - path: Shared/DestinationRouting.swift
+      - path: Shared/TunnelRouteShape.swift
       - path: Shared/TransparentProxyRuntimeConfig.swift
       - path: TunnelBahn/Models/ProfileRoutingSnapshot.swift
       - path: TunnelBahn/Models/RoutingMode.swift

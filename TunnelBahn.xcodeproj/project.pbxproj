@@ -37,6 +37,7 @@
 		14973825B3CDC6A78F4C5892 /* ProfileRoutingSnapshot.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7203132BD62E6535BAFA5268 /* ProfileRoutingSnapshot.swift */; };
 		152FA1BEB84879B1E0C18B71 /* SystemExtensionManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6CE6119028552A856CD39492 /* SystemExtensionManager.swift */; };
 		15A579815DA16D2B43EF3A76 /* SSHHostKeyStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = DE60DF9A0143017FBC482723 /* SSHHostKeyStore.swift */; };
+		176999E4564C566ED799E4FA /* TunnelRouteShape.swift in Sources */ = {isa = PBXBuildFile; fileRef = 010A76BC7A7D8A3C98D56331 /* TunnelRouteShape.swift */; };
 		17E45DD8D44E2B067098C054 /* WireGuardTCPWrapper.swift in Sources */ = {isa = PBXBuildFile; fileRef = 20ACA34BB4ED59ED85434A6D /* WireGuardTCPWrapper.swift */; };
 		19983D532895D0D988774F22 /* SSHProfile.swift in Sources */ = {isa = PBXBuildFile; fileRef = 29E109AFF9EE8302B6965E4C /* SSHProfile.swift */; };
 		1B074FE3D75C52EBC684C1B8 /* WGTunnelJWTTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CD2A25CB4B262C8C4CD8F675 /* WGTunnelJWTTests.swift */; };
@@ -57,6 +58,7 @@
 		34A9290E6781D96543A43326 /* DestinationDomainRule.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6DAD735EE52C2019E7D5E778 /* DestinationDomainRule.swift */; };
 		34BA9126A5908F090CAC52A6 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5AF7FE9FDDCD675A8CF2918D /* SettingsView.swift */; };
 		3533FC25D81A6824FAC2F1B5 /* LogsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 05001C79DA1982E77CB30793 /* LogsView.swift */; };
+		367022E365188C8DB21F1502 /* TunnelRouteShape.swift in Sources */ = {isa = PBXBuildFile; fileRef = 010A76BC7A7D8A3C98D56331 /* TunnelRouteShape.swift */; };
 		3753C67B8BE9E2C47198C295 /* SharedLogWriter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 748BFC2AF3A11879E344CF2E /* SharedLogWriter.swift */; };
 		3912BB21FF77CDAAAFC2F866 /* TunnelBahnApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1D0773D7DA0C4899C2FB05D9 /* TunnelBahnApp.swift */; };
 		3DF572A62EC0C1665D75EE09 /* ProcessResourceSampler.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6D115DCEFD0728C235552677 /* ProcessResourceSampler.swift */; };
@@ -71,6 +73,7 @@
 		4817D2F3C9F3E41E833758FB /* BuildInfo.swift in Sources */ = {isa = PBXBuildFile; fileRef = CE3E1BCC9751C9C8054A99B9 /* BuildInfo.swift */; };
 		481F5086AA8C8D7AE27BA080 /* ProcessResourceSampler.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6D115DCEFD0728C235552677 /* ProcessResourceSampler.swift */; };
 		4D775B7E697727EB5FADB127 /* WGTunnelJWT.swift in Sources */ = {isa = PBXBuildFile; fileRef = 96F40C554C8EC710FF48B351 /* WGTunnelJWT.swift */; };
+		5071C5BB152526A0CB9A97ED /* TunnelRouteShapeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 80132BD08B10A495912985BD /* TunnelRouteShapeTests.swift */; };
 		53602B80FA25CDD0EDFD9AAF /* DebugSelfChecks.swift in Sources */ = {isa = PBXBuildFile; fileRef = 419A1112BE970F26BC9AE3ED /* DebugSelfChecks.swift */; };
 		54D7C5A28F63CCAE643F6747 /* ProfileRoutingSnapshot.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7203132BD62E6535BAFA5268 /* ProfileRoutingSnapshot.swift */; };
 		55F92A597C5E3200AA3A0696 /* Constants.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5FD44AFE7F187FA0508C1EC3 /* Constants.swift */; };
@@ -115,6 +118,7 @@
 		90E609CF0B7509F6FC46372E /* RelayWireFrame.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8172D2F62168E74984689F83 /* RelayWireFrame.swift */; };
 		9218BD1308ABA5BBCDE2D1E6 /* AppGroup.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A326E604708829F35A2C2FE /* AppGroup.swift */; };
 		9251C9221C3C37AC119CC489 /* AppGroup.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A326E604708829F35A2C2FE /* AppGroup.swift */; };
+		940CBDF2BFC3782B26883A25 /* TunnelRouteShape.swift in Sources */ = {isa = PBXBuildFile; fileRef = 010A76BC7A7D8A3C98D56331 /* TunnelRouteShape.swift */; };
 		9486737C5C8ABE21004DC688 /* DestinationSectionToggles.swift in Sources */ = {isa = PBXBuildFile; fileRef = ACD291CEFA112A73BADA3135 /* DestinationSectionToggles.swift */; };
 		950889D4805B0B825BCFC1DC /* AppDiscoveryService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9C3EBCDA1A0C341A0630B092 /* AppDiscoveryService.swift */; };
 		9545405E11A1B8499351536D /* SSHHostKeyStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = DE60DF9A0143017FBC482723 /* SSHHostKeyStore.swift */; };
@@ -188,6 +192,7 @@
 		E0929E18384C153AE669DB9F /* SSHProfile.swift in Sources */ = {isa = PBXBuildFile; fileRef = 29E109AFF9EE8302B6965E4C /* SSHProfile.swift */; };
 		E0CD452328C28173F61D5D42 /* RoutingMode.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1B55AE43555852786D1D7E49 /* RoutingMode.swift */; };
 		E3005C50214B3C12C2961FF5 /* ProfileRoutingSnapshot.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7203132BD62E6535BAFA5268 /* ProfileRoutingSnapshot.swift */; };
+		E5179D24C03CBF9129EE04ED /* TunnelRouteShape.swift in Sources */ = {isa = PBXBuildFile; fileRef = 010A76BC7A7D8A3C98D56331 /* TunnelRouteShape.swift */; };
 		EA31616FBB4B4152791A103F /* AppLog.swift in Sources */ = {isa = PBXBuildFile; fileRef = C555A6EC9D28808AD8B285BE /* AppLog.swift */; };
 		EBC2692CCF41E1719B7BBB62 /* WireGuardTCPWrapper.swift in Sources */ = {isa = PBXBuildFile; fileRef = 20ACA34BB4ED59ED85434A6D /* WireGuardTCPWrapper.swift */; };
 		EBDEE9F591A0A987CFE01158 /* DestinationCidrRule.swift in Sources */ = {isa = PBXBuildFile; fileRef = E8DB280E40DE01D8F9752BFC /* DestinationCidrRule.swift */; };
@@ -245,6 +250,7 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		010A76BC7A7D8A3C98D56331 /* TunnelRouteShape.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TunnelRouteShape.swift; sourceTree = "<group>"; };
 		03ABE89825ADE7047580191F /* PerDestinationCounterAggregator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PerDestinationCounterAggregator.swift; sourceTree = "<group>"; };
 		05001C79DA1982E77CB30793 /* LogsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LogsView.swift; sourceTree = "<group>"; };
 		056AF191BDE4A37210A30210 /* MenuBarController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MenuBarController.swift; sourceTree = "<group>"; };
@@ -304,6 +310,7 @@
 		7A326E604708829F35A2C2FE /* AppGroup.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppGroup.swift; sourceTree = "<group>"; };
 		7AAA1FCAD780732BB9EAA949 /* WGTCPWrapperRelayTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WGTCPWrapperRelayTests.swift; sourceTree = "<group>"; };
 		7F22EBE852B002DD9D18D127 /* RelayOutboundBridge.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = RelayOutboundBridge.h; sourceTree = "<group>"; };
+		80132BD08B10A495912985BD /* TunnelRouteShapeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TunnelRouteShapeTests.swift; sourceTree = "<group>"; };
 		8108BE3F731F12F6601FB84C /* EndpointBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EndpointBridge.swift; sourceTree = "<group>"; };
 		8172D2F62168E74984689F83 /* RelayWireFrame.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RelayWireFrame.swift; sourceTree = "<group>"; };
 		832330F2308BBB09BCD44A43 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
@@ -523,6 +530,7 @@
 				E629683F7392901EDFDE8CDB /* Info.plist */,
 				692EFA42BF336F3C93F19A94 /* ProfileRoutingSnapshotCodecTests.swift */,
 				FCE101ED62A34E86DDD8A55F /* TCPWrapperConfigCodecTests.swift */,
+				80132BD08B10A495912985BD /* TunnelRouteShapeTests.swift */,
 				7AAA1FCAD780732BB9EAA949 /* WGTCPWrapperRelayTests.swift */,
 				CD2A25CB4B262C8C4CD8F675 /* WGTunnelJWTTests.swift */,
 				436CBF313E8934ED0DE2F9A8 /* WireGuardConfigTCPWrapperTests.swift */,
@@ -595,6 +603,7 @@
 				DE60DF9A0143017FBC482723 /* SSHHostKeyStore.swift */,
 				83C0A2650F93F783E2DEFF8A /* TCPWrapperConfigCodec.swift */,
 				B2B47182EE791A9342A1CFFB /* TransparentProxyRuntimeConfig.swift */,
+				010A76BC7A7D8A3C98D56331 /* TunnelRouteShape.swift */,
 				EF79A94C669D258D9A8E381C /* TunnelRuntimeState.swift */,
 				43688349C593EAABEBFB8120 /* WGTCPWrapperRelay.swift */,
 				96F40C554C8EC710FF48B351 /* WGTunnelJWT.swift */,
@@ -937,6 +946,8 @@
 				C503F44C5645EEF42DED3362 /* TCPWrapperConfigCodec.swift in Sources */,
 				77F4EFB2078D3E0A8BBE9F92 /* TCPWrapperConfigCodecTests.swift in Sources */,
 				57757478C23DA0D03FFB3FE0 /* TransparentProxyRuntimeConfig.swift in Sources */,
+				367022E365188C8DB21F1502 /* TunnelRouteShape.swift in Sources */,
+				5071C5BB152526A0CB9A97ED /* TunnelRouteShapeTests.swift in Sources */,
 				07ED33EE15B47343DF5546E5 /* WGTCPWrapperRelay.swift in Sources */,
 				A3394A953CA232BDAA3D2B91 /* WGTCPWrapperRelayTests.swift in Sources */,
 				D7B747C6C40BEF5A8754ECFB /* WGTunnelJWT.swift in Sources */,
@@ -987,6 +998,7 @@
 				C6AED97768F4BEE81DD7E5C8 /* SmoltcpRelayBridge.swift in Sources */,
 				AD04AD58E4051D15E0B23E00 /* TCPWrapperConfigCodec.swift in Sources */,
 				7AF4E8122C1AB7A331158962 /* TransparentProxyRuntimeConfig.swift in Sources */,
+				E5179D24C03CBF9129EE04ED /* TunnelRouteShape.swift in Sources */,
 				44FEDE52A398560A50C83822 /* TunnelRuntimeState.swift in Sources */,
 				DF9AEC7E786C496BCDDAE465 /* WGTCPWrapperRelay.swift in Sources */,
 				4D775B7E697727EB5FADB127 /* WGTunnelJWT.swift in Sources */,
@@ -1064,6 +1076,7 @@
 				9F2DC7DE0C7D7C9358CBCD16 /* TransparentProxyRuntimeConfig.swift in Sources */,
 				3912BB21FF77CDAAAFC2F866 /* TunnelBahnApp.swift in Sources */,
 				614DD53D3CCA1AEB3E7FDDCB /* TunnelConnectivityProbe.swift in Sources */,
+				176999E4564C566ED799E4FA /* TunnelRouteShape.swift in Sources */,
 				46393FE4FAE6A88E76231336 /* TunnelRuntimeState.swift in Sources */,
 				9C6F18B022DA3CE8022BB563 /* VPNManager.swift in Sources */,
 				2393A58EB0D57D1A567B9D6E /* WGTCPWrapperRelay.swift in Sources */,
@@ -1113,6 +1126,7 @@
 				0560454BB3AB3D5EBCE6A9BD /* TransparentProxyProvider.swift in Sources */,
 				D3D2A2C8C735D88AC32CAF61 /* TransparentProxyRelayClient.swift in Sources */,
 				118EABB8DD8C1B8B48346A7F /* TransparentProxyRuntimeConfig.swift in Sources */,
+				940CBDF2BFC3782B26883A25 /* TunnelRouteShape.swift in Sources */,
 				32B5E12BBE4153299FBFD849 /* TunnelRuntimeState.swift in Sources */,
 				AE83F95512B56CE6958D60DF /* UDPFlowRelay.swift in Sources */,
 				9C58252B83BCBFC4392969DD /* WGTCPWrapperRelay.swift in Sources */,
