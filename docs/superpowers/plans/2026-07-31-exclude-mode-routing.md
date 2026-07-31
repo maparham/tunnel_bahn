@@ -14,7 +14,7 @@
 
 - **No xcodebuild without user OK (project standing rule, see 2026-07-23 plan):** ask the user for a go-ahead before ANY `xcodebuild` build/test invocation (a blanket OK at session start counts). Never launch the app or touch the running tunnel/system extension yourself — jammed-sysext state is a known hazard (see project memory).
 - **`project.yml` is the source of truth** for the Xcode project. After editing it, run `xcodegen generate` from the repo root (this rewrites `TunnelBahn.xcodeproj`).
-- **Decode tolerance:** every new Codable key must decode with a default when absent — `filterMode → .include`, `localDNSForExcluded → false`. Never bump `schemaVersion`.
+- **Strict decoding (user decision 2026-07-31, supersedes the spec's decode-tolerance requirement):** the repo removed all backward-compat/tolerant decoding in d06f56c ("app is undistributed"). New Codable keys use synthesized strict decoding — required keys, NO `decodeIfPresent` fallbacks, no legacy-JSON tests. Defaults live only in memberwise-init parameters (`filterMode = .include`, `localDNSForExcluded = false`) so existing call sites compile unchanged. Persisted data from older builds failing to decode is acceptable.
 - **Version skew is ACCEPTED residual risk (user decision, 2026-07-31):** a stale pre-filterMode system extension reads an exclude config as a whitelist (tunnels only the excluded CIDRs, leaks the rest). No handshake/capability probe is to be built — old extensions are the user's responsibility to remove. Do not add compatibility shims for this; see the spec's "Accepted residual risk" section.
 - **Include mode must be byte-for-byte behavior-identical** to today. All new branches are gated on `mode == .exclude`.
 - Commit after each task with a conventional-commit message (`feat(...)`, `test(...)`), ending with the Claude co-author trailer used in this repo.
@@ -85,13 +85,6 @@ final class DestinationRoutingModeTests: XCTestCase {
 
     // MARK: - DestinationRoutingFilePayload codec
 
-    func testPayloadMissingFilterModeDecodesInclude() throws {
-        let json = #"{"enforceDestinationFiltering":true,"ranges":["1.2.3.0/24"],"domainNames":["x.com"],"schemaVersion":1}"#
-        let p = try JSONDecoder().decode(DestinationRoutingFilePayload.self, from: Data(json.utf8))
-        XCTAssertEqual(p.filterMode, .include)
-        XCTAssertTrue(p.enforceDestinationFiltering)
-    }
-
     func testPayloadRoundTripsExclude() throws {
         let payload = DestinationRoutingFilePayload(
             enforceDestinationFiltering: true, ranges: ["5.22.0.0/16"], domainNames: ["digikala.com"], filterMode: .exclude
@@ -103,12 +96,6 @@ final class DestinationRoutingModeTests: XCTestCase {
     }
 
     // MARK: - TransparentProxyRuntimeConfig passthrough (filterMode rides inside destinationRouting)
-
-    func testRuntimeConfigLegacyJSONDecodesIncludeMode() throws {
-        let json = #"{"signingIdentifiers":["com.example.app"],"routeAllIdentifiedFlows":false,"destinationRouting":{"enforceDestinationFiltering":true,"ranges":["1.2.3.0/24"]}}"#
-        let cfg = try JSONDecoder().decode(TransparentProxyRuntimeConfig.self, from: Data(json.utf8))
-        XCTAssertEqual(cfg.destinationRouting.filterMode, .include)
-    }
 
     func testRuntimeConfigCarriesExcludeMode() throws {
         let cfg = TransparentProxyRuntimeConfig(
@@ -164,11 +151,7 @@ public enum DestinationRouteDecision {
 }
 ```
 
-In `DestinationRoutingFilePayload`: add `public var filterMode: DestinationFilterMode` after `domainNames`; add init param `filterMode: DestinationFilterMode = .include` (last position) and assign it; add `case filterMode` to `CodingKeys`; in `init(from:)` add:
-
-```swift
-filterMode = try c.decodeIfPresent(DestinationFilterMode.self, forKey: .filterMode) ?? .include
-```
+In `DestinationRoutingFilePayload`: add `public var filterMode: DestinationFilterMode` after `domainNames`; add init param `filterMode: DestinationFilterMode = .include` (last position) and assign it. Codable stays synthesized (strict, per Global Constraints) — no custom `CodingKeys`/`init(from:)`.
 
 - [ ] **Step 5: Run tests to verify they pass**
 
@@ -218,9 +201,8 @@ Create `Tests/Unit/ProfileRoutingSnapshotCodecTests.swift`:
 import XCTest
 
 final class ProfileRoutingSnapshotCodecTests: XCTestCase {
-    func testLegacySnapshotJSONDefaultsToIncludeAndTunnelDNS() throws {
-        let json = #"{"routingMode":"app_tunnel","enforceDestinationFiltering":true}"#
-        let s = try JSONDecoder().decode(ProfileRoutingSnapshot.self, from: Data(json.utf8))
+    func testDefaultSnapshotIsIncludeWithTunnelDNS() {
+        let s = ProfileRoutingSnapshot.default
         XCTAssertEqual(s.filterMode, .include)
         XCTAssertFalse(s.localDNSForExcluded)
     }
@@ -252,14 +234,7 @@ var filterMode: DestinationFilterMode
 var localDNSForExcluded: Bool
 ```
 
-Memberwise init: append parameters `filterMode: DestinationFilterMode = .include, localDNSForExcluded: Bool = false` (after `domainRules`, which already has a default) and assign them. `CodingKeys`: add `case filterMode, localDNSForExcluded` to the last line. `init(from:)`: append:
-
-```swift
-filterMode = try c.decodeIfPresent(DestinationFilterMode.self, forKey: .filterMode) ?? .include
-localDNSForExcluded = try c.decodeIfPresent(Bool.self, forKey: .localDNSForExcluded) ?? false
-```
-
-`static var default` needs no change (init defaults cover it).
+Memberwise init: append parameters `filterMode: DestinationFilterMode = .include, localDNSForExcluded: Bool = false` (after `domainRules`, which already has a default) and assign them. Codable stays synthesized (strict, per Global Constraints — after d06f56c the type has no custom `CodingKeys`/`init(from:)`; do not add any). `static var default` needs no change (init defaults cover it).
 
 - [ ] **Step 5: Run tests to verify they pass**
 

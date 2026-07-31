@@ -36,9 +36,9 @@ public enum DestinationFilterMode: String, Codable, Sendable {
 }
 ```
 
-Threaded through all three config layers, each decoding a missing key as `.include`
-(backward compatible with existing profiles, App Group files, and app/extension version
-skew):
+Threaded through all three config layers. (Amended 2026-07-31: decoding is STRICT —
+the repo removed all backward-compat tolerance in d06f56c; the app is undistributed
+and never needs legacy decoding. Defaults live in init parameters only.)
 
 1. `ProfileRoutingSnapshot` — add `filterMode: DestinationFilterMode`.
 2. `DestinationRoutingFilePayload` — add `filterMode`; `schemaVersion` stays 1 (decode
@@ -107,7 +107,8 @@ so profile switching just works.
 
 ## Error handling & edge cases
 
-- Missing `filterMode` key decodes as `.include` at every layer.
+- `filterMode` is a required key when decoding (strict, per d06f56c); the `.include`
+  default exists only as a memberwise-init parameter default.
 - Exclude mode with an empty rule list is legal: "tunnel everything" for routed apps.
   No special-casing; the UI may note it.
 - Invalid CIDR lines are skipped by `IPCIDRMatcher.prepare`, as today.
@@ -122,8 +123,8 @@ so profile switching just works.
   `DestinationRouteDecision.decide(mode:ipMatchesRules:sniMatchesRules:)` returning
   tunnel / direct / decline) and unit-test both modes, including the fail-open inversion
   and the disabled local-bypass override in exclude mode.
-- Codec tests: all three config types decode without the new keys → `.include` /
-  `false`.
+- Codec tests: round-trip encode/decode of the new keys (strict decoding — no
+  missing-key tolerance tests).
 - E2E (tunnel up, Iranian CIDR bulk group excluded, verify direct vs tunneled paths)
   remains manual, consistent with the rest of the codebase.
 
