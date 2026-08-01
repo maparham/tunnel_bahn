@@ -947,6 +947,11 @@ final class VPNManager: ObservableObject {
             if settings.includeHostAppInPerAppRulesForProbe { return .appTunnelHostIncluded }
             return .appTunnelHostExcluded
         }()
+        // Speed test path classification: TunnelBahn's own internet traffic uses the tunnel only
+        // when the tunnel owns the default route (default-route profile, no destination split)
+        // and, in app-tunnel mode, the host app is inside the NEAppRule list.
+        stats.hostAppInternetPathIsTunnel =
+            stats.tunnelHasDefaultRoute && probePhase != .appTunnelHostExcluded
         let profileID = profile.id
         let runProbe = settings.runTunnelConnectivityProbe && profileOkForAccounting && !destinationSplitActive
 
@@ -1363,6 +1368,7 @@ final class VPNManager: ObservableObject {
         stats.perAppSplitTunnelActive = false
         stats.perAppStatsCollectionActive = false
         stats.tunnelHasDefaultRoute = false
+        stats.hostAppInternetPathIsTunnel = false
         stats.bytesIn = 0
         stats.bytesOut = 0
         stats.rxBytesPerSecond = 0
@@ -1663,6 +1669,7 @@ final class VPNManager: ObservableObject {
                 stats.publicIP = nil
                 stats.publicIPLocation = nil
                 stats.tunnelHasDefaultRoute = false
+                stats.hostAppInternetPathIsTunnel = false
                 stats.connectivityProbeResult = .unknown
             }
         @unknown default: stats.state = .error

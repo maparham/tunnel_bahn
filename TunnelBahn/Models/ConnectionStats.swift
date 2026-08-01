@@ -82,6 +82,12 @@ struct ConnectionStats: Codable {
     /// black-hole them. Not persisted (session-scoped, set at connect).
     var destinationFilterAllowedIPsDerived: Bool = false
 
+    /// True while TunnelBahn's own internet traffic traverses the tunnel: connected with a
+    /// default-route profile, no destination split, and (in app-tunnel mode) the host app
+    /// included in the NEAppRule list. Drives the speed test's Tunnel/Direct classification.
+    /// Not persisted (session-scoped, set at connect).
+    var hostAppInternetPathIsTunnel: Bool = false
+
     // Exclude connectivityProbeResult and competingProxySigningIDs from Codable synthesis.
     private enum CodingKeys: String, CodingKey {
         case state, connectedAt, lastInboundAt, lastError, bytesIn, bytesOut
