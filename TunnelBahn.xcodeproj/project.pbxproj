@@ -8,6 +8,7 @@
 
 /* Begin PBXBuildFile section */
 		014C2FCBF12405FEFD835E63 /* ProfileDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B3B3A483CAA076196A178605 /* ProfileDetailView.swift */; };
+		022E0BCCF76A6FDB45C4492E /* main.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB7CC0C01690D66AAF808579 /* main.swift */; };
 		027F3B9FEA04135D6224A3D0 /* DestinationRouting.swift in Sources */ = {isa = PBXBuildFile; fileRef = D78392AE063F46CA11402F13 /* DestinationRouting.swift */; };
 		0307DA1B17F9DCDF85FA5597 /* SharedLogWriter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 748BFC2AF3A11879E344CF2E /* SharedLogWriter.swift */; };
 		035FABFA0601E358F352C11B /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 832330F2308BBB09BCD44A43 /* Assets.xcassets */; };
@@ -79,6 +80,7 @@
 		46A990AE7F129B8A3F7C2CFB /* NIOSSH in Frameworks */ = {isa = PBXBuildFile; productRef = D322BA67DF9A1498480FF757 /* NIOSSH */; };
 		4817D2F3C9F3E41E833758FB /* BuildInfo.swift in Sources */ = {isa = PBXBuildFile; fileRef = CE3E1BCC9751C9C8054A99B9 /* BuildInfo.swift */; };
 		481F5086AA8C8D7AE27BA080 /* ProcessResourceSampler.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6D115DCEFD0728C235552677 /* ProcessResourceSampler.swift */; };
+		4A666E9D077F956AE9D2C3A3 /* AppLog.swift in Sources */ = {isa = PBXBuildFile; fileRef = C555A6EC9D28808AD8B285BE /* AppLog.swift */; };
 		4D775B7E697727EB5FADB127 /* WGTunnelJWT.swift in Sources */ = {isa = PBXBuildFile; fileRef = 96F40C554C8EC710FF48B351 /* WGTunnelJWT.swift */; };
 		5071C5BB152526A0CB9A97ED /* TunnelRouteShapeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 80132BD08B10A495912985BD /* TunnelRouteShapeTests.swift */; };
 		53602B80FA25CDD0EDFD9AAF /* DebugSelfChecks.swift in Sources */ = {isa = PBXBuildFile; fileRef = 419A1112BE970F26BC9AE3ED /* DebugSelfChecks.swift */; };
@@ -124,6 +126,7 @@
 		885E7D2B897D85F7518425D8 /* SSHProfile.swift in Sources */ = {isa = PBXBuildFile; fileRef = 29E109AFF9EE8302B6965E4C /* SSHProfile.swift */; };
 		8985FFD7F4577D9EA684055A /* SpeedTestMath.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8971347C742627A9072E5C27 /* SpeedTestMath.swift */; };
 		8A75EC38FC5D685DDAA66E27 /* WireGuardProfile.swift in Sources */ = {isa = PBXBuildFile; fileRef = 597D1A15AF482ECB340F8519 /* WireGuardProfile.swift */; };
+		8AD1F31815993CD76AF12D7C /* TCPWrapperEnabledFlagTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1EA6DE0080125D49F4001A23 /* TCPWrapperEnabledFlagTests.swift */; };
 		8D779E49B65DF290B43124A1 /* WireGuardConfigParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = 132EDEF0EA68675638E19645 /* WireGuardConfigParser.swift */; };
 		8DFBFB0DC5A51DB7C9BE3B93 /* BuildStampView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0B46E999C89C21E4365C8F0 /* BuildStampView.swift */; };
 		8FFE82963E66E3D37A97FD0E /* SpeedTestResult.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0B2D42B5A08AF2A37EE522EB /* SpeedTestResult.swift */; };
@@ -158,6 +161,7 @@
 		A795F9984DD264323A8560DC /* PerAppSigningCatalog.swift in Sources */ = {isa = PBXBuildFile; fileRef = 58E05756E27A7F82EAE7E623 /* PerAppSigningCatalog.swift */; };
 		A86E88A2EAE8BE3B64B79F5D /* ResourceMonitor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8662E8905AA143B0792E3460 /* ResourceMonitor.swift */; };
 		AD04AD58E4051D15E0B23E00 /* TCPWrapperConfigCodec.swift in Sources */ = {isa = PBXBuildFile; fileRef = 83C0A2650F93F783E2DEFF8A /* TCPWrapperConfigCodec.swift */; };
+		AD0969FAC4FADDE8E0FA0319 /* SpeedTestMath.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8971347C742627A9072E5C27 /* SpeedTestMath.swift */; };
 		AE002EF8D50B5715C57F9BDD /* PerAppSigningCatalog.swift in Sources */ = {isa = PBXBuildFile; fileRef = 58E05756E27A7F82EAE7E623 /* PerAppSigningCatalog.swift */; };
 		AE83F95512B56CE6958D60DF /* UDPFlowRelay.swift in Sources */ = {isa = PBXBuildFile; fileRef = D0D68D44B503472B582223E8 /* UDPFlowRelay.swift */; };
 		AEC2773FCCE9A9B8592DFE0B /* PerAppIdentityMap.swift in Sources */ = {isa = PBXBuildFile; fileRef = 925B86B12D5DC6FCBB010E74 /* PerAppIdentityMap.swift */; };
@@ -179,6 +183,7 @@
 		BB6EC204C7FC5589F969B2BF /* PacketTunnelRelayServer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 28D71ABF54C747293AA24B64 /* PacketTunnelRelayServer.swift */; };
 		BB703606DF596A4448F6C2F7 /* DestinationCidrRule.swift in Sources */ = {isa = PBXBuildFile; fileRef = E8DB280E40DE01D8F9752BFC /* DestinationCidrRule.swift */; };
 		BE601A1140EB15A110FDA267 /* SSHChannelHandler.swift in Sources */ = {isa = PBXBuildFile; fileRef = EA2B50DEF01484534D8A482F /* SSHChannelHandler.swift */; };
+		BEF9418FA24795D7D1215BC4 /* Constants.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5FD44AFE7F187FA0508C1EC3 /* Constants.swift */; };
 		BF6A0F8E4E3ADF9E7AB709C8 /* ConnectionStats.swift in Sources */ = {isa = PBXBuildFile; fileRef = 147A18331F2C2E8D4BE615DC /* ConnectionStats.swift */; };
 		BFABB3077F5AB679E5233108 /* AppRule.swift in Sources */ = {isa = PBXBuildFile; fileRef = C6AEA83BAE6A6F9B4EFA66D3 /* AppRule.swift */; };
 		C11010F4F30B2FA265B47FD3 /* WireGuardProfileTCPWrapperTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = EC194A3279044EA5EDB7926B /* WireGuardProfileTCPWrapperTests.swift */; };
@@ -202,8 +207,10 @@
 		D7B747C6C40BEF5A8754ECFB /* WGTunnelJWT.swift in Sources */ = {isa = PBXBuildFile; fileRef = 96F40C554C8EC710FF48B351 /* WGTunnelJWT.swift */; };
 		D81AD7002393EEFDA59FB3DC /* RoutingMode.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1B55AE43555852786D1D7E49 /* RoutingMode.swift */; };
 		D8251767F996F7EAA35C4BEE /* AppRuleStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9295D880B3CBBD2AF7DF3388 /* AppRuleStore.swift */; };
+		D8690361F9CD0D9E32369C77 /* SpeedTestHelperProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6AFDCAEF528638866D3DA3D1 /* SpeedTestHelperProtocol.swift */; };
 		D89C9EED55BFD8BCF4ACAB53 /* WireGuardProfile.swift in Sources */ = {isa = PBXBuildFile; fileRef = 597D1A15AF482ECB340F8519 /* WireGuardProfile.swift */; };
 		D9D942333BAAE45898D2B901 /* DestinationDomainRule.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6DAD735EE52C2019E7D5E778 /* DestinationDomainRule.swift */; };
+		D9EE35DD94065496803856B0 /* SpeedTestEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9F17F6C4055FC55613166EF9 /* SpeedTestEngine.swift */; };
 		DB47FCCFDD0A705F0FBA98C9 /* PerAppCounterAggregator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4B4307871B6831A9807D56A2 /* PerAppCounterAggregator.swift */; };
 		DE8098D54768316DFCDA0BC3 /* KeychainService.swift in Sources */ = {isa = PBXBuildFile; fileRef = B8E4AA7BE0C447E51BE149BC /* KeychainService.swift */; };
 		DF9AEC7E786C496BCDDAE465 /* WGTCPWrapperRelay.swift in Sources */ = {isa = PBXBuildFile; fileRef = 43688349C593EAABEBFB8120 /* WGTCPWrapperRelay.swift */; };
@@ -211,6 +218,7 @@
 		E0CD452328C28173F61D5D42 /* RoutingMode.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1B55AE43555852786D1D7E49 /* RoutingMode.swift */; };
 		E3005C50214B3C12C2961FF5 /* ProfileRoutingSnapshot.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7203132BD62E6535BAFA5268 /* ProfileRoutingSnapshot.swift */; };
 		E5179D24C03CBF9129EE04ED /* TunnelRouteShape.swift in Sources */ = {isa = PBXBuildFile; fileRef = 010A76BC7A7D8A3C98D56331 /* TunnelRouteShape.swift */; };
+		E87110DF67956AFE98E30E90 /* SharedLogWriter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 748BFC2AF3A11879E344CF2E /* SharedLogWriter.swift */; };
 		EA31616FBB4B4152791A103F /* AppLog.swift in Sources */ = {isa = PBXBuildFile; fileRef = C555A6EC9D28808AD8B285BE /* AppLog.swift */; };
 		EBC2692CCF41E1719B7BBB62 /* WireGuardTCPWrapper.swift in Sources */ = {isa = PBXBuildFile; fileRef = 20ACA34BB4ED59ED85434A6D /* WireGuardTCPWrapper.swift */; };
 		EBDEE9F591A0A987CFE01158 /* DestinationCidrRule.swift in Sources */ = {isa = PBXBuildFile; fileRef = E8DB280E40DE01D8F9752BFC /* DestinationCidrRule.swift */; };
@@ -224,6 +232,7 @@
 		F342E9B7F68FC9D32A4CFC21 /* SSHProfile.swift in Sources */ = {isa = PBXBuildFile; fileRef = 29E109AFF9EE8302B6965E4C /* SSHProfile.swift */; };
 		F433B9A3B49C35D7A4A03AE4 /* DestinationRouting.swift in Sources */ = {isa = PBXBuildFile; fileRef = D78392AE063F46CA11402F13 /* DestinationRouting.swift */; };
 		F47D9AB0E7497C6D5255291C /* DestinationSectionToggles.swift in Sources */ = {isa = PBXBuildFile; fileRef = ACD291CEFA112A73BADA3135 /* DestinationSectionToggles.swift */; };
+		F7576BF45E28C9B52E3C4F44 /* SpeedTestResult.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0B2D42B5A08AF2A37EE522EB /* SpeedTestResult.swift */; };
 		F7B0C15499111247B0BD3A47 /* SpeedTestHelperProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6AFDCAEF528638866D3DA3D1 /* SpeedTestHelperProtocol.swift */; };
 		F8440CEDF1137AA7D8D5D0B1 /* PerAppIdentityMap.swift in Sources */ = {isa = PBXBuildFile; fileRef = 925B86B12D5DC6FCBB010E74 /* PerAppIdentityMap.swift */; };
 		F847B42FDFBC11C3E0C2798F /* main.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8E671CEB8547F116A49875E6 /* main.swift */; };
@@ -231,6 +240,13 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
+		262838D56356DE26903360F1 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 008ACF82343476CEB3BA09B5 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = A744B35255BDED9D97484F84;
+			remoteInfo = SpeedTestHelper;
+		};
 		31063449DB351D7DE60C0922 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
 			containerPortal = 008ACF82343476CEB3BA09B5 /* Project object */;
@@ -286,6 +302,7 @@
 		1B55AE43555852786D1D7E49 /* RoutingMode.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RoutingMode.swift; sourceTree = "<group>"; };
 		1D0773D7DA0C4899C2FB05D9 /* TunnelBahnApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TunnelBahnApp.swift; sourceTree = "<group>"; };
 		1D32AC00BFF4EF350D983C23 /* RoutingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RoutingView.swift; sourceTree = "<group>"; };
+		1EA6DE0080125D49F4001A23 /* TCPWrapperEnabledFlagTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TCPWrapperEnabledFlagTests.swift; sourceTree = "<group>"; };
 		20ACA34BB4ED59ED85434A6D /* WireGuardTCPWrapper.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WireGuardTCPWrapper.swift; sourceTree = "<group>"; };
 		23799F926EEDE7443B12A296 /* DestinationCidrBulkGroup.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DestinationCidrBulkGroup.swift; sourceTree = "<group>"; };
 		2388B271D3A5A5DC872F416A /* ProfileStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProfileStore.swift; sourceTree = "<group>"; };
@@ -297,6 +314,7 @@
 		2A115910544D5A2FE8F6645B /* TunnelBahnUnitTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = TunnelBahnUnitTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		37A6CFF94E88489A119FFBAD /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		3BA7862A948CA9B9FE63865E /* BackupSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BackupSheet.swift; sourceTree = "<group>"; };
+		3E51F7A5CD453E993179B739 /* SpeedTestHelper */ = {isa = PBXFileReference; includeInIndex = 0; path = SpeedTestHelper; sourceTree = BUILT_PRODUCTS_DIR; };
 		419A1112BE970F26BC9AE3ED /* DebugSelfChecks.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DebugSelfChecks.swift; sourceTree = "<group>"; };
 		43688349C593EAABEBFB8120 /* WGTCPWrapperRelay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WGTCPWrapperRelay.swift; sourceTree = "<group>"; };
 		436CBF313E8934ED0DE2F9A8 /* WireGuardConfigTCPWrapperTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WireGuardConfigTCPWrapperTests.swift; sourceTree = "<group>"; };
@@ -401,6 +419,7 @@
 		F86BBF39930242EB8FF86F54 /* StatusView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StatusView.swift; sourceTree = "<group>"; };
 		F88247F5F75B562B2174478C /* RelayOutboundBridge.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = RelayOutboundBridge.m; sourceTree = "<group>"; };
 		FA4697EAC901C64656CC48F7 /* RelayFlowTransport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RelayFlowTransport.swift; sourceTree = "<group>"; };
+		FB7CC0C01690D66AAF808579 /* main.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = main.swift; sourceTree = "<group>"; };
 		FCE101ED62A34E86DDD8A55F /* TCPWrapperConfigCodecTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TCPWrapperConfigCodecTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -418,11 +437,20 @@
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
+		0001A8C0CF817CB713D28906 /* SpeedTestHelper */ = {
+			isa = PBXGroup;
+			children = (
+				FB7CC0C01690D66AAF808579 /* main.swift */,
+			);
+			path = SpeedTestHelper;
+			sourceTree = "<group>";
+		};
 		04B002D86C2C2BD736D21385 = {
 			isa = PBXGroup;
 			children = (
 				5C9DAB85C2A30C6F28090C81 /* NetworkExtension */,
 				B95B5C14707851CD0AAF0881 /* Shared */,
+				0001A8C0CF817CB713D28906 /* SpeedTestHelper */,
 				41C9792D0E959331270AEC03 /* Tests */,
 				496075DC557B175629CD2713 /* TransparentProxyExtension */,
 				3EB3821CDC456515E75EDF33 /* TunnelBahn */,
@@ -563,6 +591,7 @@
 				244C11CD570862377BF1939A /* SpeedTestHelperProtocolTests.swift */,
 				755E2A7FDB0631CA70D2A41D /* SpeedTestMathTests.swift */,
 				FCE101ED62A34E86DDD8A55F /* TCPWrapperConfigCodecTests.swift */,
+				1EA6DE0080125D49F4001A23 /* TCPWrapperEnabledFlagTests.swift */,
 				80132BD08B10A495912985BD /* TunnelRouteShapeTests.swift */,
 				DF4C6F487D5A538C1E2A6ECF /* UDPDatagramRoutingTests.swift */,
 				7AAA1FCAD780732BB9EAA949 /* WGTCPWrapperRelayTests.swift */,
@@ -613,6 +642,7 @@
 			isa = PBXGroup;
 			children = (
 				9B3CB79223DD6D3B708B633B /* PacketTunnelExtension.systemextension */,
+				3E51F7A5CD453E993179B739 /* SpeedTestHelper */,
 				28E1FCAE87E24DF4D360617E /* TransparentProxyExtension.systemextension */,
 				C4AC765CF34646BCD29959AE /* TunnelBahn.app */,
 				2A115910544D5A2FE8F6645B /* TunnelBahnUnitTests.xctest */,
@@ -734,6 +764,23 @@
 			productReference = 9B3CB79223DD6D3B708B633B /* PacketTunnelExtension.systemextension */;
 			productType = "com.apple.product-type.system-extension";
 		};
+		A744B35255BDED9D97484F84 /* SpeedTestHelper */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 4C95762CD43087E911A2AAB1 /* Build configuration list for PBXNativeTarget "SpeedTestHelper" */;
+			buildPhases = (
+				AACAD31C16CC8FBD0735FEA6 /* Sources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = SpeedTestHelper;
+			packageProductDependencies = (
+			);
+			productName = SpeedTestHelper;
+			productReference = 3E51F7A5CD453E993179B739 /* SpeedTestHelper */;
+			productType = "com.apple.product-type.tool";
+		};
 		F1B81DFB16C0AC3C70771F60 /* TunnelBahn */ = {
 			isa = PBXNativeTarget;
 			buildConfigurationList = 202BC92401F6C75A3A37DD39 /* Build configuration list for PBXNativeTarget "TunnelBahn" */;
@@ -742,12 +789,14 @@
 				AC3CBDE03294A1D1946E6C37 /* Sources */,
 				CC1BC3C2EF15A51DD3E2C5D0 /* Resources */,
 				00C569C85ADE5F692E1A3ED5 /* Embed System Extensions */,
+				0BA66E8B42869E25CF74BD16 /* Embed SpeedTestHelper */,
 			);
 			buildRules = (
 			);
 			dependencies = (
 				39617DC3FDD6D3C53762CF0D /* PBXTargetDependency */,
 				10158CEF05CF658D9017C4F6 /* PBXTargetDependency */,
+				12A82445BAD6361F78CF7926 /* PBXTargetDependency */,
 			);
 			name = TunnelBahn;
 			packageProductDependencies = (
@@ -777,6 +826,10 @@
 						DevelopmentTeam = 92G3VZAPVG;
 						ProvisioningStyle = Automatic;
 					};
+					A744B35255BDED9D97484F84 = {
+						DevelopmentTeam = 92G3VZAPVG;
+						ProvisioningStyle = Automatic;
+					};
 					F1B81DFB16C0AC3C70771F60 = {
 						DevelopmentTeam = 92G3VZAPVG;
 						ProvisioningStyle = Automatic;
@@ -802,6 +855,7 @@
 			projectRoot = "";
 			targets = (
 				A5DFE5D3B5175D2D358E833E /* PacketTunnelExtension */,
+				A744B35255BDED9D97484F84 /* SpeedTestHelper */,
 				8D036A9487EEA447427A4EE2 /* TransparentProxyExtension */,
 				F1B81DFB16C0AC3C70771F60 /* TunnelBahn */,
 				58D55B98C831A68C115A482B /* TunnelBahnUnitTests */,
@@ -839,6 +893,25 @@
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXShellScriptBuildPhase section */
+		0BA66E8B42869E25CF74BD16 /* Embed SpeedTestHelper */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			name = "Embed SpeedTestHelper";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "set -euo pipefail\ncp -f \"${BUILT_PRODUCTS_DIR}/SpeedTestHelper\" \"${TARGET_BUILD_DIR}/${EXECUTABLE_FOLDER_PATH}/SpeedTestHelper\"\n";
+		};
 		38674DB07192F9A57E19A166 /* Generate BuildInfo (git stamp) */ = {
 			isa = PBXShellScriptBuildPhase;
 			alwaysOutOfDate = 1;
@@ -988,6 +1061,7 @@
 				9954C28BC054F6978C88C37F /* SpeedTestResult.swift in Sources */,
 				C503F44C5645EEF42DED3362 /* TCPWrapperConfigCodec.swift in Sources */,
 				77F4EFB2078D3E0A8BBE9F92 /* TCPWrapperConfigCodecTests.swift in Sources */,
+				8AD1F31815993CD76AF12D7C /* TCPWrapperEnabledFlagTests.swift in Sources */,
 				57757478C23DA0D03FFB3FE0 /* TransparentProxyRuntimeConfig.swift in Sources */,
 				367022E365188C8DB21F1502 /* TunnelRouteShape.swift in Sources */,
 				5071C5BB152526A0CB9A97ED /* TunnelRouteShapeTests.swift in Sources */,
@@ -1053,6 +1127,21 @@
 				D89C9EED55BFD8BCF4ACAB53 /* WireGuardProfile.swift in Sources */,
 				17E45DD8D44E2B067098C054 /* WireGuardTCPWrapper.swift in Sources */,
 				2739DCF613E1351843A87F95 /* main.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		AACAD31C16CC8FBD0735FEA6 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				4A666E9D077F956AE9D2C3A3 /* AppLog.swift in Sources */,
+				BEF9418FA24795D7D1215BC4 /* Constants.swift in Sources */,
+				E87110DF67956AFE98E30E90 /* SharedLogWriter.swift in Sources */,
+				D9EE35DD94065496803856B0 /* SpeedTestEngine.swift in Sources */,
+				D8690361F9CD0D9E32369C77 /* SpeedTestHelperProtocol.swift in Sources */,
+				AD0969FAC4FADDE8E0FA0319 /* SpeedTestMath.swift in Sources */,
+				F7576BF45E28C9B52E3C4F44 /* SpeedTestResult.swift in Sources */,
+				022E0BCCF76A6FDB45C4492E /* main.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -1203,6 +1292,11 @@
 			target = 8D036A9487EEA447427A4EE2 /* TransparentProxyExtension */;
 			targetProxy = 31063449DB351D7DE60C0922 /* PBXContainerItemProxy */;
 		};
+		12A82445BAD6361F78CF7926 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = A744B35255BDED9D97484F84 /* SpeedTestHelper */;
+			targetProxy = 262838D56356DE26903360F1 /* PBXContainerItemProxy */;
+		};
 		39617DC3FDD6D3C53762CF0D /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
 			target = A5DFE5D3B5175D2D358E833E /* PacketTunnelExtension */;
@@ -1251,6 +1345,23 @@
 			};
 			name = Debug;
 		};
+		42BC42BF67EAF36E1A65A4C4 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				COMBINE_HIDPI_IMAGES = YES;
+				CREATE_INFOPLIST_SECTION_IN_BINARY = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.tunnelbahn.mac.speedtesthelper;
+				PRODUCT_NAME = SpeedTestHelper;
+				SDKROOT = macosx;
+				SKIP_INSTALL = YES;
+			};
+			name = Debug;
+		};
 		53CBC9A618D2C189217DD08D /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -1269,6 +1380,23 @@
 				PRODUCT_NAME = com.tunnelbahn.mac.networkextension;
 				SDKROOT = macosx;
 				SWIFT_OBJC_BRIDGING_HEADER = "NetworkExtension/PacketTunnelExtension-Bridging-Header.h";
+			};
+			name = Release;
+		};
+		7306528B26ABF31F42A8F9B6 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				COMBINE_HIDPI_IMAGES = YES;
+				CREATE_INFOPLIST_SECTION_IN_BINARY = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.tunnelbahn.mac.speedtesthelper;
+				PRODUCT_NAME = SpeedTestHelper;
+				SDKROOT = macosx;
+				SKIP_INSTALL = YES;
 			};
 			name = Release;
 		};
@@ -1511,6 +1639,15 @@
 			buildConfigurations = (
 				2CF20BC65CA17B8AF99C1424 /* Debug */,
 				CB4A5C35E3309026CA37FAE0 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		4C95762CD43087E911A2AAB1 /* Build configuration list for PBXNativeTarget "SpeedTestHelper" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				42BC42BF67EAF36E1A65A4C4 /* Debug */,
+				7306528B26ABF31F42A8F9B6 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Debug;

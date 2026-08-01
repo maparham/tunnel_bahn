@@ -28,6 +28,20 @@
             buildForAnalyzing = "YES">
             <BuildableReference
                BuildableIdentifier = "primary"
+               BlueprintIdentifier = "A744B35255BDED9D97484F84"
+               BuildableName = "SpeedTestHelper"
+               BlueprintName = "SpeedTestHelper"
+               ReferencedContainer = "container:TunnelBahn.xcodeproj">
+            </BuildableReference>
+         </BuildActionEntry>
+         <BuildActionEntry
+            buildForTesting = "YES"
+            buildForRunning = "YES"
+            buildForProfiling = "YES"
+            buildForArchiving = "YES"
+            buildForAnalyzing = "YES">
+            <BuildableReference
+               BuildableIdentifier = "primary"
                BlueprintIdentifier = "8D036A9487EEA447427A4EE2"
                BuildableName = "com.tunnelbahn.mac.transparentproxy.systemextension"
                BlueprintName = "TransparentProxyExtension"

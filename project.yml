@@ -41,9 +41,18 @@ targets:
       - target: TransparentProxyExtension
         embed: true
         codeSign: true
+      - target: SpeedTestHelper
+        link: false
+        embed: false
     preBuildScripts:
       - name: Generate BuildInfo (git stamp)
         script: bash "${SRCROOT}/tools/gen-buildinfo.sh"
+        basedOnDependencyAnalysis: false
+    postBuildScripts:
+      - name: Embed SpeedTestHelper
+        script: |
+          set -euo pipefail
+          cp -f "${BUILT_PRODUCTS_DIR}/SpeedTestHelper" "${TARGET_BUILD_DIR}/${EXECUTABLE_FOLDER_PATH}/SpeedTestHelper"
         basedOnDependencyAnalysis: false
 
   PacketTunnelExtension:
@@ -158,6 +167,26 @@ targets:
         INFOPLIST_FILE: Tests/Unit/Info.plist
     dependencies:
       - target: TunnelBahn
+
+  SpeedTestHelper:
+    type: tool
+    platform: macOS
+    sources:
+      - path: SpeedTestHelper
+      - path: Shared/SpeedTestHelperProtocol.swift
+      - path: Shared/SpeedTestEngine.swift
+      - path: Shared/AppLog.swift
+      - path: Shared/Constants.swift
+      - path: Shared/SharedLogWriter.swift
+      - path: Shared/SpeedTestMath.swift
+      - path: TunnelBahn/Models/SpeedTestResult.swift
+    settings:
+      base:
+        PRODUCT_NAME: SpeedTestHelper
+        PRODUCT_BUNDLE_IDENTIFIER: com.tunnelbahn.mac.speedtesthelper
+        SKIP_INSTALL: YES
+        GENERATE_INFOPLIST_FILE: YES
+        CREATE_INFOPLIST_SECTION_IN_BINARY: YES
 schemes:
   TunnelBahn:
     build:
@@ -165,6 +194,7 @@ schemes:
         TunnelBahn: all
         PacketTunnelExtension: all
         TransparentProxyExtension: all
+        SpeedTestHelper: all
     run:
       config: Debug
       executable: TunnelBahn
