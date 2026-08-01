@@ -106,3 +106,52 @@ If you must change the app group ID again:
 3. Register the new group in the Apple Developer Portal under the team `92G3VZAPVG`.
 4. Re-run `xcodegen generate` and rebuild.
 5. Inform users they must delete and re-import all WireGuard profiles.
+
+## WG-over-TCP wrapper throughput collapses (boom-bust, stalls near zero)
+
+**Symptom:** With the TCP wrapper (wstunnel/WebSocket) enabled, downloads surge for a
+few seconds, then collapse to tens of KB/s in a repeating boom-bust cycle — often >10x
+slower than plain WireGuard on the same server. Plain UDP WireGuard on the same path is
+steady.
+
+**Root cause (measured 2026-08-01):** TCP-over-TCP meltdown driven by the *server's*
+congestion control, not by app code. On a lossy/throttled ISP path, random packet drops
+hit the outer TCP connection (nginx:443 → client). With Linux's default `cubic`, every
+drop is read as congestion and the window repeatedly collapses; delivery to the inner
+flows turns into stall-then-burst, and the inner TCP (the actual download) melts down.
+
+What it was **not** (each ruled out by measurement):
+
+- Not the Swift relay / hand-rolled WS codec — it sustained 16.8 MB/s peaks once the
+  outer TCP was fixed; extension CPU never pegged (max ~68%).
+- Not client-side loopback UDP overflow — macOS `netstat -s -p udp` "dropped due to
+  full socket buffers" did not move during the collapse.
+- Not server-side wstunnel UDP overflow — the server's `netstat -su` receive-buffer
+  error counter did not move during the collapse (despite small 208 KB default buffers).
+
+**Fix:** Enable BBR congestion control on the tunnel server. BBR estimates available
+bandwidth instead of treating random loss as congestion:
+
+```bash
+sudo modprobe tcp_bbr
+sudo sysctl -w net.ipv4.tcp_congestion_control=bbr
+echo 'net.ipv4.tcp_congestion_control = bbr' | sudo tee /etc/sysctl.d/99-bbr.conf
+```
+
+Only new TCP connections pick it up — reconnect the tunnel afterward so the relay dials
+a fresh carrier connection.
+
+**Result on the reference setup:** wrapped throughput went from 0.2–2.8 MB/s (collapsing)
+to a sustained 5–8 MB/s — 3–4x *faster* than plain WireGuard on the same path, because
+the outer BBR connection repairs ISP loss that plain WG passes through to the inner TCP.
+
+**Diagnosis tips:**
+
+- Drive the app headlessly: `open "tunnelbahn://test?connect=<profileName>"`,
+  `...?disconnect=1`, `...?dump=stats` (writes `/tmp/tunnelbahn-state.json`).
+- In app-tunnel mode, ICMP `ping` from a tunneled app's process is NOT routed through
+  the tunnel (only TCP/UDP flows of selected apps are proxied). Do not use ping
+  loss/RTT as evidence about the tunnel path.
+- A boom-bust per-second rate trace (burst, then near-zero) points at outer-TCP
+  congestion collapse; a flat low ceiling with pegged extension CPU would instead point
+  at the relay code.
