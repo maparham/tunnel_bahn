@@ -77,6 +77,7 @@
 		5071C5BB152526A0CB9A97ED /* TunnelRouteShapeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 80132BD08B10A495912985BD /* TunnelRouteShapeTests.swift */; };
 		53602B80FA25CDD0EDFD9AAF /* DebugSelfChecks.swift in Sources */ = {isa = PBXBuildFile; fileRef = 419A1112BE970F26BC9AE3ED /* DebugSelfChecks.swift */; };
 		54D7C5A28F63CCAE643F6747 /* ProfileRoutingSnapshot.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7203132BD62E6535BAFA5268 /* ProfileRoutingSnapshot.swift */; };
+		54FCF514D06984C46BAF99A4 /* SpeedTestService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9A7C133274554D1E39875416 /* SpeedTestService.swift */; };
 		55F92A597C5E3200AA3A0696 /* Constants.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5FD44AFE7F187FA0508C1EC3 /* Constants.swift */; };
 		57757478C23DA0D03FFB3FE0 /* TransparentProxyRuntimeConfig.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2B47182EE791A9342A1CFFB /* TransparentProxyRuntimeConfig.swift */; };
 		58AD33EA19800FF1A507C5DB /* NIOPosix in Frameworks */ = {isa = PBXBuildFile; productRef = 40196FBB930DD854269AB451 /* NIOPosix */; };
@@ -336,6 +337,7 @@
 		9295D880B3CBBD2AF7DF3388 /* AppRuleStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppRuleStore.swift; sourceTree = "<group>"; };
 		955861FC235940330D863A3D /* BoringTunAdapter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoringTunAdapter.swift; sourceTree = "<group>"; };
 		96F40C554C8EC710FF48B351 /* WGTunnelJWT.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WGTunnelJWT.swift; sourceTree = "<group>"; };
+		9A7C133274554D1E39875416 /* SpeedTestService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpeedTestService.swift; sourceTree = "<group>"; };
 		9B3CB79223DD6D3B708B633B /* PacketTunnelExtension.systemextension */ = {isa = PBXFileReference; explicitFileType = "wrapper.system-extension"; includeInIndex = 0; path = PacketTunnelExtension.systemextension; sourceTree = BUILT_PRODUCTS_DIR; };
 		9C32B27F834CBD20EAD7FB80 /* ReverseDNSResolver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReverseDNSResolver.swift; sourceTree = "<group>"; };
 		9C3EBCDA1A0C341A0630B092 /* AppDiscoveryService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDiscoveryService.swift; sourceTree = "<group>"; };
@@ -524,6 +526,7 @@
 				9C32B27F834CBD20EAD7FB80 /* ReverseDNSResolver.swift */,
 				BEACAC45D799CE90D0B0E8D2 /* ScopedBookmarkStore.swift */,
 				08C2189253200A0C38321E67 /* SpeedTestMath.swift */,
+				9A7C133274554D1E39875416 /* SpeedTestService.swift */,
 				6CE6119028552A856CD39492 /* SystemExtensionManager.swift */,
 				B01EC846F951388033018FDA /* TunnelConnectivityProbe.swift */,
 				CF5CCD4C2857BFC6B0CC64D5 /* VPNManager.swift */,
@@ -1089,6 +1092,7 @@
 				3753C67B8BE9E2C47198C295 /* SharedLogWriter.swift in Sources */,
 				62E58CD1B48988FB8022D617 /* SpeedTestMath.swift in Sources */,
 				8FFE82963E66E3D37A97FD0E /* SpeedTestResult.swift in Sources */,
+				54FCF514D06984C46BAF99A4 /* SpeedTestService.swift in Sources */,
 				09BD4C6EA2737467C4AFA12E /* StatusView.swift in Sources */,
 				152FA1BEB84879B1E0C18B71 /* SystemExtensionManager.swift in Sources */,
 				102CE3107F086849B1E80A50 /* TCPWrapperConfigCodec.swift in Sources */,

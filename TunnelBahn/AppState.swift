@@ -13,6 +13,7 @@ final class AppState: ObservableObject {
     var vpnManager: VPNManager
     var domainResolutionCoordinator: DomainResolutionCoordinator
     var logCaptureStore: LogCaptureStore
+    var speedTestService: SpeedTestService
     private var cancellables: Set<AnyCancellable> = []
     private var lastKnownProfileID: UUID?
     /// The profile ID whose snapshot is currently installed in the live stores.
@@ -49,6 +50,7 @@ final class AppState: ObservableObject {
         self.vpnManager = VPNManager(settings: settings, resourceMonitor: resourceMonitor, profileStore: profileStore)
         self.domainResolutionCoordinator = DomainResolutionCoordinator(ruleStore: destinationRuleStore)
         self.logCaptureStore = LogCaptureStore()
+        self.speedTestService = SpeedTestService(vpnManager: vpnManager, profileStore: profileStore)
         bindChildStores()
         domainResolutionCoordinator.start()
 
@@ -123,6 +125,10 @@ final class AppState: ObservableObject {
             .store(in: &cancellables)
 
         logCaptureStore.objectWillChange
+            .sink { [weak self] _ in self?.objectWillChange.send() }
+            .store(in: &cancellables)
+
+        speedTestService.objectWillChange
             .sink { [weak self] _ in self?.objectWillChange.send() }
             .store(in: &cancellables)
 
