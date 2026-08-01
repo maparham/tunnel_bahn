@@ -120,6 +120,9 @@ final class SpeedTestService: ObservableObject {
     @Published private(set) var statusNote: String?
     @Published private(set) var tunnelResult: SpeedTestResult?
     @Published private(set) var directResult: SpeedTestResult?
+    /// Path captured when the active run started; nil while idle. Lets the UI attribute the
+    /// running state (progress, Cancel) to the card whose test is running.
+    @Published private(set) var runningPath: SpeedTestPath?
 
     private let vpnManager: VPNManager
     private let profileStore: ProfileStore
@@ -187,6 +190,7 @@ final class SpeedTestService: ObservableObject {
         errorMessage = nil
         statusNote = nil
         let path = currentPath
+        runningPath = path
         let profileName = currentPathProfileName
         Self.log.notice("[APPSPLIT_SPEEDTEST] run begin path=\(path.rawValue)")
         runTask = Task { [weak self] in
@@ -206,6 +210,7 @@ final class SpeedTestService: ObservableObject {
             phase = .idle
             liveReadout = nil
             runTask = nil
+            runningPath = nil
         }
         do {
             let latency = try await measureLatency()

@@ -45,8 +45,8 @@ The finished result is stored into the matching slot. Rerunning on the same path
 
 ## UI (`SpeedTestView`)
 
-- **Top bar**: live path badge ("Traffic path: Tunnel (ProfileName)" or "Traffic path: Direct") and the Run/Cancel button. A question-mark with instant tooltip explains that the test measures TunnelBahn's own traffic path (per UI convention: tooltip, one or two short sentences, no em dashes).
-- **While running**: active phase label (Latency, Download, Upload) with live readout (running ms or Mbps) and a progress indicator.
+- **Per-card Run buttons**: each card (Tunnel, Direct) carries its own Run button, enabled only while the app's current traffic path matches that card; the path is deterministic, so exactly one button is enabled at a time. The disabled card's question-mark tooltip explains how to enable it ("Connect a tunnel to enable this test." / "Disconnect the tunnel to test the direct path. A full tunnel cannot be bypassed."); the enabled card's tooltip explains what is measured. Cancel replaces Run on the card whose test is running (per UI convention: tooltip, one or two short sentences, no em dashes).
+- **While running**: the active card shows the phase label (Latency, Download, Upload) with live readout (running ms or Mbps) and a progress indicator in its body.
 - **Results**: two side-by-side cards, Tunnel and Direct. Each shows Download, Upload, Latency, Jitter, "tested <relative time>", and two compact Swift Charts line/area sparklines (~60 pt tall) of the download and upload throughput series. An empty card shows placeholder text explaining how to fill it (connect or disconnect first, phrased per which slot is empty).
 - **Delta row**: when both slots are filled, secondary text summarizes tunnel overhead: throughput as signed percentages, latency and jitter as signed ms.
 

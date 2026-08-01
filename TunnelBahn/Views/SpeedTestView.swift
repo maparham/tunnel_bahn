@@ -7,10 +7,6 @@ struct SpeedTestView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
-                header
-                if service.isRunning {
-                    runningSection
-                }
                 if let errorMessage = service.errorMessage {
                     Text(errorMessage)
                         .font(.callout)
@@ -22,14 +18,20 @@ struct SpeedTestView: View {
                 }
                 HStack(alignment: .top, spacing: 16) {
                     resultCard(
+                        path: .tunnel,
                         title: "Tunnel",
                         result: service.tunnelResult,
-                        emptyHint: "Connect a tunnel and run the test to fill this column."
+                        emptyHint: "Connect a tunnel and run the test to fill this column.",
+                        enabledTooltip: "Measures TunnelBahn's own traffic through the connected tunnel.",
+                        disabledTooltip: "Connect a tunnel to enable this test."
                     )
                     resultCard(
+                        path: .direct,
                         title: "Direct",
                         result: service.directResult,
-                        emptyHint: "Run the test while the app's traffic is direct to fill this column."
+                        emptyHint: "Run the test while the app's traffic is direct to fill this column.",
+                        enabledTooltip: "Measures TunnelBahn's own traffic outside the tunnel.",
+                        disabledTooltip: "Disconnect the tunnel to test the direct path. A full tunnel cannot be bypassed."
                     )
                 }
                 deltaRow
@@ -38,55 +40,6 @@ struct SpeedTestView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         .navigationTitle("Speed Test")
-    }
-
-    // MARK: - Header
-
-    private var header: some View {
-        HStack(spacing: 8) {
-            Text(pathBadgeText)
-                .font(.headline)
-            Image(systemName: "questionmark.circle")
-                .foregroundStyle(.secondary)
-                .instantTooltip(
-                    "Measures the path TunnelBahn's own traffic takes. Results fill the matching column below."
-                )
-            Spacer()
-            if service.isRunning {
-                Button("Cancel") { service.cancel() }
-            } else {
-                Button("Run Speed Test") { service.run() }
-                    .keyboardShortcut(.defaultAction)
-            }
-        }
-    }
-
-    private var pathBadgeText: String {
-        switch service.currentPath {
-        case .tunnel:
-            if let name = service.currentPathProfileName {
-                return "Traffic path: Tunnel (\(name))"
-            }
-            return "Traffic path: Tunnel"
-        case .direct:
-            return "Traffic path: Direct"
-        }
-    }
-
-    // MARK: - Running
-
-    private var runningSection: some View {
-        HStack(spacing: 10) {
-            ProgressView()
-                .controlSize(.small)
-            Text(phaseLabel)
-                .font(.callout)
-            if let liveReadout = service.liveReadout {
-                Text(liveReadout)
-                    .font(.callout.monospacedDigit())
-                    .foregroundStyle(.secondary)
-            }
-        }
     }
 
     private var phaseLabel: String {
@@ -101,10 +54,21 @@ struct SpeedTestView: View {
     // MARK: - Result cards
 
     @ViewBuilder
-    private func resultCard(title: String, result: SpeedTestResult?, emptyHint: String) -> some View {
+    private func resultCard(
+        path: SpeedTestPath,
+        title: String,
+        result: SpeedTestResult?,
+        emptyHint: String,
+        enabledTooltip: String,
+        disabledTooltip: String
+    ) -> some View {
+        // The path is deterministic, so at any moment only the card matching the app's current
+        // traffic path can run; the other card's button is disabled with the reason in its tooltip.
+        let isCardRunning = service.runningPath == path
+        let canRun = !service.isRunning && service.currentPath == path
         GroupBox {
             VStack(alignment: .leading, spacing: 8) {
-                HStack {
+                HStack(spacing: 6) {
                     Text(title)
                         .font(.title3.weight(.semibold))
                     if let profileName = result?.profileName {
@@ -112,10 +76,32 @@ struct SpeedTestView: View {
                             .font(.callout)
                             .foregroundStyle(.secondary)
                     }
+                    Image(systemName: "questionmark.circle")
+                        .foregroundStyle(.secondary)
+                        .instantTooltip(canRun || isCardRunning ? enabledTooltip : disabledTooltip)
                     Spacer()
+                    if isCardRunning {
+                        Button("Cancel") { service.cancel() }
+                    } else {
+                        Button("Run") { service.run() }
+                            .disabled(!canRun)
+                    }
                 }
                 Divider()
-                if let result {
+                if isCardRunning {
+                    HStack(spacing: 10) {
+                        ProgressView()
+                            .controlSize(.small)
+                        Text(phaseLabel)
+                            .font(.callout)
+                        if let liveReadout = service.liveReadout {
+                            Text(liveReadout)
+                                .font(.callout.monospacedDigit())
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    .frame(maxWidth: .infinity, minHeight: 120, alignment: .center)
+                } else if let result {
                     metricRow(label: "Download", value: String(format: "%.1f Mbps", result.downloadMbps))
                     sparkline(samples: result.downloadSamples)
                     metricRow(label: "Upload", value: String(format: "%.1f Mbps", result.uploadMbps))
