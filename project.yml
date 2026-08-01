@@ -161,7 +161,9 @@ targets:
       - path: Shared/AppGroup.swift
       - path: TunnelBahn/Models/SpeedTestResult.swift
       - path: Shared/SpeedTestHelperProtocol.swift
+      - path: Shared/SpeedTestEngine.swift
       - path: Shared/SpeedTestMath.swift
+      - path: TunnelBahn/Services/SpeedTestHelperClient.swift
     settings:
       base:
         INFOPLIST_FILE: Tests/Unit/Info.plist
