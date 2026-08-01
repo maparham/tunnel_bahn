@@ -176,41 +176,44 @@ final class UDPFlowRelay {
         // Exclude mode: a destination in the user's ranges goes DIRECT (tunnelRanges holds the
         // exclude set); and a listed private CIDR can never mean "tunnel", so the bypass check
         // gets no override ranges. Include mode is byte-for-byte the previous behavior.
+        // The verdict itself (redirect-vs-exclude precedence, SSH fail-closed drop) lives in
+        // UDPDatagramRouting.decide so it is unit-tested; only the match inputs are computed
+        // here. Short-circuit order preserved: the bypass predicate (and its lock-guarded
+        // tunnelRanges() read) is never evaluated for an already-excluded destination.
         let excluded = filterMode == .exclude && isExcluded(legacyEndpoint.hostname)
-        var useTunnel = routeThroughTunnel
-            && !excluded
-            && !IPCIDRMatcher.shouldBypassLocal(
+        let bypassesLocal = !excluded
+            && IPCIDRMatcher.shouldBypassLocal(
                 legacyEndpoint.hostname,
                 tunnelRanges: filterMode == .exclude ? [] : tunnelRanges()
             )
-        // DNS redirect (WG mode only): a routed app's DNS query to a local/private resolver
-        // would bypass to the — possibly hijacking/sinkholing — local network. Rewrite it to the
-        // tunnel-side resolver and relay it through the tunnel instead. The flow key stays the
-        // ORIGINAL endpoint, so responses are written back `sentBy` the resolver the app asked.
-        var targetHost = legacyEndpoint.hostname
-        var targetPort = legacyEndpoint.port
-        if routeThroughTunnel, !dropTunneledUDP, !useTunnel, !excluded,
-           legacyEndpoint.port == "53", let redirect = tunnelDNSHost {
-            useTunnel = true
-            targetHost = redirect
-            targetPort = "53"
-        }
-        if useTunnel && dropTunneledUDP {
+        // DNS redirect (WG mode only): a routed app's DNS query headed direct — to a
+        // local/private resolver OR an excluded one — would reach a possibly
+        // hijacking/sinkholing resolver in cleartext. Rewrite it to the tunnel-side resolver
+        // and relay it through the tunnel instead. The flow key stays the ORIGINAL endpoint,
+        // so responses are written back `sentBy` the resolver the app asked.
+        switch UDPDatagramRouting.decide(
+            routeThroughTunnel: routeThroughTunnel,
+            excluded: excluded,
+            bypassesLocal: bypassesLocal,
+            dropTunneledUDP: dropTunneledUDP,
+            destinationHost: legacyEndpoint.hostname,
+            destinationPort: legacyEndpoint.port,
+            tunnelDNSHost: tunnelDNSHost
+        ) {
+        case .drop:
             // SSH transport: no WG utun backs the tunnel path, so a would-be-tunneled datagram
             // is dropped here — deterministically, and WITHOUT falling through to sendViaDirect,
-            // which would leak it outside the tunnel. The local-resolver/LAN bypass path above
-            // (the `else` below) is untouched: only the tunnel branch is affected.
+            // which would leak it outside the tunnel. Direct exits (local bypass, excluded
+            // destinations) are untouched: only the tunnel branch is affected.
             if !loggedUDPDropOnce {
                 loggedUDPDropOnce = true
                 Self.log.debug(
                     "[APPSPLIT_SSH] udp-drop signingID=\(self.signingID) remote=\(legacyEndpoint.hostname):\(legacyEndpoint.port)"
                 )
             }
-            return
-        }
-        if useTunnel {
+        case .tunnel(let targetHost, let targetPort):
             sendViaTunnel(datagram: datagram, key: key, targetHost: targetHost, targetPort: targetPort)
-        } else {
+        case .direct:
             sendViaDirect(datagram: datagram, to: legacyEndpoint, key: key)
         }
     }

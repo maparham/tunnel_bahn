@@ -28,6 +28,44 @@ public enum DestinationRouteDecision {
     }
 }
 
+/// Pure per-datagram UDP routing verdict for the transparent proxy's `UDPFlowRelay`.
+/// Extracted so the redirect-vs-exclude precedence is unit-testable: the anti-hijack DNS
+/// redirect must win over BOTH the local bypass and the exclude list — a resolver inside an
+/// excluded CIDR still gets rewritten to the tunnel resolver, otherwise every lookup
+/// (including tunneled sites') exits cleartext to a possibly censoring resolver, and the
+/// exclude shape has no NEDNSSettings backstop. `tunnelDNSHost == nil` (resolve-DNS-locally
+/// or SSH) suppresses the redirect. `dropTunneledUDP` (SSH) keeps its fail-closed drop for
+/// would-be-tunneled datagrams and never converts a direct exit into a drop.
+public enum UDPDatagramRouting {
+    public enum Verdict: Equatable, Sendable {
+        case tunnel(host: String, port: String)
+        case direct
+        case drop
+    }
+
+    public static func decide(
+        routeThroughTunnel: Bool,
+        excluded: Bool,
+        bypassesLocal: Bool,
+        dropTunneledUDP: Bool,
+        destinationHost: String,
+        destinationPort: String,
+        tunnelDNSHost: String?
+    ) -> Verdict {
+        var useTunnel = routeThroughTunnel && !excluded && !bypassesLocal
+        var targetHost = destinationHost
+        var targetPort = destinationPort
+        if routeThroughTunnel, !dropTunneledUDP, !useTunnel,
+           destinationPort == "53", let redirect = tunnelDNSHost {
+            useTunnel = true
+            targetHost = redirect
+            targetPort = "53"
+        }
+        if useTunnel && dropTunneledUDP { return .drop }
+        return useTunnel ? .tunnel(host: targetHost, port: targetPort) : .direct
+    }
+}
+
 /// Payload written under the shared App Group (`SharedPaths.destinationRangesFileURL`).
 /// Interpreted only by `TransparentProxyProvider` alongside signing-ID snapshots.
 public struct DestinationRoutingFilePayload: Codable, Equatable {
