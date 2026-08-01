@@ -42,6 +42,10 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   exclude mode uses, preserving per-app/per-destination stats and live IP push). Exclude
   CIDRs that would black-hole the tunnel's own DNS or virtual network are dropped from
   kernel routes automatically.
+- **Speed Test tab:** full-suite in-app speed test (download, upload, latency, jitter)
+  against Cloudflare, measuring the app's current traffic path. Latest Tunnel and Direct
+  results shown side by side with throughput sparklines and an overhead delta row. Runs
+  continue across tab switches and auto-cancel if the traffic path changes mid-run.
 
 ### Fixed
 - SSH private-key material is no longer orphaned in the Keychain when a profile's
