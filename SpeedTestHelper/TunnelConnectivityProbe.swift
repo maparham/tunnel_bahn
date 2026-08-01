@@ -22,15 +22,22 @@ enum TunnelConnectivityProbe {
             let reachable = await probeGoogle204(phase: phase, timeoutInterval: warmupProbeTimeout)
             if reachable {
                 Self.log.notice("[APPSPLIT_PROBE] warmup ok attempt=\(attempt)")
-                Task.detached(priority: .utility) { await logDNSResolution(phase: phase, host: "www.google.com") }
-                Task.detached(priority: .utility) { await probeIpify(phase: phase) }
+                await runDiagnostics(phase: phase)
                 return .ok
             }
         }
         Self.log.notice("[APPSPLIT_PROBE] warmup failed all attempts phase=\(phase.rawValue)")
-        Task.detached(priority: .utility) { await logDNSResolution(phase: phase, host: "www.google.com") }
-        Task.detached(priority: .utility) { await probeIpify(phase: phase) }
+        await runDiagnostics(phase: phase)
         return .failed("No internet response via tunnel (endpoint may be unreachable)")
+    }
+
+    /// Runs the ipify + DNS diagnostics concurrently and awaits both before returning. The helper
+    /// process exits as soon as warmup's outcome is printed, so these must be awaited here (not
+    /// fired detached) or the host would kill them before their network calls log anything.
+    private static func runDiagnostics(phase: TunnelProbePhase) async {
+        async let dns: Void = logDNSResolution(phase: phase, host: "www.google.com")
+        async let ipify: Void = probeIpify(phase: phase)
+        _ = await (dns, ipify)
     }
 
     /// Single google204 check used by the periodic re-probe loop. No ipify/DNS side-probes.

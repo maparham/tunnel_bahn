@@ -58,6 +58,8 @@ final class SpeedTestService: ObservableObject {
 
         // A mid-run path change (connect, disconnect, reassert) invalidates the measurement:
         // the slot the run started for is no longer the path being measured.
+        // This sink is also load-bearing for app quit: the quit flow disconnects first, and the
+        // resulting path change here is what cancels runTask and terminates a running helper process.
         struct PathSignature: Equatable {
             let state: VPNConnectionState
             let isTunnel: Bool
