@@ -48,7 +48,13 @@ extension SystemExtensionManager: OSSystemExtensionRequestDelegate {
         didFailWithError error: Error
     ) {
         MainActor.assumeIsolated {
-            Self.osLog.error("\(request.identifier) activation failed: \(error.localizedDescription)")
+            // .requestCanceled is this manager's own answer when the installed extension is
+            // already this exact build (see actionForReplacingExtension) — not a failure.
+            if (error as? OSSystemExtensionError)?.code == .requestCanceled {
+                Self.osLog.info("\(request.identifier) already active at this build; activation request canceled")
+            } else {
+                Self.osLog.error("\(request.identifier) activation failed: \(error.localizedDescription)")
+            }
             pendingApprovalIDs.remove(request.identifier)
             needsUserApproval = !pendingApprovalIDs.isEmpty
         }
@@ -67,7 +73,15 @@ extension SystemExtensionManager: OSSystemExtensionRequestDelegate {
         actionForReplacingExtension existing: OSSystemExtensionProperties,
         withExtension ext: OSSystemExtensionProperties
     ) -> OSSystemExtensionRequest.ReplacementAction {
-        Self.osLog.info("replacing \(request.identifier) \(existing.bundleShortVersion) → \(ext.bundleShortVersion)")
-        return .replace
+        let shouldReplace = SysextReplacementPolicy.shouldReplace(
+            existingVersion: existing.bundleShortVersion,
+            existingBuild: existing.bundleVersion,
+            candidateVersion: ext.bundleShortVersion,
+            candidateBuild: ext.bundleVersion
+        )
+        Self.osLog.info(
+            "\(request.identifier) \(existing.bundleShortVersion) (\(existing.bundleVersion)) → \(ext.bundleShortVersion) (\(ext.bundleVersion)): \(shouldReplace ? "replace" : "keep running copy")"
+        )
+        return shouldReplace ? .replace : .cancel
     }
 }

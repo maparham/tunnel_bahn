@@ -136,6 +136,7 @@ targets:
       - path: TunnelBahn/Models/SSHProfile.swift
       - path: TunnelBahn/Models/WireGuardTCPWrapper.swift
       - path: Shared/TCPWrapperConfigCodec.swift
+      - path: Shared/SysextReplacementPolicy.swift
       - path: TunnelBahn/Services/WireGuardConfigParser.swift
       - path: TunnelBahn/Services/WireGuardConfigRenderer.swift
       - path: Shared/KeychainService.swift
