@@ -15,11 +15,36 @@ private final class ByteCountingSessionDelegate: NSObject, URLSessionDataDelegat
     private var _restart: (() -> URLSessionTask)?
     /// Tasks still in flight (originals plus replacements), so `stopStreams` can cancel them all.
     private var _liveTasks: [URLSessionTask] = []
+    /// First non-2xx status seen. A rejected request means the counted bytes are error-page
+    /// bodies, not payload, so the phase must fail loudly instead of reporting a bogus rate.
+    private var _httpErrorStatus: Int?
 
     var bytes: Int {
         lock.lock()
         defer { lock.unlock() }
         return _bytes
+    }
+
+    var httpErrorStatus: Int? {
+        lock.lock()
+        defer { lock.unlock() }
+        return _httpErrorStatus
+    }
+
+    func urlSession(
+        _ session: URLSession, dataTask: URLSessionDataTask, didReceive response: URLResponse,
+        completionHandler: @escaping (URLSession.ResponseDisposition) -> Void
+    ) {
+        let code = (response as? HTTPURLResponse)?.statusCode ?? 200
+        if (200..<300).contains(code) {
+            completionHandler(.allow)
+            return
+        }
+        lock.lock()
+        _httpErrorStatus = code
+        _restart = nil
+        lock.unlock()
+        completionHandler(.cancel)
     }
 
     func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
@@ -102,7 +127,9 @@ final class SpeedTestService: ObservableObject {
     private var cancellables: Set<AnyCancellable> = []
 
     private static let latencyURL = URL(string: "https://speed.cloudflare.com/__down?bytes=0")!
-    private static let downloadURL = URL(string: "https://speed.cloudflare.com/__down?bytes=100000000")!
+    /// Cloudflare rejects `bytes` requests at or above 100 MB with HTTP 403; 50 MB is safely
+    /// inside the cap, and the restart loop keeps streams saturated regardless of request size.
+    private static let downloadURL = URL(string: "https://speed.cloudflare.com/__down?bytes=50000000")!
     private static let uploadURL = URL(string: "https://speed.cloudflare.com/__up")!
     private static let latencyAttempts = 9 // first discarded as connection warmup
     private static let minLatencySuccesses = 5
@@ -322,6 +349,9 @@ final class SpeedTestService: ObservableObject {
 
         let elapsed = Date().timeIntervalSince(start)
         let totalBytes = delegate.bytes
+        if let code = delegate.httpErrorStatus {
+            throw SpeedTestError("server rejected the request (HTTP \(code))")
+        }
         guard totalBytes > 0 else {
             throw SpeedTestError(kind == .download ? "no data received" : "no data sent")
         }
