@@ -150,6 +150,8 @@ targets:
       - path: TunnelBahn/Services/DestinationRuleStore.swift
       - path: TunnelBahn/Services/DestinationCidrTextParser.swift
       - path: Shared/AppGroup.swift
+      - path: TunnelBahn/Models/SpeedTestResult.swift
+      - path: TunnelBahn/Services/SpeedTestMath.swift
     settings:
       base:
         INFOPLIST_FILE: Tests/Unit/Info.plist
