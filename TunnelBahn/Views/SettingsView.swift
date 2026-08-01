@@ -46,15 +46,6 @@ struct SettingsView: View {
                                 .instantTooltip("After connect, verifies the tunnel works via a public-IP check and a test HTTPS/DNS request.")
                         }
                     }
-                    Toggle(isOn: $appState.settings.includeHostAppInPerAppRulesForProbe) {
-                        HStack(spacing: 6) {
-                            Text("Route this app through the VPN during the check")
-                            Image(systemName: "questionmark.circle")
-                                .foregroundStyle(.secondary)
-                                .instantTooltip("Routes TunnelBahn itself through the VPN while the check runs, so the check tests the tunnel directly.")
-                        }
-                    }
-                    .disabled(!AppConstants.isPerAppSplitTunnelEnabled)
                 }
 
                 settingsSection("Backup & Restore") {

@@ -12,7 +12,7 @@ private func emit(_ line: SpeedTestHelperLine) {
 }
 
 private func usageExit() -> Never {
-    FileHandle.standardError.write(Data("usage: SpeedTestHelper run\n".utf8))
+    FileHandle.standardError.write(Data("usage: SpeedTestHelper run | probe --mode warmup|recheck --phase full_tunnel|app_tunnel\n".utf8))
     exit(64)
 }
 
@@ -34,6 +34,32 @@ case "run":
         emit(SpeedTestHelperLine(event: "error", message: error.localizedDescription))
         exit(1)
     }
+case "probe":
+    var mode: String?
+    var phaseRaw: String?
+    var rest = arguments.dropFirst().makeIterator()
+    while let flag = rest.next() {
+        switch flag {
+        case "--mode": mode = rest.next()
+        case "--phase": phaseRaw = rest.next()
+        default: usageExit()
+        }
+    }
+    guard let mode, ["warmup", "recheck"].contains(mode),
+          let phase = TunnelProbePhase(rawValue: phaseRaw ?? "")
+    else { usageExit() }
+    let result = mode == "warmup"
+        ? await TunnelConnectivityProbe.warmup(phase: phase)
+        : await TunnelConnectivityProbe.recheck(phase: phase)
+    let outcome: SpeedTestHelperProbeOutcome = switch result {
+    case .ok: SpeedTestHelperProbeOutcome(ok: true)
+    case .failed(let message): SpeedTestHelperProbeOutcome(ok: false, message: message)
+    case .unknown: SpeedTestHelperProbeOutcome(ok: false, message: "probe returned no result")
+    }
+    if let data = try? JSONEncoder().encode(outcome), let s = String(data: data, encoding: .utf8) {
+        FileHandle.standardOutput.write(Data((s + "\n").utf8))
+    }
+    exit(0)
 default:
     usageExit()
 }

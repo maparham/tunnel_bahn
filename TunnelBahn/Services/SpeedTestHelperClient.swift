@@ -61,6 +61,41 @@ final class SpeedTestHelperClient: Sendable {
         }
     }
 
+    /// Runs a connectivity probe in the helper (whose traffic is tunneled in app-tunnel mode).
+    /// Any launch or protocol failure maps to `.failed` so VPNManager surfaces it like a probe miss.
+    static func probe(mode: String, phase: TunnelProbePhase) async -> ConnectivityProbeResult {
+        guard let url = helperURL() else {
+            return .failed("speed test helper is missing from the app bundle")
+        }
+        let process = Process()
+        process.executableURL = url
+        process.arguments = ["probe", "--mode", mode, "--phase", phase.rawValue]
+        let stdout = Pipe()
+        process.standardOutput = stdout
+        process.standardError = FileHandle.nullDevice
+        do {
+            try process.run()
+        } catch {
+            return .failed("could not launch the probe helper: \(error.localizedDescription)")
+        }
+        var lastLine: String?
+        do {
+            for try await line in stdout.fileHandleForReading.bytes.lines {
+                lastLine = line
+            }
+        } catch {
+            return .failed("probe helper output unreadable: \(error.localizedDescription)")
+        }
+        process.waitUntilExit()
+        guard let lastLine,
+              let data = lastLine.data(using: .utf8),
+              let outcome = try? JSONDecoder().decode(SpeedTestHelperProbeOutcome.self, from: data)
+        else {
+            return .failed("probe helper produced no result")
+        }
+        return outcome.ok ? .ok : .failed(outcome.message ?? "No internet response via tunnel (endpoint may be unreachable)")
+    }
+
     /// Runs a full speed test in the helper. Cancellation terminates the helper process.
     func run(onEvent: @escaping @Sendable (SpeedTestEngineEvent) -> Void) async throws -> SpeedTestRunPayload {
         guard let url = Self.helperURL() else { throw SpeedTestHelperClientError.helperMissing }

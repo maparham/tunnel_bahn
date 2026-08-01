@@ -1,11 +1,5 @@
 import Foundation
 
-enum ConnectivityProbeResult: Equatable {
-    case unknown
-    case ok
-    case failed(String)
-}
-
 enum VPNConnectionState: String, Codable {
     case disconnected
     case connecting

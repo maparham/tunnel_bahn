@@ -412,7 +412,6 @@ final class AppState: ObservableObject {
         settings.showTrafficRates = true
         settings.diagnosticsLevel = "info"
         settings.runTunnelConnectivityProbe = true
-        settings.includeHostAppInPerAppRulesForProbe = true
         try? LaunchAtLoginService.setEnabled(false)
         syncDestinationRoutingFileWithPreferences()
     }

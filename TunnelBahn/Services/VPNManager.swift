@@ -438,14 +438,14 @@ final class VPNManager: ObservableObject {
             }
 
             var rulesForVPNManager = requestedAppRules
-            if useAppTunnelNEStack, settings.includeHostAppInPerAppRulesForProbe, let hostRule = makeHostAppNEAppRule() {
+            if useAppTunnelNEStack, let helperRule = makeSpeedTestHelperNEAppRule() {
                 rulesForVPNManager = NEAppRuleBuilder.dedupe(
-                    rulesForVPNManager + [hostRule],
+                    rulesForVPNManager + [helperRule],
                     log: traceLog,
                     verbose: Self.vpnTraceVerbose
                 )
                 traceLog(
-                    "tunnel probe: merged host app NEAppRule signingID=\(hostRule.matchSigningIdentifier) totalRules=\(rulesForVPNManager.count)"
+                    "speed test helper: merged helper NEAppRule signingID=\(helperRule.matchSigningIdentifier) totalRules=\(rulesForVPNManager.count)"
                 )
             }
             
@@ -459,8 +459,8 @@ final class VPNManager: ObservableObject {
                 let proxyRule = PerAppStatsProxyManager.extensionAppRule()
                 if destinationSplitActive {
                     var tunnelRules: [NEAppRule] = [proxyRule]
-                    if settings.includeHostAppInPerAppRulesForProbe, let hostRule = makeHostAppNEAppRule() {
-                        tunnelRules.append(hostRule)
+                    if let helperRule = makeSpeedTestHelperNEAppRule() {
+                        tunnelRules.append(helperRule)
                     }
                     finalAppRules = NEAppRuleBuilder.dedupe(
                         tunnelRules,
@@ -482,8 +482,8 @@ final class VPNManager: ObservableObject {
                     // the userspace relay hop instead of the more efficient kernel NEAppRule, which
                     // is the price of per-app byte attribution in this mode.
                     var tunnelRules: [NEAppRule] = [proxyRule]
-                    if settings.includeHostAppInPerAppRulesForProbe, let hostRule = makeHostAppNEAppRule() {
-                        tunnelRules.append(hostRule)
+                    if let helperRule = makeSpeedTestHelperNEAppRule() {
+                        tunnelRules.append(helperRule)
                     }
                     finalAppRules = NEAppRuleBuilder.dedupe(
                         tunnelRules,
@@ -493,8 +493,8 @@ final class VPNManager: ObservableObject {
                     traceLog("app-tunnel: selected apps via transparent proxy for stats (no destination filter)")
                 } else if hasAppTunnelSelection {
                     var tunnelRules: [NEAppRule] = [proxyRule]
-                    if settings.includeHostAppInPerAppRulesForProbe, let hostRule = makeHostAppNEAppRule() {
-                        tunnelRules.append(hostRule)
+                    if let helperRule = makeSpeedTestHelperNEAppRule() {
+                        tunnelRules.append(helperRule)
                     }
                     finalAppRules = NEAppRuleBuilder.dedupe(
                         tunnelRules,
@@ -504,9 +504,9 @@ final class VPNManager: ObservableObject {
                     traceLog("app-tunnel: proxy-only tunnel NEAppRules (no selected apps)")
                 } else {
                     finalAppRules = [proxyRule]
-                    if settings.includeHostAppInPerAppRulesForProbe, let hostRule = makeHostAppNEAppRule() {
+                    if let helperRule = makeSpeedTestHelperNEAppRule() {
                         finalAppRules = NEAppRuleBuilder.dedupe(
-                            finalAppRules + [hostRule],
+                            finalAppRules + [helperRule],
                             log: traceLog,
                             verbose: Self.vpnTraceVerbose
                         )
@@ -941,17 +941,13 @@ final class VPNManager: ObservableObject {
         // Defer ipify / probes so bring-up is not blocked (~10–45s) while the tunnel is already usable.
         // Skip the probe entirely for profiles without a default route (LAN-only / split-destination):
         // all probe URLs are internet addresses not in AllowedIPs, so they'd be silently dropped by WireGuard.
-        let probePhase: TunnelProbePhase = {
-            guard useAppTunnelNEStack else { return .fullTunnel }
-            guard hasAppTunnelSelection else { return .fullTunnel }
-            if settings.includeHostAppInPerAppRulesForProbe { return .appTunnelHostIncluded }
-            return .appTunnelHostExcluded
-        }()
+        let probePhase: TunnelProbePhase =
+            (useAppTunnelNEStack && hasAppTunnelSelection) ? .appTunnel : .fullTunnel
         // Speed test path classification: TunnelBahn's own internet traffic uses the tunnel only
-        // when the tunnel owns the default route (default-route profile, no destination split)
-        // and, in app-tunnel mode, the host app is inside the NEAppRule list.
+        // when the tunnel owns the default route AND everything tunnels. In app-tunnel mode the
+        // host app is never in the NEAppRule list (only the bundled helper is), so it stays direct.
         stats.hostAppInternetPathIsTunnel =
-            stats.tunnelHasDefaultRoute && probePhase != .appTunnelHostExcluded
+            stats.tunnelHasDefaultRoute && probePhase == .fullTunnel
         let profileID = profile.id
         let runProbe = settings.runTunnelConnectivityProbe && profileOkForAccounting && !destinationSplitActive
 
@@ -977,7 +973,7 @@ final class VPNManager: ObservableObject {
                     "[APPSPLIT_PROBE] nevpn_wait outcome=connected status=\(self.manager.connection.status.rawValue)"
                 )
                 Task { [weak self] in await self?.refreshPublicIPAndLocation() }
-                let result = await TunnelConnectivityProbe.warmup(phase: probePhase, comparePublicIP: nil)
+                let result = await SpeedTestHelperClient.probe(mode: "warmup", phase: probePhase)
                 guard self.stats.connectedProfileID == profileID, self.stats.state == .connected else { return }
                 self.stats.connectivityProbeResult = result
                 self.startPeriodicProbeIfNeeded(phase: probePhase, profileID: profileID)
@@ -987,23 +983,26 @@ final class VPNManager: ObservableObject {
         }
     }
 
-    /// Used when `includeHostAppInPerAppRulesForProbe` is on so TunnelBahn-initiated probes match app-tunnel VPN routing.
-    private func makeHostAppNEAppRule() -> NEAppRule? {
-        guard let bid = Bundle.main.bundleIdentifier?.trimmingCharacters(in: .whitespacesAndNewlines),
-              !bid.isEmpty
-        else {
-            traceLog("tunnel probe: host app bundle identifier unavailable")
+    /// The bundled speed test helper is always merged into app-tunnel NEAppRules so tunnel-side
+    /// speed tests and connectivity probes run through the tunnel while the host app stays direct.
+    private func makeSpeedTestHelperNEAppRule() -> NEAppRule? {
+        let path = Bundle.main.bundleURL
+            .appendingPathComponent("Contents/MacOS/\(SpeedTestHelperConstants.executableName)").path
+        guard FileManager.default.fileExists(atPath: path) else {
+            traceLog("speed test helper: binary missing at \(path); no helper NEAppRule")
             return nil
         }
-        let path = Bundle.main.bundleURL.path
         let requirement: String
         if let designated = NEAppRuleBuilder.designatedRequirementString(forAppAtPath: path, log: traceLog) {
             requirement = designated
         } else {
-            requirement = #"anchor apple generic and identifier "\#(bid)""#
-            traceLog("tunnel probe: designated requirement unavailable for host app; using fallback")
+            requirement = #"anchor apple generic and identifier "\#(SpeedTestHelperConstants.signingIdentifier)""#
+            traceLog("speed test helper: designated requirement unavailable; using fallback")
         }
-        return NEAppRule(signingIdentifier: bid, designatedRequirement: requirement)
+        return NEAppRule(
+            signingIdentifier: SpeedTestHelperConstants.signingIdentifier,
+            designatedRequirement: requirement
+        )
     }
 
     func disconnect() {
@@ -1813,7 +1812,7 @@ final class VPNManager: ObservableObject {
                 guard let self,
                       self.stats.connectedProfileID == profileID,
                       self.stats.state == .connected else { break }
-                let result = await TunnelConnectivityProbe.recheck(phase: phase)
+                let result = await SpeedTestHelperClient.probe(mode: "recheck", phase: phase)
                 guard !Task.isCancelled,
                       self.stats.connectedProfileID == profileID,
                       self.stats.state == .connected else { break }

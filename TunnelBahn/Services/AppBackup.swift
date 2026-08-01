@@ -15,7 +15,6 @@ struct AppSettingsSnapshot: Codable {
     var showTrafficRates: Bool
     var diagnosticsLevel: String
     var runTunnelConnectivityProbe: Bool
-    var includeHostAppInPerAppRulesForProbe: Bool
 }
 
 struct ProfileBackupEntry: Codable {

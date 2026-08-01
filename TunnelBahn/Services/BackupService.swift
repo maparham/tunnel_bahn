@@ -93,8 +93,7 @@ final class BackupService {
                 launchAtLogin: appSettings.launchAtLogin,
                 showTrafficRates: appSettings.showTrafficRates,
                 diagnosticsLevel: appSettings.diagnosticsLevel,
-                runTunnelConnectivityProbe: appSettings.runTunnelConnectivityProbe,
-                includeHostAppInPerAppRulesForProbe: appSettings.includeHostAppInPerAppRulesForProbe
+                runTunnelConnectivityProbe: appSettings.runTunnelConnectivityProbe
             )
         }
 
@@ -165,7 +164,6 @@ final class BackupService {
             appSettings.showTrafficRates = snap.showTrafficRates
             appSettings.diagnosticsLevel = snap.diagnosticsLevel
             appSettings.runTunnelConnectivityProbe = snap.runTunnelConnectivityProbe
-            appSettings.includeHostAppInPerAppRulesForProbe = snap.includeHostAppInPerAppRulesForProbe
             if appSettings.launchAtLogin != snap.launchAtLogin {
                 appSettings.launchAtLogin = snap.launchAtLogin
                 try? LaunchAtLoginService.setEnabled(snap.launchAtLogin)

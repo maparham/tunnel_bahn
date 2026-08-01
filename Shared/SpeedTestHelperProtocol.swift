@@ -13,6 +13,15 @@ enum SpeedTestPhaseName: String, Codable {
     case latency, download, upload
 }
 
+/// Where the active connection routes app-initiated internet traffic. Raw values are the
+/// helper CLI names and the `APPSPLIT_PROBE` log field.
+enum TunnelProbePhase: String {
+    /// Everything tunnels (default-route profile without per-app selection).
+    case fullTunnel = "full_tunnel"
+    /// Per-app tunnel; only NEAppRule-listed processes (including the helper) tunnel.
+    case appTunnel = "app_tunnel"
+}
+
 /// Final measurement payload of one full run. Path-agnostic; the host wraps it
 /// into a SpeedTestResult with path and profile name.
 struct SpeedTestRunPayload: Codable, Equatable {

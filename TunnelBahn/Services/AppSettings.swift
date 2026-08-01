@@ -27,11 +27,6 @@ final class AppSettings: ObservableObject {
         didSet { save() }
     }
 
-    /// Merge the host app into `NEAppRule` so TunnelBahn-initiated probes use the tunnel under app-tunnel VPN.
-    @Published var includeHostAppInPerAppRulesForProbe: Bool {
-        didSet { save() }
-    }
-
     /// Set by AppState when a profile is selected; not persisted independently.
     @Published var enforceDestinationFiltering: Bool = false
 
@@ -70,7 +65,6 @@ final class AppSettings: ObservableObject {
         static let perAppDefaultsInitialized = "perAppDefaultsInitialized"
         static let diagnosticsLevel = "diagnosticsLevel"
         static let runTunnelConnectivityProbe = "runTunnelConnectivityProbe"
-        static let includeHostAppInPerAppRulesForProbe = "includeHostAppInPerAppRulesForProbe"
         static let showTrafficRates = "showTrafficRates"
     }
 
@@ -80,8 +74,6 @@ final class AppSettings: ObservableObject {
         perAppDefaultsInitialized = AppGroupStore.defaults.object(forKey: Keys.perAppDefaultsInitialized) as? Bool ?? false
         diagnosticsLevel = AppGroupStore.defaults.string(forKey: Keys.diagnosticsLevel) ?? "info"
         runTunnelConnectivityProbe = AppGroupStore.defaults.object(forKey: Keys.runTunnelConnectivityProbe) as? Bool ?? true
-        includeHostAppInPerAppRulesForProbe =
-            AppGroupStore.defaults.object(forKey: Keys.includeHostAppInPerAppRulesForProbe) as? Bool ?? true
         showTrafficRates = AppGroupStore.defaults.object(forKey: Keys.showTrafficRates) as? Bool ?? true
     }
 
@@ -91,7 +83,6 @@ final class AppSettings: ObservableObject {
         AppGroupStore.defaults.set(perAppDefaultsInitialized, forKey: Keys.perAppDefaultsInitialized)
         AppGroupStore.defaults.set(diagnosticsLevel, forKey: Keys.diagnosticsLevel)
         AppGroupStore.defaults.set(runTunnelConnectivityProbe, forKey: Keys.runTunnelConnectivityProbe)
-        AppGroupStore.defaults.set(includeHostAppInPerAppRulesForProbe, forKey: Keys.includeHostAppInPerAppRulesForProbe)
         AppGroupStore.defaults.set(showTrafficRates, forKey: Keys.showTrafficRates)
     }
 }

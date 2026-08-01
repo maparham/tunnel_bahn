@@ -3,15 +3,6 @@ import Foundation
 import OSLog
 
 /// Log tag for grep: `APPSPLIT_PROBE`
-enum TunnelProbePhase: String {
-    /// Destination-based routing; app traffic should use the tunnel.
-    case fullTunnel = "full_tunnel"
-    /// App-tunnel VPN with host app bundle in `NEAppRule` — app-initiated probes should match Chrome-like behavior.
-    case appTunnelHostIncluded = "app_tunnel_host_included"
-    /// App-tunnel VPN without host app rule — probes from TunnelBahn likely bypass the tunnel (compare to Chrome).
-    case appTunnelHostExcluded = "app_tunnel_host_excluded"
-}
-
 enum TunnelConnectivityProbe {
     private static let log = AppLog(subsystem: "com.tunnelbahn.mac", category: "TunnelProbe")
     /// Initial probe after connect: slow handshakes / routing convergence often need >2s.
@@ -23,7 +14,7 @@ enum TunnelConnectivityProbe {
     /// Up to `warmupAttempts` google204 checks with `warmupProbeTimeout` each. Returns `.ok` on the first
     /// success (fast path for tunnels that need a moment for the WireGuard handshake). Returns `.failed`
     /// only if all attempts time out or error. Fires ipify + DNS diagnostics once after the final outcome.
-    static func warmup(phase: TunnelProbePhase, comparePublicIP: String?) async -> ConnectivityProbeResult {
+    static func warmup(phase: TunnelProbePhase) async -> ConnectivityProbeResult {
         Self.log.notice(
             "[APPSPLIT_PROBE] warmup begin phase=\(phase.rawValue)"
         )
@@ -32,13 +23,13 @@ enum TunnelConnectivityProbe {
             if reachable {
                 Self.log.notice("[APPSPLIT_PROBE] warmup ok attempt=\(attempt)")
                 Task.detached(priority: .utility) { await logDNSResolution(phase: phase, host: "www.google.com") }
-                Task.detached(priority: .utility) { await probeIpify(phase: phase, comparePublicIP: comparePublicIP) }
+                Task.detached(priority: .utility) { await probeIpify(phase: phase) }
                 return .ok
             }
         }
         Self.log.notice("[APPSPLIT_PROBE] warmup failed all attempts phase=\(phase.rawValue)")
         Task.detached(priority: .utility) { await logDNSResolution(phase: phase, host: "www.google.com") }
-        Task.detached(priority: .utility) { await probeIpify(phase: phase, comparePublicIP: comparePublicIP) }
+        Task.detached(priority: .utility) { await probeIpify(phase: phase) }
         return .failed("No internet response via tunnel (endpoint may be unreachable)")
     }
 
@@ -70,7 +61,7 @@ enum TunnelConnectivityProbe {
         }
     }
 
-    private static func probeIpify(phase: TunnelProbePhase, comparePublicIP: String?) async {
+    private static func probeIpify(phase: TunnelProbePhase) async {
         guard let url = URL(string: "https://api.ipify.org") else { return }
         let t0 = Date()
         do {
@@ -80,14 +71,8 @@ enum TunnelConnectivityProbe {
             let elapsedMs = max(0, Int(Date().timeIntervalSince(t0) * 1000))
             let ip = String(data: data, encoding: .utf8)?
                 .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            let match: String
-            if let pub = comparePublicIP, !pub.isEmpty, !ip.isEmpty {
-                match = pub == ip ? "match" : "mismatch"
-            } else {
-                match = "n/a"
-            }
             let line =
-                "[APPSPLIT_PROBE] step=ipify phase=\(phase.rawValue) outcome=ok ip=\(ip) vs_publicIP=\(comparePublicIP ?? "nil") compare=\(match) ms=\(elapsedMs)"
+                "[APPSPLIT_PROBE] step=ipify phase=\(phase.rawValue) outcome=ok ip=\(ip) ms=\(elapsedMs)"
             Self.log.notice("\(line)")
         } catch {
             let line =
