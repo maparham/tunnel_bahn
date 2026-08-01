@@ -151,6 +151,7 @@ targets:
       - path: TunnelBahn/Services/DestinationCidrTextParser.swift
       - path: Shared/AppGroup.swift
       - path: TunnelBahn/Models/SpeedTestResult.swift
+      - path: Shared/SpeedTestHelperProtocol.swift
       - path: TunnelBahn/Services/SpeedTestMath.swift
     settings:
       base:

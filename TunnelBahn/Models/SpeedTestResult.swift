@@ -7,7 +7,7 @@ enum SpeedTestPath: String {
 }
 
 /// One point of the throughput-over-time curve captured during a download or upload phase.
-struct ThroughputSample: Equatable {
+struct ThroughputSample: Equatable, Codable {
     /// Seconds since the phase started.
     let offsetSeconds: Double
     let mbps: Double
