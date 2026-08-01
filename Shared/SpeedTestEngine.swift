@@ -127,6 +127,9 @@ private final class ByteCountingSessionDelegate: NSObject, URLSessionDataDelegat
 enum SpeedTestEngineEvent: Equatable {
     case phase(SpeedTestPhaseName)
     case sample(readout: String, offsetSeconds: Double?, bytes: Int?)
+    /// Emitted once, after the latency phase completes, so the UI can show the
+    /// settled median and jitter while the transfer phases run.
+    case latencySummary(medianMs: Double, jitterMs: Double)
 }
 
 struct SpeedTestEngineError: LocalizedError {
@@ -170,6 +173,7 @@ final class SpeedTestEngine: @unchecked Sendable {
     func run(onEvent: @escaping @Sendable (SpeedTestEngineEvent) -> Void) async throws -> SpeedTestRunPayload {
         onEvent(.phase(.latency))
         let latency = try await measureLatency(onEvent: onEvent)
+        onEvent(.latencySummary(medianMs: latency.median, jitterMs: latency.jitter))
         let windowSeconds = Self.transferWindowSeconds(forMedianLatencyMs: latency.median)
         onEvent(.phase(.download))
         let download = try await measureTransferWindow(kind: .download, windowSeconds: windowSeconds, onEvent: onEvent)

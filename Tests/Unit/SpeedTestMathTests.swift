@@ -73,4 +73,28 @@ final class SpeedTestMathTests: XCTestCase {
     func testDeltaPercentNilWhenDirectIsZero() {
         XCTAssertNil(SpeedTestMath.deltaPercent(tunnel: 60, direct: 0))
     }
+
+    // MARK: - delta sense
+
+    func testDeltaSenseHigherIsBetterPositiveDelta() {
+        XCTAssertEqual(SpeedTestMath.deltaSense(10, lowerIsBetter: false, neutralBand: 3), .better)
+    }
+
+    func testDeltaSenseHigherIsBetterNegativeDelta() {
+        XCTAssertEqual(SpeedTestMath.deltaSense(-10, lowerIsBetter: false, neutralBand: 3), .worse)
+    }
+
+    func testDeltaSenseLowerIsBetterNegativeDelta() {
+        XCTAssertEqual(SpeedTestMath.deltaSense(-10, lowerIsBetter: true, neutralBand: 2), .better)
+    }
+
+    func testDeltaSenseLowerIsBetterPositiveDelta() {
+        XCTAssertEqual(SpeedTestMath.deltaSense(10, lowerIsBetter: true, neutralBand: 2), .worse)
+    }
+
+    func testDeltaSenseInsideNeutralBandIsNeutral() {
+        XCTAssertEqual(SpeedTestMath.deltaSense(2.9, lowerIsBetter: false, neutralBand: 3), .neutral)
+        XCTAssertEqual(SpeedTestMath.deltaSense(-2.9, lowerIsBetter: false, neutralBand: 3), .neutral)
+        XCTAssertEqual(SpeedTestMath.deltaSense(3, lowerIsBetter: false, neutralBand: 3), .neutral)
+    }
 }

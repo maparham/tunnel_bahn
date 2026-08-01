@@ -51,4 +51,17 @@ enum SpeedTestMath {
         guard direct != 0 else { return nil }
         return (tunnel - direct) / direct * 100
     }
+
+    /// Whether a signed delta is an improvement, a regression, or noise.
+    enum DeltaSense {
+        case better, worse, neutral
+    }
+
+    /// Classifies a signed delta (tunnel minus direct, or a percent change) for display.
+    /// Deltas whose magnitude is at or below `neutralBand` count as noise.
+    static func deltaSense(_ delta: Double, lowerIsBetter: Bool, neutralBand: Double) -> DeltaSense {
+        guard abs(delta) > neutralBand else { return .neutral }
+        let improved = lowerIsBetter ? delta < 0 : delta > 0
+        return improved ? .better : .worse
+    }
 }

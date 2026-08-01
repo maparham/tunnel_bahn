@@ -11,8 +11,24 @@ final class SpeedTestService: ObservableObject {
     }
 
     @Published private(set) var phase: Phase = .idle
-    /// Live number for the active phase, pre-formatted ("312 Mbps" / "24 ms").
-    @Published private(set) var liveReadout: String?
+    /// In-flight run data for the UI, filled in as events arrive; nil while idle.
+    /// `LiveTransfer.mbps` is the whole-window average so far, so it converges to the
+    /// final figure; `samples` are per-interval instantaneous rates for the live chart.
+    struct LiveRunData {
+        /// Ticking text during the latency phase ("24 ms"); superseded by `latencyMs`.
+        var latencyReadout: String?
+        var latencyMs: Double?
+        var jitterMs: Double?
+        var download: LiveTransfer?
+        var upload: LiveTransfer?
+
+        struct LiveTransfer {
+            var mbps: Double
+            var samples: [ThroughputSample]
+        }
+    }
+
+    @Published private(set) var liveRun: LiveRunData?
     @Published private(set) var errorMessage: String?
     /// Non-error notices, e.g. auto-cancel on path change.
     @Published private(set) var statusNote: String?
@@ -25,6 +41,9 @@ final class SpeedTestService: ObservableObject {
     private let vpnManager: VPNManager
     private let profileStore: ProfileStore
     private var runTask: Task<Void, Never>?
+    /// Cumulative (offset, bytes) points of the transfer phase currently running; reset on
+    /// each phase event. Kept host-side so live charts work identically for helper runs.
+    private var transferCumulative: [(offsetSeconds: Double, bytes: Int)] = []
     private var cancellables: Set<AnyCancellable> = []
 
     private static let log = AppLog(subsystem: "com.tunnelbahn.mac", category: "SpeedTest")
@@ -88,6 +107,7 @@ final class SpeedTestService: ObservableObject {
         errorMessage = nil
         statusNote = nil
         runningPath = path
+        liveRun = LiveRunData()
         let profileName = path == .tunnel ? connectedProfileName : nil
         Self.log.notice("[APPSPLIT_SPEEDTEST] run begin path=\(path.rawValue) mechanism=\(path == .tunnel ? "helper" : "in-process")")
         runTask = Task { [weak self] in
@@ -105,7 +125,8 @@ final class SpeedTestService: ObservableObject {
     private func performRun(path: SpeedTestPath, profileName: String?) async {
         defer {
             phase = .idle
-            liveReadout = nil
+            liveRun = nil
+            transferCumulative = []
             runTask = nil
             runningPath = nil
         }
@@ -152,13 +173,30 @@ final class SpeedTestService: ObservableObject {
         guard phase != .idle || runningPath != nil else { return }
         switch event {
         case .phase(let name):
+            transferCumulative = []
             switch name {
             case .latency: phase = .latency
             case .download: phase = .download
             case .upload: phase = .upload
             }
-        case .sample(let readout, _, _):
-            liveReadout = readout
+        case .latencySummary(let medianMs, let jitterMs):
+            liveRun?.latencyMs = medianMs
+            liveRun?.jitterMs = jitterMs
+        case .sample(let readout, let offsetSeconds, let bytes):
+            guard let offsetSeconds, let bytes else {
+                liveRun?.latencyReadout = readout
+                return
+            }
+            transferCumulative.append((offsetSeconds: offsetSeconds, bytes: bytes))
+            let transfer = LiveRunData.LiveTransfer(
+                mbps: SpeedTestMath.throughputMbps(bytes: bytes, seconds: offsetSeconds),
+                samples: SpeedTestMath.throughputSeries(cumulative: transferCumulative)
+            )
+            switch phase {
+            case .download: liveRun?.download = transfer
+            case .upload: liveRun?.upload = transfer
+            case .latency, .idle: break
+            }
         }
     }
 }

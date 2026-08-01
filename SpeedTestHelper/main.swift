@@ -26,6 +26,8 @@ case "run":
                 emit(SpeedTestHelperLine(event: "phase", phase: phase))
             case .sample(let readout, let offsetSeconds, let bytes):
                 emit(SpeedTestHelperLine(event: "sample", readout: readout, offsetSeconds: offsetSeconds, bytes: bytes))
+            case .latencySummary(let medianMs, let jitterMs):
+                emit(SpeedTestHelperLine(event: "latency_summary", medianLatencyMs: medianMs, jitterMs: jitterMs))
             }
         }
         emit(SpeedTestHelperLine(event: "result", result: payload))

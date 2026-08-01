@@ -98,28 +98,110 @@ git commit -m "feat(speedtest): delta sense classification for comparison colori
 
 ### Task 2: Service publishes live run data
 
+> Revised 2026-08-01 after the speed test helper feature landed (commits baa2ffb..2ba0f17): measurement now lives in `Shared/SpeedTestEngine` (compiled into the host app and the `SpeedTestHelper` executable) and streams `SpeedTestEngineEvent`s; tunnel runs arrive over NDJSON via `SpeedTestHelperClient`. The service reconstructs live chart data from those events instead of sampling directly.
+
 **Files:**
-- Modify: `TunnelBahn/Services/SpeedTestService.swift`
+- Modify: `Shared/SpeedTestEngine.swift` (new event case + emit)
+- Modify: `Shared/SpeedTestHelperProtocol.swift` (two optional fields on `SpeedTestHelperLine`)
+- Modify: `SpeedTestHelper/main.swift` (map the new event)
+- Modify: `TunnelBahn/Services/SpeedTestHelperClient.swift` (decode the new event)
+- Modify: `TunnelBahn/Services/SpeedTestService.swift` (replace `liveReadout` with `liveRun`)
 - Modify: `TunnelBahn/Views/SpeedTestView.swift` (minimal compile fix only; Task 3 rewrites this file)
-- Modify: `docs/superpowers/specs/2026-08-01-speedtest-ui-redesign-design.md` (one sentence)
+- Modify: `docs/superpowers/specs/2026-08-01-speedtest-ui-redesign-design.md` (one bullet)
+- Test: `Tests/Unit/SpeedTestHelperClientTests.swift` (TDD for the reducer change)
 
 **Interfaces:**
-- Consumes: `SpeedTestMath.throughputSeries(cumulative:)`, `ThroughputSample` (existing).
-- Produces: on `SpeedTestService`:
-  - `struct LiveRunData` with `var latencyReadout: String?`, `var latencyMs: Double?`, `var jitterMs: Double?`, `var download: LiveTransfer?`, `var upload: LiveTransfer?`, and nested `struct LiveTransfer { var mbps: Double; var samples: [ThroughputSample] }`.
-  - `@Published private(set) var liveRun: LiveRunData?` (non-nil exactly while a run is active).
+- Consumes: `SpeedTestMath.throughputMbps(bytes:seconds:)`, `SpeedTestMath.throughputSeries(cumulative:)`, `ThroughputSample`, `SpeedTestEngineEvent`, `SpeedTestHelperLine` (all existing).
+- Produces:
+  - `SpeedTestEngineEvent.latencySummary(medianMs: Double, jitterMs: Double)` — emitted once, after the latency phase completes, before the download phase event. NDJSON wire form: `{"event":"latency_summary","medianLatencyMs":<d>,"jitterMs":<d>}`.
+  - On `SpeedTestService`: `struct LiveRunData` with `var latencyReadout: String?`, `var latencyMs: Double?`, `var jitterMs: Double?`, `var download: LiveTransfer?`, `var upload: LiveTransfer?`, and nested `struct LiveTransfer { var mbps: Double; var samples: [ThroughputSample] }`; plus `@Published private(set) var liveRun: LiveRunData?` (non-nil exactly while a run is active). `LiveTransfer.mbps` is the whole-window average so far. Task 3's view reads these.
   - `liveReadout` is REMOVED (no-legacy policy).
 
-- [ ] **Step 1: Replace `liveReadout` with `liveRun` in the service**
+- [ ] **Step 1: Write the failing reducer test**
+
+Append inside the class in `Tests/Unit/SpeedTestHelperClientTests.swift`:
+
+```swift
+    func testLatencySummaryLineEmitsEvent() throws {
+        var events: [SpeedTestEngineEvent] = []
+        let payload = try SpeedTestHelperClient.reduce(
+            line: line(SpeedTestHelperLine(event: "latency_summary", medianLatencyMs: 24.5, jitterMs: 3.1))
+        ) { events.append($0) }
+        XCTAssertNil(payload)
+        XCTAssertEqual(events, [.latencySummary(medianMs: 24.5, jitterMs: 3.1)])
+    }
+
+    func testLatencySummaryLineWithoutValuesThrows() {
+        XCTAssertThrowsError(
+            try SpeedTestHelperClient.reduce(line: #"{"event":"latency_summary"}"#) { _ in }
+        )
+    }
+```
+
+- [ ] **Step 2: Run the test to verify it fails**
+
+Run: `xcodebuild test -project TunnelBahn.xcodeproj -scheme TunnelBahn -destination 'platform=macOS' -only-testing:TunnelBahnUnitTests/SpeedTestHelperClientTests`
+Expected: BUILD FAILURE (`latencySummary` case and `medianLatencyMs:`/`jitterMs:` initializer arguments do not exist yet).
+
+- [ ] **Step 3: Implement the protocol event end to end**
+
+1. `Shared/SpeedTestEngine.swift` — extend the event enum:
+
+```swift
+enum SpeedTestEngineEvent: Equatable {
+    case phase(SpeedTestPhaseName)
+    case sample(readout: String, offsetSeconds: Double?, bytes: Int?)
+    /// Emitted once, after the latency phase completes, so the UI can show the
+    /// settled median and jitter while the transfer phases run.
+    case latencySummary(medianMs: Double, jitterMs: Double)
+}
+```
+
+In `SpeedTestEngine.run(onEvent:)`, after `let latency = try await measureLatency(onEvent: onEvent)` add:
+
+```swift
+        onEvent(.latencySummary(medianMs: latency.median, jitterMs: latency.jitter))
+```
+
+2. `Shared/SpeedTestHelperProtocol.swift` — add two optional fields to `SpeedTestHelperLine` (after `bytes`), and extend the doc comment's event list with `"latency_summary" -> medianLatencyMs + jitterMs`:
+
+```swift
+    var medianLatencyMs: Double? = nil
+    var jitterMs: Double? = nil
+```
+
+3. `SpeedTestHelper/main.swift` — add to the `switch event` in the `run` handler:
+
+```swift
+            case .latencySummary(let medianMs, let jitterMs):
+                emit(SpeedTestHelperLine(event: "latency_summary", medianLatencyMs: medianMs, jitterMs: jitterMs))
+```
+
+4. `TunnelBahn/Services/SpeedTestHelperClient.swift` — add to the `switch decoded.event` in `reduce(line:onEvent:)` (before `"result"`):
+
+```swift
+        case "latency_summary":
+            guard let median = decoded.medianLatencyMs, let jitter = decoded.jitterMs else {
+                throw SpeedTestHelperClientError.malformedLine(String(line.prefix(200)))
+            }
+            onEvent(.latencySummary(medianMs: median, jitterMs: jitter))
+            return nil
+```
+
+- [ ] **Step 4: Run the reducer tests to verify they pass**
+
+Same command as Step 2. Expected: TEST SUCCEEDED, all `SpeedTestHelperClientTests` pass.
+
+- [ ] **Step 5: Replace `liveReadout` with `liveRun` in the service**
 
 In `TunnelBahn/Services/SpeedTestService.swift`:
 
-1. Replace the `liveReadout` property (lines ~116-117):
+1. Replace the `liveReadout` property (`@Published private(set) var liveReadout: String?` and its doc comment) with:
 
 ```swift
-    /// In-flight run data for the UI, filled in as phases tick and complete; nil while idle.
-    /// `LiveTransfer.mbps` is the whole-window average so far, so it converges to the final
-    /// figure; `samples` are per-interval instantaneous rates for the live chart.
+    /// In-flight run data for the UI, filled in as events arrive; nil while idle.
+    /// `LiveTransfer.mbps` is the whole-window average so far, so it converges to the
+    /// final figure; `samples` are per-interval instantaneous rates for the live chart.
     struct LiveRunData {
         /// Ticking text during the latency phase ("24 ms"); superseded by `latencyMs`.
         var latencyReadout: String?
@@ -137,44 +219,67 @@ In `TunnelBahn/Services/SpeedTestService.swift`:
     @Published private(set) var liveRun: LiveRunData?
 ```
 
-2. In `run()`, after `runningPath = path`, add:
+2. Add a private accumulator property next to `runTask`:
+
+```swift
+    /// Cumulative (offset, bytes) points of the transfer phase currently running; reset on
+    /// each phase event. Kept host-side so live charts work identically for helper runs.
+    private var transferCumulative: [(offsetSeconds: Double, bytes: Int)] = []
+```
+
+3. In `run(path:)`, after `runningPath = path`, add:
 
 ```swift
         liveRun = LiveRunData()
 ```
 
-3. In `performRun`'s `defer` block, replace `liveReadout = nil` with `liveRun = nil`.
-
-4. In `performRun`, after `let latency = try await measureLatency()`, add:
+4. In `performRun`'s `defer` block, replace `liveReadout = nil` with:
 
 ```swift
-            liveRun?.latencyMs = latency.median
-            liveRun?.jitterMs = latency.jitter
+            liveRun = nil
+            transferCumulative = []
 ```
 
-5. In `measureLatency`, replace `liveReadout = "\(Int(elapsedMs)) ms"` with:
+5. Replace the whole `apply(_ event:)` method with:
 
 ```swift
-                    liveRun?.latencyReadout = "\(Int(elapsedMs)) ms"
+    /// Maps engine/helper progress events onto the published UI state. Ignores events
+    /// arriving after the run ended (phase == .idle) so a late Task hop cannot resurrect UI.
+    private func apply(_ event: SpeedTestEngineEvent) {
+        guard phase != .idle || runningPath != nil else { return }
+        switch event {
+        case .phase(let name):
+            transferCumulative = []
+            switch name {
+            case .latency: phase = .latency
+            case .download: phase = .download
+            case .upload: phase = .upload
+            }
+        case .latencySummary(let medianMs, let jitterMs):
+            liveRun?.latencyMs = medianMs
+            liveRun?.jitterMs = jitterMs
+        case .sample(let readout, let offsetSeconds, let bytes):
+            guard let offsetSeconds, let bytes else {
+                liveRun?.latencyReadout = readout
+                return
+            }
+            transferCumulative.append((offsetSeconds: offsetSeconds, bytes: bytes))
+            let transfer = LiveRunData.LiveTransfer(
+                mbps: SpeedTestMath.throughputMbps(bytes: bytes, seconds: offsetSeconds),
+                samples: SpeedTestMath.throughputSeries(cumulative: transferCumulative)
+            )
+            switch phase {
+            case .download: liveRun?.download = transfer
+            case .upload: liveRun?.upload = transfer
+            case .latency, .idle: break
+            }
+        }
+    }
 ```
 
-6. In `measureTransferWindow`, replace the two lines computing/assigning the readout inside the sampling loop (`let mbps = ...` stays; `liveReadout = "\(Int(mbps)) Mbps"` goes):
+- [ ] **Step 6: Minimal view compile fix**
 
-```swift
-                let mbps = SpeedTestMath.throughputMbps(bytes: delegate.bytes, seconds: offset)
-                let transfer = LiveRunData.LiveTransfer(
-                    mbps: mbps,
-                    samples: SpeedTestMath.throughputSeries(cumulative: cumulative)
-                )
-                switch kind {
-                case .download: liveRun?.download = transfer
-                case .upload: liveRun?.upload = transfer
-                }
-```
-
-- [ ] **Step 2: Minimal view compile fix**
-
-`SpeedTestView.swift` line ~97 reads `service.liveReadout`. Replace that `if let liveReadout = service.liveReadout { ... }` block's binding with a stand-in so the target still builds (Task 3 deletes it):
+`TunnelBahn/Views/SpeedTestView.swift` reads `service.liveReadout` in the running-state block. Replace that `if let liveReadout = service.liveReadout { ... }` binding with a stand-in so the target still builds (Task 3 deletes it):
 
 ```swift
                         if let liveReadout = service.liveRun?.latencyReadout {
@@ -184,24 +289,25 @@ In `TunnelBahn/Services/SpeedTestService.swift`:
                         }
 ```
 
-- [ ] **Step 3: Update the spec sentence**
+- [ ] **Step 7: Update the spec bullet**
 
-In `docs/superpowers/specs/2026-08-01-speedtest-ui-redesign-design.md`, replace the service-change bullet starting "Keep `liveReadout` for the latency phase's ticking text only..." with:
+In `docs/superpowers/specs/2026-08-01-speedtest-ui-redesign-design.md`, replace the service-change section's bullets with:
 
 ```markdown
-- `liveReadout` is replaced by `liveRun: LiveRunData?`, which carries the latency ticking text plus, per transfer phase, the whole-window average Mbps (the hero number, converging to the final figure) and the instantaneous sample series (the live chart). Number and chart come from the same tick, so they always agree.
+- `SpeedTestEngine` emits a new `latencySummary` event after the latency phase (NDJSON `latency_summary` line from the helper), carrying the settled median and jitter.
+- `liveReadout` is replaced by `SpeedTestService.liveRun: LiveRunData?`, reconstructed host-side from engine/helper events: the latency ticking text, the settled latency median and jitter, and per transfer phase the whole-window average Mbps (the hero number, converging to the final figure) plus the instantaneous sample series (the live chart). Number and chart come from the same tick, so they always agree.
 ```
 
-- [ ] **Step 4: Build**
+- [ ] **Step 8: Build and grep for leftovers**
 
 Run: `xcodebuild -project TunnelBahn.xcodeproj -scheme TunnelBahn -configuration Debug -destination 'platform=macOS' build`
-Expected: BUILD SUCCEEDED, no remaining references to `liveReadout` (`grep -rn liveReadout TunnelBahn` returns nothing).
+Expected: BUILD SUCCEEDED. Then `grep -rn liveReadout TunnelBahn Shared SpeedTestHelper` must return only the engine's event `readout:` parameter usages, no `liveReadout` property references (the identifier should not appear at all).
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 9: Commit**
 
 ```bash
-git add TunnelBahn/Services/SpeedTestService.swift TunnelBahn/Views/SpeedTestView.swift docs/superpowers/specs/2026-08-01-speedtest-ui-redesign-design.md
-git commit -m "feat(speedtest): publish live run data (latency, per-phase mbps and samples)"
+git add Shared/SpeedTestEngine.swift Shared/SpeedTestHelperProtocol.swift SpeedTestHelper/main.swift TunnelBahn/Services/SpeedTestHelperClient.swift TunnelBahn/Services/SpeedTestService.swift TunnelBahn/Views/SpeedTestView.swift Tests/Unit/SpeedTestHelperClientTests.swift docs/superpowers/specs/2026-08-01-speedtest-ui-redesign-design.md
+git commit -m "feat(speedtest): latency summary event; service publishes live run data"
 ```
 
 ---
@@ -212,7 +318,7 @@ git commit -m "feat(speedtest): publish live run data (latency, per-phase mbps a
 - Modify: `TunnelBahn/Views/SpeedTestView.swift` (full rewrite of card internals; header/Run/Cancel logic and the surrounding scroll layout keep their current behavior)
 
 **Interfaces:**
-- Consumes: `service.liveRun` (Task 2), `service.phase`, `service.runningPath`, `service.currentPath`, `service.isRunning`, `SpeedTestResult`, `.instantTooltip(_:)`.
+- Consumes: `service.liveRun` (Task 2), `service.phase`, `service.runningPath`, `service.canRun(_:)`, `service.run(path:)`, `SpeedTestResult`, `.instantTooltip(_:)`.
 - Produces: private view helpers used only within this file: `throughputBlock(label:icon:tint:mbps:samples:isLive:)`, `sparkline(samples:tint:)`, `latencyFooter(latency:jitter:caption:)`, `smallMetric(label:value:)`, `phaseIndicator`, `runningBody(live:)`, `finishedBody(result:)`. Task 4 relies on the top-level `body` still containing the `deltaRow` slot below the two cards.
 
 - [ ] **Step 1: Rewrite the card internals**
@@ -240,10 +346,10 @@ New card and helpers:
         enabledTooltip: String,
         disabledTooltip: String
     ) -> some View {
-        // The path is deterministic, so at any moment only the card matching the app's current
-        // traffic path can run; the other card's button is disabled with the reason in its tooltip.
+        // Tunnel runs use the bundled helper, Direct runs use the host app, so in per-app
+        // mode both cards can be enabled at once; a running test disables the other card.
         let isCardRunning = service.runningPath == path
-        let canRun = !service.isRunning && service.currentPath == path
+        let canRun = service.canRun(path)
         GroupBox {
             VStack(alignment: .leading, spacing: 10) {
                 HStack(spacing: 6) {
@@ -261,7 +367,7 @@ New card and helpers:
                     if isCardRunning {
                         Button("Cancel") { service.cancel() }
                     } else {
-                        Button("Run") { service.run() }
+                        Button("Run") { service.run(path: path) }
                             .disabled(!canRun)
                     }
                 }

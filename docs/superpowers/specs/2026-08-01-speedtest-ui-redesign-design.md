@@ -15,10 +15,8 @@ Improve the Speed Test view's visual hierarchy, make the running state show live
 
 ## Service change
 
-`SpeedTestService` already collects cumulative byte samples every `sampleIntervalSeconds` inside `measureTransferWindow`. Add:
-
-- `@Published private(set) var liveSamples: [ThroughputSample]` — per-interval instantaneous throughput points for the phase currently running, appended on each sample tick, cleared when a phase starts and when the run ends (success, error, or cancel).
-- Keep `liveReadout` for the latency phase's ticking text only. During download/upload the view derives the ticking hero number from the last element of `liveSamples`, so the number and the chart always agree.
+- `SpeedTestEngine` emits a new `latencySummary` event after the latency phase (NDJSON `latency_summary` line from the helper), carrying the settled median and jitter.
+- `liveReadout` is replaced by `SpeedTestService.liveRun: LiveRunData?`, reconstructed host-side from engine/helper events: the latency ticking text, the settled latency median and jitter, and per transfer phase the whole-window average Mbps (the hero number, converging to the final figure) plus the instantaneous sample series (the live chart). Number and chart come from the same tick, so they always agree.
 
 ## View design
 
@@ -36,7 +34,7 @@ Improve the Speed Test view's visual hierarchy, make the running state show live
 
 - The card does NOT collapse. All blocks stay in place.
 - A small phase indicator sits under the header: three steps — Latency, Download, Upload — with the active step highlighted and a small `ProgressView` next to it.
-- Latency phase: latency footer value ticks with `liveReadout`; download/upload blocks show dimmed placeholders ("--").
+- Latency phase: latency footer value ticks with `liveRun.latencyReadout`; download/upload blocks show dimmed placeholders ("--").
 - Download phase: download hero number ticks with the live rate and the sparkline grows in place from `liveSamples`; upload block dimmed.
 - Upload phase: download block shows its finished numbers; upload hero + sparkline live.
 - Blocks not yet measured render dimmed placeholder values so the card height stays stable.

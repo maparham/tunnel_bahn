@@ -49,6 +49,12 @@ final class SpeedTestHelperClient: Sendable {
             }
             onEvent(.sample(readout: readout, offsetSeconds: decoded.offsetSeconds, bytes: decoded.bytes))
             return nil
+        case "latency_summary":
+            guard let median = decoded.medianLatencyMs, let jitter = decoded.jitterMs else {
+                throw SpeedTestHelperClientError.malformedLine(String(line.prefix(200)))
+            }
+            onEvent(.latencySummary(medianMs: median, jitterMs: jitter))
+            return nil
         case "result":
             guard let payload = decoded.result else {
                 throw SpeedTestHelperClientError.malformedLine(String(line.prefix(200)))

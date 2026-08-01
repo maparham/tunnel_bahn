@@ -60,4 +60,19 @@ final class SpeedTestHelperClientTests: XCTestCase {
             try SpeedTestHelperClient.reduce(line: #"{"event":"result"}"#) { _ in }
         )
     }
+
+    func testLatencySummaryLineEmitsEvent() throws {
+        var events: [SpeedTestEngineEvent] = []
+        let payload = try SpeedTestHelperClient.reduce(
+            line: line(SpeedTestHelperLine(event: "latency_summary", medianLatencyMs: 24.5, jitterMs: 3.1))
+        ) { events.append($0) }
+        XCTAssertNil(payload)
+        XCTAssertEqual(events, [.latencySummary(medianMs: 24.5, jitterMs: 3.1)])
+    }
+
+    func testLatencySummaryLineWithoutValuesThrows() {
+        XCTAssertThrowsError(
+            try SpeedTestHelperClient.reduce(line: #"{"event":"latency_summary"}"#) { _ in }
+        )
+    }
 }

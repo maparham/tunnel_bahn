@@ -35,6 +35,7 @@ struct SpeedTestRunPayload: Codable, Equatable {
 
 /// One NDJSON line on the helper's stdout. `event` selects which optional fields are set:
 /// "phase" -> phase; "sample" -> readout (plus offsetSeconds/bytes during transfer phases);
+/// "latency_summary" -> medianLatencyMs + jitterMs;
 /// "result" -> result (helper then exits 0); "error" -> message (helper then exits nonzero).
 struct SpeedTestHelperLine: Codable, Equatable {
     var event: String
@@ -42,6 +43,8 @@ struct SpeedTestHelperLine: Codable, Equatable {
     var readout: String? = nil
     var offsetSeconds: Double? = nil
     var bytes: Int? = nil
+    var medianLatencyMs: Double? = nil
+    var jitterMs: Double? = nil
     var result: SpeedTestRunPayload? = nil
     var message: String? = nil
 }
