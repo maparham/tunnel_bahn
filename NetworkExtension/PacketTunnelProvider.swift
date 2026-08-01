@@ -51,7 +51,7 @@ public final class PacketTunnelProvider: NEPacketTunnelProvider {
         }
         adapter = BoringTunAdapter(provider: self)
         var effectiveEndpointOverride: String? = nil
-        if let wrapper = runtime.profile.tcpWrapper {
+        if let wrapper = runtime.profile.tcpWrapper, wrapper.enabled {
             // Routing-loop invariant (verify + assert): the relay's own outbound TCP to
             // \(wrapper.serverHost) originates from THIS packet-tunnel extension process, which is
             // NOT one of the per-app-routed matched apps (per-app routing uses `sourceApplication`,

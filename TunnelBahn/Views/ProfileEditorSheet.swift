@@ -46,7 +46,7 @@ struct ProfileEditorSheet: View {
         _sshPort = State(initialValue: original.ssh.map { String($0.port) } ?? "22")
         _sshUsername = State(initialValue: original.ssh?.username ?? "")
         let w = original.tcpWrapper
-        _wrapEnabled = State(initialValue: w != nil)
+        _wrapEnabled = State(initialValue: w?.enabled ?? false)
         _wrapServerHost = State(initialValue: w?.serverHost ?? "")
         _wrapServerPort = State(initialValue: w.map { String($0.serverPort) } ?? "443")
         _wrapTLS = State(initialValue: w?.tls ?? true)
@@ -289,20 +289,25 @@ struct ProfileEditorSheet: View {
             return nil
         }
 
+        // The wrapper settings persist even with the toggle off (`enabled: false`), so the user
+        // can re-enable later without retyping. Field validation only blocks Save when the
+        // wrapper is ON; with it off, incomplete fields just mean "nothing worth keeping".
         var builtWrapper: WireGuardTCPWrapper? = nil
-        if wrapEnabled {
-            let host = wrapServerHost.trimmingCharacters(in: .whitespaces)
-            let prefix = wrapPathPrefix.trimmingCharacters(in: .whitespaces)
-            let fwdHost = wrapForwardHost.trimmingCharacters(in: .whitespaces)
-            guard !host.isEmpty, let sPort = UInt16(wrapServerPort.trimmingCharacters(in: .whitespaces)),
-                  !prefix.isEmpty, !fwdHost.isEmpty, let fPort = UInt16(wrapForwardPort.trimmingCharacters(in: .whitespaces))
-            else {
-                validationMessage = "TCP wrapper needs a server host:port, a path prefix, and a forward host:port."
-                return nil
-            }
+        let host = wrapServerHost.trimmingCharacters(in: .whitespaces)
+        let prefix = wrapPathPrefix.trimmingCharacters(in: .whitespaces)
+        let fwdHost = wrapForwardHost.trimmingCharacters(in: .whitespaces)
+        let sPort = UInt16(wrapServerPort.trimmingCharacters(in: .whitespaces))
+        let fPort = UInt16(wrapForwardPort.trimmingCharacters(in: .whitespaces))
+        let wrapFieldsComplete = !host.isEmpty && sPort != nil && !prefix.isEmpty && !fwdHost.isEmpty && fPort != nil
+        if wrapEnabled, !wrapFieldsComplete {
+            validationMessage = "TCP wrapper needs a server host:port, a path prefix, and a forward host:port."
+            return nil
+        }
+        if wrapFieldsComplete {
             builtWrapper = WireGuardTCPWrapper(
-                serverHost: host, serverPort: sPort, tls: wrapTLS, verifyCert: wrapVerifyCert,
-                pathPrefix: prefix, forwardHost: fwdHost, forwardPort: fPort
+                serverHost: host, serverPort: sPort!, tls: wrapTLS, verifyCert: wrapVerifyCert,
+                pathPrefix: prefix, forwardHost: fwdHost, forwardPort: fPort!,
+                enabled: wrapEnabled
             )
         }
 

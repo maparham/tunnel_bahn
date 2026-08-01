@@ -24,15 +24,18 @@ enum TCPWrapperConfigCodec {
         let pathPrefix = try require(map, "pathprefix")
         let tls = parseBool(map["tls"], default: true)
         let verifyCert = parseBool(map["verifycert"], default: false)
+        let enabled = parseBool(map["enabled"], default: true)
         return WireGuardTCPWrapper(
             serverHost: serverHost, serverPort: serverPort, tls: tls, verifyCert: verifyCert,
-            pathPrefix: pathPrefix, forwardHost: forwardHost, forwardPort: forwardPort
+            pathPrefix: pathPrefix, forwardHost: forwardHost, forwardPort: forwardPort,
+            enabled: enabled
         )
     }
 
     static func encodeLines(_ w: WireGuardTCPWrapper) -> [String] {
         [
             "[TCPWrapper]",
+            "Enabled = \(w.enabled)",
             "Server = \(w.serverHost):\(w.serverPort)",
             "TLS = \(w.tls)",
             "VerifyCert = \(w.verifyCert)",

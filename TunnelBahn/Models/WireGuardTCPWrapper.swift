@@ -21,4 +21,7 @@ struct WireGuardTCPWrapper: Codable, Hashable {
     var forwardHost: String
     /// Server-side UDP forward port (JWT "rp"), e.g. 51840.
     var forwardPort: UInt16
+    /// Off switches the profile back to plain WireGuard while keeping these settings stored,
+    /// so the user can re-enable the wrapper later without retyping them.
+    var enabled: Bool = true
 }
