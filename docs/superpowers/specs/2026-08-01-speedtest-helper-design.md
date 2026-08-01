@@ -36,7 +36,7 @@ Two modes selected by the first argument:
 
 The helper logs through `AppLog` with the same `com.tunnelbahn.mac` subsystem, so probe and speed test lines still appear in the in-app log capture. Cancellation is process termination; the helper needs no cancel protocol.
 
-Behavior carried over unchanged into the shared engine: 50 MB per download request (Cloudflare returns HTTP 403 at 100 MB or more), any non-2xx response fails the run loudly, finished streams restart to keep the window saturated, cumulative bytes sampled every 250 ms.
+Behavior carried over into the shared engine: 50 MB per download request (Cloudflare returns HTTP 403 at 100 MB or more), any non-2xx response fails the run loudly, finished streams restart to keep the window saturated, cumulative bytes sampled every 250 ms. Upload accounting and window sizing were later corrected in the base spec: upload credits server-acknowledged completed bodies via a size ladder, and the window extends on high-latency paths.
 
 ## Host-side client
 
