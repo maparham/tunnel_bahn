@@ -19,8 +19,8 @@ A full-suite speed test (download, upload, latency, jitter) runnable from inside
 `SpeedTestService` is a `@MainActor` observable class with `run()` and `cancel()`. A run executes three phases sequentially against Cloudflare's speed-test endpoints, using a dedicated ephemeral `URLSession` (no cache, no cookies) so caching cannot inflate numbers.
 
 1. **Latency**: 8 sequential `GET https://speed.cloudflare.com/__down?bytes=0` requests. Report median latency (ms) and jitter as mean absolute deviation from the median (ms). The first request is discarded as connection warmup.
-2. **Download**: 4 parallel `GET __down?bytes=100000000` streams for a fixed ~8 s window. Bytes are counted via `URLSession` data-task delegate callbacks; at window end, outstanding tasks are cancelled. Throughput = total bytes in window / elapsed.
-3. **Upload**: 2 parallel `POST __up` of pre-generated random data (~50 MB each) for a fixed ~8 s window, bytes counted via `urlSession(_:task:didSendBodyData:...)`; same window/cancel/throughput rule.
+2. **Download**: 4 parallel `GET __down?bytes=100000000` streams for a fixed ~8 s window. The 100 MB is a per-request size, not a per-window total: a stream that finishes before the window ends is immediately restarted so the connection stays saturated for the full window. Bytes are counted via `URLSession` data-task delegate callbacks; at window end, outstanding tasks are cancelled. Throughput = total bytes in window / elapsed.
+3. **Upload**: 2 parallel `POST __up` of pre-generated random data (~50 MB per request) for a fixed ~8 s window, bytes counted via `urlSession(_:task:didSendBodyData:...)`; a request that finishes before the window ends is likewise restarted (reusing the same body) to keep the streams saturated. Same window/cancel/throughput rule.
 
 During download and upload, cumulative byte counts are sampled every ~250 ms. Each sample yields an instantaneous Mbps value; the full series is stored with the result for plotting.
 

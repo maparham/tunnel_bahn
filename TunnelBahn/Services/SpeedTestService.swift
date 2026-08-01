@@ -9,6 +9,12 @@ import Security
 private final class ByteCountingSessionDelegate: NSObject, URLSessionDataDelegate, @unchecked Sendable {
     private let lock = NSLock()
     private var _bytes = 0
+    /// Replacement factory. While non-nil, a task that finishes before the window closes is
+    /// immediately replaced by a fresh one, keeping the streams saturated for the whole window.
+    /// Cleared by `stopStreams` so tasks cancelled at window close cannot spawn replacements.
+    private var _restart: (() -> URLSessionTask)?
+    /// Tasks still in flight (originals plus replacements), so `stopStreams` can cancel them all.
+    private var _liveTasks: [URLSessionTask] = []
 
     var bytes: Int {
         lock.lock()
@@ -29,6 +35,46 @@ private final class ByteCountingSessionDelegate: NSObject, URLSessionDataDelegat
         lock.lock()
         _bytes += Int(bytesSent)
         lock.unlock()
+    }
+
+    /// Enables restarts and launches `count` initial streams from `make`. `resume()` runs outside
+    /// the lock: completion callbacks re-enter the delegate on its queue, so holding the lock
+    /// across `resume()` would deadlock.
+    func startStreams(count: Int, make: @escaping () -> URLSessionTask) {
+        lock.lock()
+        _restart = make
+        var started: [URLSessionTask] = []
+        for _ in 0..<count {
+            let task = make()
+            _liveTasks.append(task)
+            started.append(task)
+        }
+        lock.unlock()
+        started.forEach { $0.resume() }
+    }
+
+    func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
+        lock.lock()
+        _liveTasks.removeAll { $0 === task }
+        guard let make = _restart else {
+            lock.unlock()
+            return
+        }
+        let replacement = make()
+        _liveTasks.append(replacement)
+        lock.unlock()
+        replacement.resume()
+    }
+
+    /// Ends the window. Disables restarts first so the cancellations below cannot spawn
+    /// replacements, then cancels every outstanding task.
+    func stopStreams() {
+        lock.lock()
+        _restart = nil
+        let live = _liveTasks
+        _liveTasks.removeAll()
+        lock.unlock()
+        live.forEach { $0.cancel() }
     }
 }
 
@@ -107,6 +153,10 @@ final class SpeedTestService: ObservableObject {
 
     func run() {
         guard !isRunning else { return }
+        // Set the phase synchronously: `isRunning` derives from `phase`, and it is only observed
+        // after the spawned Task starts, so two back-to-back `run()` calls could both pass the
+        // guard and start duplicate runs.
+        phase = .latency
         errorMessage = nil
         statusNote = nil
         let path = currentPath
@@ -131,7 +181,6 @@ final class SpeedTestService: ObservableObject {
             runTask = nil
         }
         do {
-            phase = .latency
             let latency = try await measureLatency()
 
             phase = .download
@@ -201,9 +250,13 @@ final class SpeedTestService: ObservableObject {
             } catch is CancellationError {
                 throw CancellationError()
             } catch {
+                // Task cancellation surfaces here as URLError(.cancelled), not CancellationError;
+                // map it back so an auto-cancel does not exit via the "probes failed" path below.
+                if Task.isCancelled { throw CancellationError() }
                 lastError = error
             }
         }
+        try Task.checkCancellation()
         guard samplesMs.count >= Self.minLatencySuccesses,
               let median = SpeedTestMath.median(samplesMs),
               let jitter = SpeedTestMath.jitter(samplesMs) else {
@@ -217,19 +270,22 @@ final class SpeedTestService: ObservableObject {
     }
 
     /// Runs parallel transfer streams for a fixed window, sampling the cumulative byte count
-    /// every `sampleIntervalSeconds`. Outstanding tasks are cancelled at window end; throughput
-    /// is bytes-in-window over elapsed wall clock.
+    /// every `sampleIntervalSeconds`. Each fixed-size transfer that finishes before the window
+    /// closes is immediately restarted so the streams stay saturated for the full window;
+    /// outstanding tasks are cancelled at window end. Throughput is bytes-in-window over elapsed
+    /// wall clock.
     private func measureTransferWindow(kind: TransferKind) async throws -> (mbps: Double, samples: [ThroughputSample]) {
         let delegate = ByteCountingSessionDelegate()
         let session = Self.makeSession(delegate: delegate)
         defer { session.invalidateAndCancel() }
 
-        let tasks: [URLSessionTask]
+        let streamCount: Int
+        let make: () -> URLSessionTask
         switch kind {
         case .download:
-            tasks = (0..<Self.downloadStreams).map { _ in
-                session.dataTask(with: URLRequest(url: Self.downloadURL))
-            }
+            streamCount = Self.downloadStreams
+            let request = URLRequest(url: Self.downloadURL)
+            make = { session.dataTask(with: request) }
         case .upload:
             // Random-ish body: a 4 MiB random block repeated. Cheap to build, incompressible
             // enough that transparent compression cannot inflate the measured rate.
@@ -242,11 +298,11 @@ final class SpeedTestService: ObservableObject {
             while body.count < Self.uploadBodyBytes { body.append(block) }
             var request = URLRequest(url: Self.uploadURL)
             request.httpMethod = "POST"
-            tasks = (0..<Self.uploadStreams).map { _ in
-                session.uploadTask(with: request, from: body)
-            }
+            streamCount = Self.uploadStreams
+            // The body is immutable and shared, so every restart reuses it with no extra memory.
+            make = { session.uploadTask(with: request, from: body) }
         }
-        tasks.forEach { $0.resume() }
+        delegate.startStreams(count: streamCount, make: make)
 
         let start = Date()
         var cumulative: [(offsetSeconds: Double, bytes: Int)] = []
@@ -259,10 +315,10 @@ final class SpeedTestService: ObservableObject {
                 liveReadout = "\(Int(mbps)) Mbps"
             }
         } catch is CancellationError {
-            tasks.forEach { $0.cancel() }
+            delegate.stopStreams()
             throw CancellationError()
         }
-        tasks.forEach { $0.cancel() }
+        delegate.stopStreams()
 
         let elapsed = Date().timeIntervalSince(start)
         let totalBytes = delegate.bytes
