@@ -31,14 +31,24 @@ final class SpeedTestService: ObservableObject {
 
     var isRunning: Bool { phase != .idle }
 
-    var currentPath: SpeedTestPath {
+    /// Whether the given card's Run button should be enabled. Tunnel runs go through the
+    /// bundled helper, so they only need a connected tunnel that routes internet traffic
+    /// (default-route profile, no destination split). Direct runs go through the host app,
+    /// so they need the host's own path to be direct.
+    func canRun(_ path: SpeedTestPath) -> Bool {
+        guard !isRunning else { return false }
         let stats = vpnManager.stats
-        return (stats.state == .connected && stats.hostAppInternetPathIsTunnel) ? .tunnel : .direct
+        switch path {
+        case .tunnel:
+            return stats.state == .connected && stats.tunnelHasDefaultRoute
+        case .direct:
+            return stats.state != .connected || !stats.hostAppInternetPathIsTunnel
+        }
     }
 
-    /// Connected profile name when the current path is tunnel; nil otherwise.
-    var currentPathProfileName: String? {
-        guard currentPath == .tunnel, let id = vpnManager.stats.connectedProfileID else { return nil }
+    /// Connected profile name, for labeling tunnel results.
+    private var connectedProfileName: String? {
+        guard let id = vpnManager.stats.connectedProfileID else { return nil }
         return profileStore.profiles.first(where: { $0.id == id })?.name
     }
 
@@ -51,9 +61,10 @@ final class SpeedTestService: ObservableObject {
         struct PathSignature: Equatable {
             let state: VPNConnectionState
             let isTunnel: Bool
+            let tunnelHasDefaultRoute: Bool
         }
         vpnManager.$stats
-            .map { PathSignature(state: $0.state, isTunnel: $0.hostAppInternetPathIsTunnel) }
+            .map { PathSignature(state: $0.state, isTunnel: $0.hostAppInternetPathIsTunnel, tunnelHasDefaultRoute: $0.tunnelHasDefaultRoute) }
             .removeDuplicates()
             .dropFirst()
             .receive(on: DispatchQueue.main)
@@ -66,18 +77,17 @@ final class SpeedTestService: ObservableObject {
             .store(in: &cancellables)
     }
 
-    func run() {
-        guard !isRunning else { return }
+    func run(path: SpeedTestPath) {
+        guard canRun(path) else { return }
         // Set the phase synchronously: `isRunning` derives from `phase`, and it is only observed
-        // after the spawned Task starts, so two back-to-back `run()` calls could both pass the
+        // after the spawned Task starts, so two back-to-back `run` calls could both pass the
         // guard and start duplicate runs.
         phase = .latency
         errorMessage = nil
         statusNote = nil
-        let path = currentPath
         runningPath = path
-        let profileName = currentPathProfileName
-        Self.log.notice("[APPSPLIT_SPEEDTEST] run begin path=\(path.rawValue)")
+        let profileName = path == .tunnel ? connectedProfileName : nil
+        Self.log.notice("[APPSPLIT_SPEEDTEST] run begin path=\(path.rawValue) mechanism=\(path == .tunnel ? "helper" : "in-process")")
         runTask = Task { [weak self] in
             await self?.performRun(path: path, profileName: profileName)
         }
@@ -98,8 +108,15 @@ final class SpeedTestService: ObservableObject {
             runningPath = nil
         }
         do {
-            let payload = try await SpeedTestEngine().run { [weak self] event in
+            let onEvent: @Sendable (SpeedTestEngineEvent) -> Void = { [weak self] event in
                 Task { @MainActor [weak self] in self?.apply(event) }
+            }
+            let payload: SpeedTestRunPayload
+            switch path {
+            case .tunnel:
+                payload = try await SpeedTestHelperClient().run(onEvent: onEvent)
+            case .direct:
+                payload = try await SpeedTestEngine().run(onEvent: onEvent)
             }
             let result = SpeedTestResult(
                 path: path,

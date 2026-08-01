@@ -22,14 +22,14 @@ struct SpeedTestView: View {
                         title: "Tunnel",
                         result: service.tunnelResult,
                         emptyHint: "Connect a tunnel and run the test to fill this column.",
-                        enabledTooltip: "Measures TunnelBahn's own traffic through the connected tunnel.",
-                        disabledTooltip: "Connect a tunnel to enable this test."
+                        enabledTooltip: "Runs through the connected tunnel using a bundled helper, even in per-app mode.",
+                        disabledTooltip: "Connect a tunnel that routes internet traffic to enable this test."
                     )
                     resultCard(
                         path: .direct,
                         title: "Direct",
                         result: service.directResult,
-                        emptyHint: "Run the test while the app's traffic is direct to fill this column.",
+                        emptyHint: "Run while the tunnel is down, or while a per-app tunnel is active, to fill this column.",
                         enabledTooltip: "Measures TunnelBahn's own traffic outside the tunnel.",
                         disabledTooltip: "Disconnect the tunnel to test the direct path. A full tunnel cannot be bypassed."
                     )
@@ -62,10 +62,10 @@ struct SpeedTestView: View {
         enabledTooltip: String,
         disabledTooltip: String
     ) -> some View {
-        // The path is deterministic, so at any moment only the card matching the app's current
-        // traffic path can run; the other card's button is disabled with the reason in its tooltip.
+        // Tunnel runs use the bundled helper, Direct runs use the host app, so in per-app
+        // mode both cards can be enabled at once; a running test disables the other card.
         let isCardRunning = service.runningPath == path
-        let canRun = !service.isRunning && service.currentPath == path
+        let canRun = service.canRun(path)
         GroupBox {
             VStack(alignment: .leading, spacing: 8) {
                 HStack(spacing: 6) {
@@ -83,7 +83,7 @@ struct SpeedTestView: View {
                     if isCardRunning {
                         Button("Cancel") { service.cancel() }
                     } else {
-                        Button("Run") { service.run() }
+                        Button("Run") { service.run(path: path) }
                             .disabled(!canRun)
                     }
                 }
