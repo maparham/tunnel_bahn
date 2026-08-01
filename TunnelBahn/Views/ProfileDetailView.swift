@@ -114,6 +114,10 @@ struct ProfileDetailView: View {
                     .padding(.top, 4)
                 }
 
+                if let wrapper = profile.tcpWrapper {
+                    tcpWrapperSection(wrapper)
+                }
+
                 ForEach(profile.peers) { peer in
                     GroupBox("Peer") {
                         VStack(alignment: .leading, spacing: 10) {
@@ -145,6 +149,39 @@ struct ProfileDetailView: View {
                         .padding(.top, 4)
                     }
                 }
+        }
+    }
+
+    private func tcpWrapperSection(_ wrapper: WireGuardTCPWrapper) -> some View {
+        GroupBox("TCP Wrapper (WebSocket/TLS)") {
+            VStack(alignment: .leading, spacing: 10) {
+                DetailRow(label: "Status", value: wrapper.enabled ? "Enabled" : "Disabled")
+                DetailRow(
+                    label: "Server",
+                    value: "\(wrapper.serverHost):\(wrapper.serverPort)",
+                    monospaced: true,
+                    copyable: true
+                )
+                DetailRow(label: "TLS", value: wrapper.tls ? "wss (TLS)" : "ws (plaintext)")
+                if wrapper.tls {
+                    DetailRow(
+                        label: "Verify certificate",
+                        value: wrapper.verifyCert ? "Yes" : "No"
+                    )
+                }
+                DetailRow(
+                    label: "Path prefix",
+                    value: wrapper.pathPrefix,
+                    monospaced: true,
+                    copyable: true
+                )
+                DetailRow(
+                    label: "Forward target",
+                    value: "\(wrapper.forwardHost):\(wrapper.forwardPort)",
+                    monospaced: true
+                )
+            }
+            .padding(.top, 4)
         }
     }
 

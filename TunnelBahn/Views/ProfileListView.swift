@@ -92,6 +92,7 @@ struct ProfileListView: NSViewRepresentable {
     let connectedProfileID: UUID?
     let isBusy: Bool
     let onSelect: (UUID) -> Void
+    let onDoubleClick: (WireGuardProfile) -> Void
     let onMove: (IndexSet, Int) -> Void
     let rowContent: (WireGuardProfile) -> NSView
     let onContextMenu: (WireGuardProfile) -> NSMenu
@@ -122,6 +123,8 @@ struct ProfileListView: NSViewRepresentable {
         tableView.menuProvider = { row in
             coordinator.menuForRow(row)
         }
+        tableView.target = coordinator
+        tableView.doubleAction = #selector(Coordinator.handleDoubleClick(_:))
 
         context.coordinator.tableView = tableView
 
@@ -180,6 +183,12 @@ struct ProfileListView: NSViewRepresentable {
 
         init(_ parent: ProfileListView) {
             self.parent = parent
+        }
+
+        @objc func handleDoubleClick(_ sender: NSTableView) {
+            let row = sender.clickedRow
+            guard row >= 0, row < parent.profiles.count else { return }
+            parent.onDoubleClick(parent.profiles[row])
         }
 
         func menuForRow(_ row: Int) -> NSMenu? {

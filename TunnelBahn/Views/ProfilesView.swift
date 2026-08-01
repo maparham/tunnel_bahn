@@ -167,6 +167,10 @@ struct ProfilesView: View {
                     connectedProfileID: vpnManager.stats.connectedProfileID,
                     isBusy: vpnManager.isBusy,
                     onSelect: { profileStore.select(id: $0) },
+                    onDoubleClick: { profile in
+                        guard profile.id != vpnManager.stats.connectedProfileID else { return }
+                        editingProfile = profile
+                    },
                     onMove: profileStore.move,
                     rowContent: { profile in
                         profileRowNSView(profile, connectedProfileID: vpnManager.stats.connectedProfileID)
@@ -389,9 +393,11 @@ struct ProfilesView: View {
             }
         })
         menu.addItem(.separator())
-        menu.addItem(makeMenuItem(title: "Edit", symbolName: "pencil") {
+        let editItem = makeMenuItem(title: "Edit", symbolName: "pencil") {
             editingProfile = profile
-        })
+        }
+        editItem.isEnabled = !isConnected
+        menu.addItem(editItem)
         menu.addItem(makeMenuItem(title: "Copy", symbolName: "doc.on.doc") {
             copyProfileConfigToClipboard(profile)
             showCopiedToast()
