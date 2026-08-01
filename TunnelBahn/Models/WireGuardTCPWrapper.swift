@@ -24,4 +24,32 @@ struct WireGuardTCPWrapper: Codable, Hashable {
     /// Off switches the profile back to plain WireGuard while keeping these settings stored,
     /// so the user can re-enable the wrapper later without retyping them.
     var enabled: Bool = true
+
+    init(
+        serverHost: String, serverPort: UInt16, tls: Bool, verifyCert: Bool,
+        pathPrefix: String, forwardHost: String, forwardPort: UInt16, enabled: Bool = true
+    ) {
+        self.serverHost = serverHost
+        self.serverPort = serverPort
+        self.tls = tls
+        self.verifyCert = verifyCert
+        self.pathPrefix = pathPrefix
+        self.forwardHost = forwardHost
+        self.forwardPort = forwardPort
+        self.enabled = enabled
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        serverHost = try c.decode(String.self, forKey: .serverHost)
+        serverPort = try c.decode(UInt16.self, forKey: .serverPort)
+        tls = try c.decode(Bool.self, forKey: .tls)
+        verifyCert = try c.decode(Bool.self, forKey: .verifyCert)
+        pathPrefix = try c.decode(String.self, forKey: .pathPrefix)
+        forwardHost = try c.decode(String.self, forKey: .forwardHost)
+        forwardPort = try c.decode(UInt16.self, forKey: .forwardPort)
+        // Absent means enabled: runtime-state JSON in the NE payload (vpn-state.json,
+        // providerConfiguration) may predate the flag, and the codec has the same default.
+        enabled = try c.decodeIfPresent(Bool.self, forKey: .enabled) ?? true
+    }
 }

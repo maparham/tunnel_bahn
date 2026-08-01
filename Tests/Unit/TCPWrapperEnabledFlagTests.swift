@@ -40,6 +40,18 @@ final class TCPWrapperEnabledFlagTests: XCTestCase {
         XCTAssertEqual(try TCPWrapperConfigCodec.decode(map), disabled)
     }
 
+    func testJSONWithoutEnabledKeyDecodesAsEnabled() throws {
+        // Runtime-state JSON written before the flag existed (vpn-state.json,
+        // providerConfiguration) has no "enabled" key; it must decode as enabled.
+        let old = """
+            {"serverHost":"3.139.146.5","serverPort":443,"tls":true,"verifyCert":false,
+             "pathPrefix":"tun74fd08a683078a3e0439","forwardHost":"127.0.0.1","forwardPort":51840}
+            """.data(using: .utf8)!
+        let decoded = try JSONDecoder().decode(WireGuardTCPWrapper.self, from: old)
+        XCTAssertEqual(decoded, reference)
+        XCTAssertTrue(decoded.enabled)
+    }
+
     func testDisabledWrapperSurvivesProfileJSONRoundTrip() throws {
         var disabled = reference
         disabled.enabled = false

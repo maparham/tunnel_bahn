@@ -34,47 +34,4 @@ final class TCPWrapperConfigCodecTests: XCTestCase {
         }
         XCTAssertEqual(try TCPWrapperConfigCodec.decode(map), reference)
     }
-
-    func testDecodeWithoutEnabledKeyDefaultsToEnabled() throws {
-        let map = [
-            "server": "3.139.146.5:443",
-            "pathprefix": "tun74fd08a683078a3e0439", "forward": "127.0.0.1:51840",
-        ]
-        XCTAssertEqual(try TCPWrapperConfigCodec.decode(map)?.enabled, true)
-    }
-
-    func testDecodeEnabledFalse() throws {
-        let map = [
-            "server": "3.139.146.5:443", "enabled": "false",
-            "pathprefix": "tun74fd08a683078a3e0439", "forward": "127.0.0.1:51840",
-        ]
-        XCTAssertEqual(try TCPWrapperConfigCodec.decode(map)?.enabled, false)
-    }
-
-    func testDisabledWrapperEncodeThenDecodeRoundTrips() throws {
-        var disabled = reference
-        disabled.enabled = false
-        let lines = TCPWrapperConfigCodec.encodeLines(disabled)
-        var map: [String: String] = [:]
-        for line in lines where line.contains("=") {
-            let parts = line.split(separator: "=", maxSplits: 1).map { $0.trimmingCharacters(in: .whitespaces) }
-            map[parts[0].lowercased()] = parts[1]
-        }
-        XCTAssertEqual(try TCPWrapperConfigCodec.decode(map), disabled)
-    }
-
-    func testDisabledWrapperSurvivesProfileJSONRoundTrip() throws {
-        var disabled = reference
-        disabled.enabled = false
-        let profile = WireGuardProfile(
-            name: "t",
-            interface: WireGuardInterface(privateKeyRef: "ref", addresses: ["10.9.0.2/32"], dnsServers: [], mtu: nil),
-            peers: [WireGuardPeer(publicKey: "pk", endpoint: "127.0.0.1:51840", allowedIPs: ["0.0.0.0/0"])],
-            tcpWrapper: disabled
-        )
-        let data = try JSONEncoder().encode(profile)
-        let decoded = try JSONDecoder().decode(WireGuardProfile.self, from: data)
-        XCTAssertEqual(decoded.tcpWrapper, disabled)
-        XCTAssertEqual(decoded.tcpWrapper?.enabled, false)
-    }
 }
