@@ -162,7 +162,11 @@ func buildTransport(cfg *coreConfig, prot Protector, sink EventSink) (transport.
 			WSURL:       cfg.WG.WSURL,
 			ForwardHost: cfg.WG.ForwardHost,
 			ForwardPort: cfg.WG.ForwardPort,
-			TLSConfig:   &tls.Config{},
+			// The wstunnel TLS is obfuscation cover, not the security boundary: WireGuard's
+			// Noise handshake (peer key + PSK) protects the payload regardless. Reference
+			// servers use bare-IP certs with no SANs, so verifying would break every connect
+			// for no security gain. This matches wstunnel's own default and the macOS side.
+			TLSConfig: &tls.Config{InsecureSkipVerify: true}, //nolint:gosec // see comment
 		}, wstunnel.DialFunc(dial))
 		return transport.NewWGWS(transport.WGConfig{
 			PrivateKey:       cfg.WG.PrivateKey,

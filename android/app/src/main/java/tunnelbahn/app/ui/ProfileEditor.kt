@@ -1,5 +1,6 @@
 package tunnelbahn.app.ui
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -47,6 +48,8 @@ fun ProfileEditor(profileId: String?, onDone: () -> Unit) {
 
     var subScreen by remember { mutableStateOf(EditorSub.NONE) }
     var showAdvanced by remember { mutableStateOf(false) }
+    // Composed after AppRoot's handler, so it takes priority while a sub-screen is up.
+    BackHandler(enabled = subScreen != EditorSub.NONE) { subScreen = EditorSub.NONE }
     when (subScreen) {
         EditorSub.APPS -> {
             AppPickerScreen(

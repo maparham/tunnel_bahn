@@ -31,11 +31,16 @@ func (e relayEndpoint) SrcIP() netip.Addr   { return netip.Addr{} }
 
 // relayBind is a conn.Bind that routes WireGuard's UDP through the wstunnel relay
 // instead of a real socket. This keeps raw WG off the wire.
+//
+// The closed channel is per open/close cycle: wireguard-go's BindUpdate always runs
+// Close() then Open() on the same bind (even on the first Up), so a one-shot close
+// would leave every reopened bind's receive fn returning ErrClosed immediately.
 type relayBind struct {
 	send    func(ctx context.Context, dg []byte) error
 	inbound <-chan []byte
-	closed  chan struct{}
-	once    sync.Once
+
+	mu     sync.Mutex
+	closed chan struct{}
 }
 
 func newRelayBind(send func(context.Context, []byte) error, inbound <-chan []byte) *relayBind {
@@ -43,26 +48,39 @@ func newRelayBind(send func(context.Context, []byte) error, inbound <-chan []byt
 }
 
 func (b *relayBind) Open(port uint16) ([]conn.ReceiveFunc, uint16, error) {
-	return []conn.ReceiveFunc{b.receive}, port, nil
-}
-
-func (b *relayBind) receive(packets [][]byte, sizes []int, eps []conn.Endpoint) (int, error) {
+	b.mu.Lock()
 	select {
-	case dg, ok := <-b.inbound:
-		if !ok {
+	case <-b.closed:
+		b.closed = make(chan struct{})
+	default:
+	}
+	closed := b.closed
+	b.mu.Unlock()
+	receive := func(packets [][]byte, sizes []int, eps []conn.Endpoint) (int, error) {
+		select {
+		case dg, ok := <-b.inbound:
+			if !ok {
+				return 0, net.ErrClosed
+			}
+			n := copy(packets[0], dg)
+			sizes[0] = n
+			eps[0] = relayEndpoint{}
+			return 1, nil
+		case <-closed:
 			return 0, net.ErrClosed
 		}
-		n := copy(packets[0], dg)
-		sizes[0] = n
-		eps[0] = relayEndpoint{}
-		return 1, nil
-	case <-b.closed:
-		return 0, net.ErrClosed
 	}
+	return []conn.ReceiveFunc{receive}, port, nil
 }
 
 func (b *relayBind) Close() error {
-	b.once.Do(func() { close(b.closed) })
+	b.mu.Lock()
+	select {
+	case <-b.closed:
+	default:
+		close(b.closed)
+	}
+	b.mu.Unlock()
 	return nil
 }
 

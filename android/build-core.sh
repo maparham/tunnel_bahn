@@ -35,7 +35,11 @@ export PATH="$(go env GOPATH)/bin:$PATH"
 gomobile init
 
 mkdir -p ../app/libs
-gomobile bind -target=android -androidapi 24 -javapkg tunnelbahn -o ../app/libs/libtunnelbahn.aar ./mobile
+# max-page-size=16384: Android 15+ devices can boot with 16 KB pages; unaligned LOAD
+# segments make the OS flag the app as incompatible (a warning dialog on every launch).
+gomobile bind -target=android -androidapi 24 \
+  -ldflags='-extldflags=-Wl,-z,max-page-size=16384' \
+  -javapkg tunnelbahn -o ../app/libs/libtunnelbahn.aar ./mobile
 
 echo "built android/app/libs/libtunnelbahn.aar"
 unzip -l ../app/libs/libtunnelbahn.aar | grep -E 'classes.jar|arm64-v8a' || true

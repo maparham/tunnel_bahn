@@ -1,5 +1,6 @@
 package tunnelbahn.app.ui
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -17,6 +18,13 @@ sealed interface Screen {
 @Composable
 fun AppRoot() {
     var screen: Screen by remember { mutableStateOf(Screen.Home) }
+
+    BackHandler(enabled = screen != Screen.Home) {
+        screen = when (val s = screen) {
+            is Screen.Edit -> s.returnTo
+            else -> Screen.Home
+        }
+    }
 
     when (val s = screen) {
         is Screen.Home -> HomeScreen(
