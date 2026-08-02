@@ -49,6 +49,10 @@ func (s *SSH) connect(ctx context.Context) error {
 		User:            s.cfg.User,
 		Auth:            []ssh.AuthMethod{ssh.PublicKeys(s.cfg.Signer)},
 		HostKeyCallback: ssh.FixedHostKey(s.cfg.HostKey),
+		// Constrain negotiation to the pinned key's type, otherwise the server may
+		// present a different host key algorithm (e.g. ecdsa) that will never match
+		// the pinned key and the handshake fails with "host key mismatch".
+		HostKeyAlgorithms: []string{s.cfg.HostKey.Type()},
 	}
 	conn, chans, reqs, err := ssh.NewClientConn(nc, s.cfg.Addr, ccfg)
 	if err != nil {

@@ -30,6 +30,7 @@ type wgParams struct {
 type rawConfig struct {
 	Transport    string    `json:"transport"`
 	Mode         string    `json:"mode"`
+	MTU          int       `json:"mtu"`
 	IncludeCIDRs []string  `json:"includeCIDRs"`
 	ExcludeCIDRs []string  `json:"excludeCIDRs"`
 	Resolver     string    `json:"resolver"`
@@ -41,6 +42,7 @@ type rawConfig struct {
 type coreConfig struct {
 	Transport    string
 	Mode         Mode
+	MTU          int
 	IncludeCIDRs []netip.Prefix
 	ExcludeCIDRs []netip.Prefix
 	Resolver     netip.AddrPort
@@ -90,6 +92,7 @@ func parseConfig(s string) (*coreConfig, error) {
 	return &coreConfig{
 		Transport:    raw.Transport,
 		Mode:         mode,
+		MTU:          raw.MTU,
 		IncludeCIDRs: inc,
 		ExcludeCIDRs: exc,
 		Resolver:     resolver,

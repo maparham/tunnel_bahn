@@ -2,7 +2,10 @@ package transport
 
 import (
 	"context"
+	"crypto/ecdsa"
 	"crypto/ed25519"
+	"crypto/elliptic"
+	"crypto/rand"
 	"io"
 	"net"
 	"net/netip"
@@ -32,6 +35,11 @@ func startTestSSHD(t *testing.T) (addr string, hostPub ssh.PublicKey, signer ssh
 	clientSigner, _ := ssh.NewSignerFromKey(clientPriv)
 
 	scfg := &ssh.ServerConfig{PublicKeyCallback: func(ssh.ConnMetadata, ssh.PublicKey) (*ssh.Permissions, error) { return nil, nil }}
+	// Offer an ecdsa host key too, so the server has a choice. The client pins the
+	// ed25519 key; without HostKeyAlgorithms it could negotiate ecdsa and mismatch.
+	ecKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	ecSigner, _ := ssh.NewSignerFromKey(ecKey)
+	scfg.AddHostKey(ecSigner)
 	scfg.AddHostKey(hostSigner)
 
 	ln, _ := net.Listen("tcp", "127.0.0.1:0")

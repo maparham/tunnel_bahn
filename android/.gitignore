@@ -1,5 +1,6 @@
 # Build artifacts
 app/libs/*.aar
+app/libs/*.jar
 core/mobile/*.aar
 
 # Gradle

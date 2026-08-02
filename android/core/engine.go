@@ -21,16 +21,28 @@ import (
 )
 
 // dispatcher classifies a destination into "tunnel", "bypass", or "dns".
-type dispatcher struct{ r *Router }
+type dispatcher struct {
+	r        *Router
+	resolver netip.Addr
+}
 
-func newDispatcher(r *Router) *dispatcher { return &dispatcher{r: r} }
+func newDispatcher(r *Router, resolver netip.Addr) *dispatcher {
+	return &dispatcher{r: r, resolver: resolver}
+}
 
 func (d *dispatcher) route(dst netip.AddrPort, isUDP bool) string {
-	dec := d.r.Decision(dst.Addr())
-	if isUDP && dst.Port() == 53 && dec == Tunnel {
-		return "dns"
+	// DNS interception: intercept UDP/53 either to the configured resolver (so
+	// include mode still resolves through the tunnel, defeating poisoning) OR to any
+	// address the router already tunnels (full-tunnel apps with hardcoded resolvers).
+	if isUDP && dst.Port() == 53 {
+		if d.resolver.IsValid() && dst.Addr() == d.resolver {
+			return "dns"
+		}
+		if d.r.Decision(dst.Addr()) == Tunnel {
+			return "dns"
+		}
 	}
-	if dec == Tunnel {
+	if d.r.Decision(dst.Addr()) == Tunnel {
 		return "tunnel"
 	}
 	return "bypass"
@@ -231,7 +243,8 @@ func startEngine(tunFD int, mtu int, p *coreProxy) (*engine, error) {
 		TransportHandler: tunnel.T(),
 	})
 	if err != nil {
-		dev.Close()
+		// Do not close dev here: it would close the tun fd, but Session.Start's
+		// deferred close owns the fd on every non-started path. Avoid a double close.
 		return nil, err
 	}
 	return &engine{dev: dev, stack: st}, nil

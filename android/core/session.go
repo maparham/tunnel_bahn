@@ -40,6 +40,15 @@ func NewSession() *Session { return &Session{} }
 // Start builds the transport, wires the routing/DNS proxy, opens the netstack engine
 // on tunFD, and blocks until Stop. It is meant to run on a dedicated thread.
 func (s *Session) Start(tunFD int, configJSON string, prot Protector, sink EventSink) error {
+	// The tun fd is owned by Go once passed in. Close it on every path that does not
+	// hand it to a running engine, so a failed connect never blackholes the tun.
+	started := false
+	defer func() {
+		if !started {
+			syscall.Close(tunFD)
+		}
+	}()
+
 	cfg, err := parseConfig(configJSON)
 	if err != nil {
 		return err
@@ -51,17 +60,20 @@ func (s *Session) Start(tunFD int, configJSON string, prot Protector, sink Event
 	}
 
 	router := NewRouter(cfg.Mode, cfg.activeRuleSet())
-	proxy := newCoreProxy(newDispatcher(router), tr, cfg.Resolver, prot)
+	proxy := newCoreProxy(newDispatcher(router, cfg.Resolver.Addr()), tr, cfg.Resolver, prot)
 
-	mtu := cfg.WG.MTU
+	// The tun MTU (set by VpnService) and the engine MTU must match to avoid MSS
+	// clamping mismatches; both derive from the profile's mtu.
+	mtu := cfg.MTU
 	if mtu <= 0 {
-		mtu = 1500
+		mtu = 1280
 	}
 	eng, err := startEngine(tunFD, mtu, proxy)
 	if err != nil {
 		tr.Close()
 		return err
 	}
+	started = true // the engine now owns the fd and closes it on Stop
 
 	s.mu.Lock()
 	s.tr = tr
