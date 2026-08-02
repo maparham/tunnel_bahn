@@ -15,6 +15,7 @@ type EventSink interface {
 	OnState(state string)
 	OnError(msg string)
 	OnHostKey(line string)
+	OnExitInfo(ip, city, country string)
 }
 
 // Session is the tunnel session facade.
@@ -33,6 +34,10 @@ func (s *Session) Start(tunFD int, configJSON string, prot Protector, sink Event
 // Stop tears the tunnel down and unblocks Start.
 func (s *Session) Stop() { s.inner.Stop() }
 
+// RxBytes/TxBytes report cumulative tunneled bytes (download/upload) for the poller.
+func (s *Session) RxBytes() int64 { return s.inner.RxBytes() }
+func (s *Session) TxBytes() int64 { return s.inner.TxBytes() }
+
 type protectorAdapter struct{ p Protector }
 
 func (a protectorAdapter) Protect(fd int) error { return a.p.Protect(fd) }
@@ -42,3 +47,6 @@ type sinkAdapter struct{ s EventSink }
 func (a sinkAdapter) OnState(state string)  { a.s.OnState(state) }
 func (a sinkAdapter) OnError(msg string)    { a.s.OnError(msg) }
 func (a sinkAdapter) OnHostKey(line string) { a.s.OnHostKey(line) }
+func (a sinkAdapter) OnExitInfo(ip, city, country string) {
+	a.s.OnExitInfo(ip, city, country)
+}

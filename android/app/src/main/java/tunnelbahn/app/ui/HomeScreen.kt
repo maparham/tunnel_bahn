@@ -1,9 +1,14 @@
 package tunnelbahn.app.ui
 
+import android.Manifest
+import android.content.pm.PackageManager
 import android.net.VpnService
+import android.os.Build
 import androidx.compose.foundation.background
 import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts.RequestPermission
 import androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult
+import androidx.core.content.ContextCompat
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -81,7 +86,25 @@ fun HomeScreen(onProfiles: () -> Unit, onAddProfile: () -> Unit, onEditProfile: 
         pending = false
     }
 
+    var notifDenied by remember { mutableStateOf(false) }
+    val notifPermission = rememberLauncherForActivityResult(RequestPermission()) { granted ->
+        notifDenied = !granted
+    }
+
+    fun ensureNotifPermission() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
+        val granted = ContextCompat.checkSelfPermission(
+            ctx, Manifest.permission.POST_NOTIFICATIONS,
+        ) == PackageManager.PERMISSION_GRANTED
+        if (granted) {
+            notifDenied = false
+        } else {
+            notifPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
+    }
+
     fun connect() {
+        ensureNotifPermission()
         val id = profile?.id ?: return
         val prepare = VpnService.prepare(ctx)
         if (prepare != null) {
@@ -115,6 +138,7 @@ fun HomeScreen(onProfiles: () -> Unit, onAddProfile: () -> Unit, onEditProfile: 
                     profile = profile,
                     state = state,
                     elapsedMs = elapsedMs,
+                    notifDenied = notifDenied,
                     onConnect = { connect() },
                     onDisconnect = { stopVpn(ctx) },
                     onProfiles = onProfiles,
@@ -138,6 +162,7 @@ private fun ConnectionHero(
     profile: Profile,
     state: String,
     elapsedMs: Long,
+    notifDenied: Boolean,
     onConnect: () -> Unit,
     onDisconnect: () -> Unit,
     onProfiles: () -> Unit,
@@ -176,6 +201,15 @@ private fun ConnectionHero(
             style = MaterialTheme.typography.displaySmall,
             textAlign = TextAlign.Center,
         )
+        if (notifDenied && running) {
+            Spacer(Modifier.height(8.dp))
+            Text(
+                "Live speed and exit location show in the notification. Allow notifications to see them.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = TextAlign.Center,
+            )
+        }
         Spacer(Modifier.height(32.dp))
 
         if (running || connecting) {

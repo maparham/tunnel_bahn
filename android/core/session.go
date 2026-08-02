@@ -28,6 +28,7 @@ type EventSink interface {
 	OnState(state string)
 	OnError(msg string)
 	OnHostKey(line string)
+	OnExitInfo(ip, city, country string)
 }
 
 type Session struct {
@@ -35,6 +36,7 @@ type Session struct {
 	tr     transport.Transport
 	eng    *engine
 	stopCh chan struct{}
+	ctr    *counters
 }
 
 func NewSession() *Session { return &Session{} }
@@ -61,8 +63,10 @@ func (s *Session) Start(tunFD int, configJSON string, prot Protector, sink Event
 		return err
 	}
 
+	ctr := &counters{}
+
 	router := NewRouter(cfg.Mode, cfg.activeRuleSet())
-	proxy := newCoreProxy(newDispatcher(router, cfg.Resolver.Addr()), tr, cfg.Resolver, prot)
+	proxy := newCoreProxy(newDispatcher(router, cfg.Resolver.Addr()), tr, cfg.Resolver, prot, ctr)
 
 	// The tun MTU (set by VpnService) and the engine MTU must match to avoid MSS
 	// clamping mismatches; both derive from the profile's mtu.
@@ -80,15 +84,25 @@ func (s *Session) Start(tunFD int, configJSON string, prot Protector, sink Event
 	s.mu.Lock()
 	s.tr = tr
 	s.eng = eng
+	s.ctr = ctr
 	s.stopCh = make(chan struct{})
 	stopCh := s.stopCh
 	s.mu.Unlock()
 
+	// Tie a cancellable context to stopCh so Stop cancels an in-flight exit probe.
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		<-stopCh
+		cancel()
+	}()
+
 	if sink != nil {
 		sink.OnState("running")
 	}
+	go runExitProbe(ctx, tr, sink)
 
 	<-stopCh
+	cancel()
 
 	eng.stop()
 	tr.Close()
@@ -96,6 +110,28 @@ func (s *Session) Start(tunFD int, configJSON string, prot Protector, sink Event
 		sink.OnState("disconnected")
 	}
 	return nil
+}
+
+// RxBytes and TxBytes report cumulative tunneled inner-payload bytes for this session.
+// They are 0 before Start and after a fresh Session is created. Safe to call concurrently.
+func (s *Session) RxBytes() int64 {
+	s.mu.Lock()
+	c := s.ctr
+	s.mu.Unlock()
+	if c == nil {
+		return 0
+	}
+	return c.Rx()
+}
+
+func (s *Session) TxBytes() int64 {
+	s.mu.Lock()
+	c := s.ctr
+	s.mu.Unlock()
+	if c == nil {
+		return 0
+	}
+	return c.Tx()
 }
 
 func (s *Session) Stop() {

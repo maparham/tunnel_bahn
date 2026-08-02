@@ -39,6 +39,14 @@ class TunnelBahnVpnService : VpnService() {
     // The profile currently being connected, so onHostKey can persist the TOFU key back to it.
     private var connectingProfileId: String? = null
 
+    // 1s stats poller: samples the Go counters, re-posts the notification with speeds.
+    private val pollHandler = Handler(Looper.getMainLooper())
+    private var pollRunnable: Runnable? = null
+    private var lastRx = 0L
+    private var lastTx = 0L
+    private var downSpeed = 0L
+    private var upSpeed = 0L
+
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_STOP -> {
@@ -157,10 +165,13 @@ class TunnelBahnVpnService : VpnService() {
      * Idempotent: safe to call twice (e.g. user stop, then the worker's own teardown).
      */
     private fun endSession(failed: Boolean) {
+        stopPolling()
         session?.stop()
         session = null
         worker = null
         connectedSince.value = 0L
+        exitIp.value = ""
+        exitLocation.value = ""
         if (failed) {
             state.value = STATE_ERROR
             Haptics.failure(this)
@@ -195,6 +206,7 @@ class TunnelBahnVpnService : VpnService() {
                     reachedRunning = true
                     Haptics.success(this@TunnelBahnVpnService)
                 }
+                mainHandler.post { startPolling() }
             }
         }
 
@@ -213,6 +225,40 @@ class TunnelBahnVpnService : VpnService() {
                 }
             }
         }
+
+        override fun onExitInfo(ip: String, city: String, country: String) {
+            exitIp.value = ip
+            exitLocation.value = tunnelbahn.app.ui.formatLocation(city, country)
+        }
+    }
+
+    private fun startPolling() {
+        if (pollRunnable != null) return
+        val s = session ?: return
+        lastRx = s.rxBytes()
+        lastTx = s.txBytes()
+        val r = object : Runnable {
+            override fun run() {
+                val sess = session ?: return
+                val rx = sess.rxBytes()
+                val tx = sess.txBytes()
+                downSpeed = tunnelbahn.app.ui.bytesPerSecond(lastRx, rx)
+                upSpeed = tunnelbahn.app.ui.bytesPerSecond(lastTx, tx)
+                lastRx = rx
+                lastTx = tx
+                val mgr = getSystemService(NotificationManager::class.java)
+                mgr.notify(NOTIF_ID, buildNotification())
+                pollHandler.postDelayed(this, 1000)
+            }
+        }
+        pollRunnable = r
+        pollHandler.postDelayed(r, 1000)
+    }
+
+    private fun stopPolling() {
+        pollRunnable?.let { pollHandler.removeCallbacks(it) }
+        pollRunnable = null
+        lastRx = 0L; lastTx = 0L; downSpeed = 0L; upSpeed = 0L
     }
 
     private fun buildNotification(): Notification {
@@ -225,6 +271,10 @@ class TunnelBahnVpnService : VpnService() {
             this, 0, Intent(this, MainActivity::class.java),
             PendingIntent.FLAG_IMMUTABLE,
         )
+        val down = tunnelbahn.app.ui.humanizeSpeed(downSpeed)
+        val up = tunnelbahn.app.ui.humanizeSpeed(upSpeed)
+        val line1 = "↓ $down  ·  ↑ $up" // down · up
+        val loc = exitLocation.value.ifBlank { "Locating…" }
         val b = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             Notification.Builder(this, CHANNEL_ID)
         } else {
@@ -233,10 +283,12 @@ class TunnelBahnVpnService : VpnService() {
         }
         return b
             .setContentTitle("TunnelBahn")
-            .setContentText("Tunnel active")
+            .setContentText(line1)
+            .setStyle(Notification.BigTextStyle().bigText("$line1\n$loc"))
             .setSmallIcon(android.R.drawable.ic_lock_lock)
             .setContentIntent(open)
             .setOngoing(true)
+            .setOnlyAlertOnce(true)
             .build()
     }
 
@@ -259,5 +311,9 @@ class TunnelBahnVpnService : VpnService() {
         /** Epoch millis when the tunnel reached RUNNING, or 0 when not running. Drives the
          *  Home screen's elapsed-time display. */
         val connectedSince = MutableStateFlow(0L)
+
+        /** Exit-IP and its geo location, pushed once per session by the Go probe. */
+        val exitIp = MutableStateFlow("")
+        val exitLocation = MutableStateFlow("")
     }
 }

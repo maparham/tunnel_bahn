@@ -1,8 +1,14 @@
 package core
 
 import (
+	"context"
+	"net"
 	"net/netip"
 	"testing"
+
+	M "github.com/xjasonlyu/tun2socks/v2/metadata"
+
+	"tunnelbahn/core/transport"
 )
 
 func TestDispatchRoutes(t *testing.T) {
@@ -39,5 +45,45 @@ func TestDispatchIncludeModeResolverIsTunneled(t *testing.T) {
 	}
 	if got := d.route(netip.MustParseAddrPort("172.16.5.5:443"), false); got != "tunnel" {
 		t.Fatalf("include-mode in-set: want tunnel, got %s", got)
+	}
+}
+
+// fakeTunnelTransport tunnels every DialTCP to an in-memory echo pipe so the test can
+// drive bytes through coreProxy's tunnel branch and assert the counters moved.
+type fakeTunnelTransport struct{ peer net.Conn }
+
+func (f *fakeTunnelTransport) DialTCP(_ context.Context, _ netip.AddrPort) (net.Conn, error) {
+	client, server := net.Pipe()
+	f.peer = server
+	return client, nil
+}
+func (f *fakeTunnelTransport) DialUDP(_ context.Context, _ netip.AddrPort) (net.PacketConn, error) {
+	return nil, transport.ErrUnsupportedProtocol
+}
+func (f *fakeTunnelTransport) Close() error { return nil }
+
+func TestCoreProxyCountsTunneledTCP(t *testing.T) {
+	// Router in exclude mode with an empty set => every dst is Tunnel.
+	disp := newDispatcher(NewRouter(ModeExclude, RuleSet{}), netip.Addr{})
+	ctr := &counters{}
+	tr := &fakeTunnelTransport{}
+	p := newCoreProxy(disp, tr, netip.AddrPort{}, nil, ctr)
+
+	m := &M.Metadata{DstIP: netip.MustParseAddr("93.184.216.34"), DstPort: 443}
+	conn, err := p.DialContext(context.Background(), m)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	go func() {
+		buf := make([]byte, 8)
+		tr.peer.Read(buf)
+		tr.peer.Write([]byte("resp"))
+	}()
+	conn.Write([]byte("get")) // 3 TX
+	buf := make([]byte, 4)
+	conn.Read(buf) // 4 RX
+
+	if ctr.Tx() != 3 || ctr.Rx() != 4 {
+		t.Fatalf("counters: tx=%d rx=%d, want tx=3 rx=4", ctr.Tx(), ctr.Rx())
 	}
 }

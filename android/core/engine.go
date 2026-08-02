@@ -55,9 +55,10 @@ type coreProxy struct {
 	resolver netip.AddrPort
 	dialer   *net.Dialer
 	listen   *net.ListenConfig
+	ctr      *counters
 }
 
-func newCoreProxy(disp *dispatcher, tr transport.Transport, resolver netip.AddrPort, prot Protector) *coreProxy {
+func newCoreProxy(disp *dispatcher, tr transport.Transport, resolver netip.AddrPort, prot Protector, ctr *counters) *coreProxy {
 	ctrl := protectedControl(prot)
 	return &coreProxy{
 		disp:     disp,
@@ -65,13 +66,18 @@ func newCoreProxy(disp *dispatcher, tr transport.Transport, resolver netip.AddrP
 		resolver: resolver,
 		dialer:   &net.Dialer{Control: ctrl},
 		listen:   &net.ListenConfig{Control: ctrl},
+		ctr:      ctr,
 	}
 }
 
 func (p *coreProxy) DialContext(ctx context.Context, m *M.Metadata) (net.Conn, error) {
 	dst := m.DestinationAddrPort()
 	if p.disp.route(dst, false) == "tunnel" {
-		return p.tr.DialTCP(ctx, dst)
+		conn, err := p.tr.DialTCP(ctx, dst)
+		if err != nil {
+			return nil, err
+		}
+		return p.ctr.wrapConn(conn), nil
 	}
 	return p.dialer.DialContext(ctx, "tcp", dst.String())
 }
@@ -86,7 +92,7 @@ func (p *coreProxy) DialUDP(m *M.Metadata) (net.PacketConn, error) {
 		if err != nil {
 			return nil, err
 		}
-		return tunnelUDP(pc, dst), nil
+		return p.ctr.wrapPacketConn(tunnelUDP(pc, dst)), nil
 	default:
 		return p.listen.ListenPacket(context.Background(), "udp", ":0")
 	}
