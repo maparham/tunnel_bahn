@@ -14,6 +14,7 @@ type Protector interface {
 type EventSink interface {
 	OnState(state string)
 	OnError(msg string)
+	OnHostKey(line string)
 }
 
 // Session is the tunnel session facade.
@@ -38,5 +39,6 @@ func (a protectorAdapter) Protect(fd int) error { return a.p.Protect(fd) }
 
 type sinkAdapter struct{ s EventSink }
 
-func (a sinkAdapter) OnState(state string) { a.s.OnState(state) }
-func (a sinkAdapter) OnError(msg string)   { a.s.OnError(msg) }
+func (a sinkAdapter) OnState(state string)  { a.s.OnState(state) }
+func (a sinkAdapter) OnError(msg string)    { a.s.OnError(msg) }
+func (a sinkAdapter) OnHostKey(line string) { a.s.OnHostKey(line) }

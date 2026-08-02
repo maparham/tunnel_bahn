@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"net/netip"
+	"strings"
 	"sync"
 	"syscall"
 
@@ -26,6 +27,7 @@ type Protector interface {
 type EventSink interface {
 	OnState(state string)
 	OnError(msg string)
+	OnHostKey(line string)
 }
 
 type Session struct {
@@ -117,16 +119,24 @@ func buildTransport(cfg *coreConfig, prot Protector, sink EventSink) (transport.
 		if err != nil {
 			return nil, fmt.Errorf("ssh private key: %w", err)
 		}
-		hostKey, _, _, _, err := ssh.ParseAuthorizedKey([]byte(cfg.SSH.HostKeyAuthorized))
-		if err != nil {
-			return nil, fmt.Errorf("ssh host key: %w", err)
+		var hostKey ssh.PublicKey
+		if strings.TrimSpace(cfg.SSH.HostKeyAuthorized) != "" {
+			hostKey, _, _, _, err = ssh.ParseAuthorizedKey([]byte(cfg.SSH.HostKeyAuthorized))
+			if err != nil {
+				return nil, fmt.Errorf("ssh host key: %w", err)
+			}
 		}
 		return transport.NewSSH(transport.SSHConfig{
 			Addr:    cfg.SSH.Addr,
 			User:    cfg.SSH.User,
 			Signer:  signer,
-			HostKey: hostKey,
+			HostKey: hostKey, // nil => trust-on-first-use
 			Dial:    transport.DialFunc(dial),
+			OnHostKey: func(line string) {
+				if sink != nil {
+					sink.OnHostKey(line)
+				}
+			},
 			OnState: func(connected bool) {
 				if sink == nil {
 					return

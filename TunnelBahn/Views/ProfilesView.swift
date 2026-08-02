@@ -408,6 +408,9 @@ struct ProfilesView: View {
         menu.addItem(makeMenuItem(title: "Show QR Code", symbolName: "qrcode") {
             showQRCodePanel(for: profile)
         })
+        menu.addItem(makeMenuItem(title: "Export to Android (QR)", symbolName: "qrcode") {
+            showAndroidQRPanel(for: profile)
+        })
         menu.addItem(.separator())
         let deleteItem = makeMenuItem(title: "Delete", symbolName: "trash") {
             deleteConfirmationProfile = profile
@@ -626,6 +629,50 @@ struct ProfilesView: View {
             )
         }
 
+        presentQRPanel(title: "QR Code: \(profile.name)", content: content)
+    }
+
+    /// Renders a scannable QR that carries the profile's SSH or WG-over-wstunnel details plus
+    /// key material for the Android client to import. Plain WireGuard profiles have no Android
+    /// transport and show the codec's error instead of a QR.
+    private func showAndroidQRPanel(for profile: WireGuardProfile) {
+        let content: AnyView
+        do {
+            let json = try AndroidProfileQRCodec.encode(profile, secrets: KeychainService.shared)
+            if let qrImage = WireGuardConfigRenderer.makeQRCodeImage(from: json) {
+                content = AnyView(
+                    VStack(spacing: 8) {
+                        Text(profile.name).font(.headline)
+                        Image(nsImage: qrImage)
+                            .interpolation(.none)
+                            .resizable()
+                            .scaledToFit()
+                            .frame(width: 240, height: 240)
+                        Text("Contains the private key. Scan only on a trusted device.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(16)
+                )
+            } else {
+                content = AnyView(
+                    Text("Profile is too large to encode as a QR code.")
+                        .foregroundStyle(.secondary)
+                        .padding(32)
+                )
+            }
+        } catch {
+            content = AnyView(
+                Text(error.localizedDescription)
+                    .foregroundStyle(.secondary)
+                    .padding(32)
+            )
+        }
+        presentQRPanel(title: "Android QR: \(profile.name)", content: content)
+    }
+
+    /// Shared floating NSPanel presenter for the QR panels above.
+    private func presentQRPanel(title: String, content: AnyView) {
         let hosting = NSHostingView(rootView: content)
         hosting.sizingOptions = .preferredContentSize
         let panel = NSPanel(
@@ -637,7 +684,7 @@ struct ProfilesView: View {
         // NSPanel defaults to isReleasedWhenClosed == true; with no strong reference held,
         // the close button would over-release the panel under ARC and crash.
         panel.isReleasedWhenClosed = false
-        panel.title = "QR Code: \(profile.name)"
+        panel.title = title
         panel.contentView = hosting
         panel.level = .floating
         panel.center()

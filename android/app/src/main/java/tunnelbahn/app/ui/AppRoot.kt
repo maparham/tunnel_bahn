@@ -22,6 +22,7 @@ fun AppRoot() {
         is Screen.Home -> HomeScreen(
             onProfiles = { screen = Screen.Profiles },
             onAddProfile = { screen = Screen.Edit(null, returnTo = Screen.Home) },
+            onEditProfile = { id -> screen = Screen.Edit(id, returnTo = Screen.Home) },
         )
         is Screen.Profiles -> ProfilesScreen(
             onBack = { screen = Screen.Home },

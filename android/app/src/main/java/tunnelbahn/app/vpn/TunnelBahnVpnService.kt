@@ -36,6 +36,9 @@ class TunnelBahnVpnService : VpnService() {
     private var reachedRunning = false
     private var userStopping = false
 
+    // The profile currently being connected, so onHostKey can persist the TOFU key back to it.
+    private var connectingProfileId: String? = null
+
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_STOP -> {
@@ -55,6 +58,7 @@ class TunnelBahnVpnService : VpnService() {
             endSession(failed = true)
             return START_NOT_STICKY
         }
+        connectingProfileId = profile.id
         // Fresh attempt: clear the previous outcome so stale errors do not linger.
         reachedRunning = false
         userStopping = false
@@ -196,6 +200,18 @@ class TunnelBahnVpnService : VpnService() {
 
         override fun onError(msg: String) {
             lastError.value = msg
+        }
+
+        override fun onHostKey(line: String) {
+            // TOFU: pin the server key into the profile so the next connect verifies strictly.
+            // Only write when blank, so an already-pinned key is never silently replaced.
+            val id = connectingProfileId ?: return
+            val store = ProfileStore(this@TunnelBahnVpnService)
+            store.load(id)?.let { p ->
+                if (p.sshHostKeyAuthorized.isBlank()) {
+                    store.save(p.copy(sshHostKeyAuthorized = line))
+                }
+            }
         }
     }
 

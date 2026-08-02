@@ -12,6 +12,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.QrCodeScanner
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -47,6 +48,18 @@ fun ProfilesScreen(onBack: () -> Unit, onAdd: () -> Unit, onEdit: (String) -> Un
     var profiles by remember { mutableStateOf(store.all()) }
     var selectedId by remember { mutableStateOf(store.selectedId()) }
     var confirmDelete by remember { mutableStateOf<Profile?>(null) }
+    var importError by remember { mutableStateOf<String?>(null) }
+
+    val launchImport = rememberQrImport(
+        onImported = { p ->
+            store.save(p)
+            store.setSelectedId(p.id)
+            profiles = store.all()
+            selectedId = store.selectedId()
+            onEdit(p.id) // open the editor so the user can review routing/apps
+        },
+        onError = { importError = it },
+    )
 
     Scaffold(
         topBar = {
@@ -55,6 +68,11 @@ fun ProfilesScreen(onBack: () -> Unit, onAdd: () -> Unit, onEdit: (String) -> Un
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                    }
+                },
+                actions = {
+                    IconButton(onClick = launchImport) {
+                        Icon(Icons.Filled.QrCodeScanner, contentDescription = "Import from QR")
                     }
                 },
             )
@@ -97,6 +115,15 @@ fun ProfilesScreen(onBack: () -> Unit, onAdd: () -> Unit, onEdit: (String) -> Un
                 }) { Text("Delete") }
             },
             dismissButton = { TextButton(onClick = { confirmDelete = null }) { Text("Cancel") } },
+        )
+    }
+
+    importError?.let { msg ->
+        AlertDialog(
+            onDismissRequest = { importError = null },
+            title = { Text("Import failed") },
+            text = { Text(msg) },
+            confirmButton = { TextButton(onClick = { importError = null }) { Text("OK") } },
         )
     }
 }

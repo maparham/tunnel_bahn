@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"net/netip"
+	"strings"
 	"sync"
 	"time"
 
@@ -23,6 +24,10 @@ type SSHConfig struct {
 	// OnState reports transport liveness: true on (re)connect, false when the client
 	// dies and reconnect begins. The UI surfaces false as a "Degraded" chip.
 	OnState func(connected bool)
+	// OnHostKey is called once, during the first successful handshake, with the
+	// server's presented key as an authorized_keys line, when HostKey is nil (TOFU).
+	// The Kotlin layer persists it so the next connect pins it via HostKey.
+	OnHostKey func(line string)
 }
 
 type SSH struct {
@@ -46,13 +51,23 @@ func (s *SSH) connect(ctx context.Context) error {
 		return err
 	}
 	ccfg := &ssh.ClientConfig{
-		User:            s.cfg.User,
-		Auth:            []ssh.AuthMethod{ssh.PublicKeys(s.cfg.Signer)},
-		HostKeyCallback: ssh.FixedHostKey(s.cfg.HostKey),
+		User: s.cfg.User,
+		Auth: []ssh.AuthMethod{ssh.PublicKeys(s.cfg.Signer)},
+	}
+	if s.cfg.HostKey != nil {
+		ccfg.HostKeyCallback = ssh.FixedHostKey(s.cfg.HostKey)
 		// Constrain negotiation to the pinned key's type, otherwise the server may
 		// present a different host key algorithm (e.g. ecdsa) that will never match
 		// the pinned key and the handshake fails with "host key mismatch".
-		HostKeyAlgorithms: []string{s.cfg.HostKey.Type()},
+		ccfg.HostKeyAlgorithms = []string{s.cfg.HostKey.Type()}
+	} else {
+		// TOFU: accept whatever the server presents on this first connect and report it.
+		ccfg.HostKeyCallback = func(_ string, _ net.Addr, key ssh.PublicKey) error {
+			if s.cfg.OnHostKey != nil {
+				s.cfg.OnHostKey(strings.TrimSpace(string(ssh.MarshalAuthorizedKey(key))))
+			}
+			return nil
+		}
 	}
 	conn, chans, reqs, err := ssh.NewClientConn(nc, s.cfg.Addr, ccfg)
 	if err != nil {

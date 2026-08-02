@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.List
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -25,6 +26,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -48,12 +50,22 @@ import tunnelbahn.app.vpn.TunnelBahnVpnService
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun HomeScreen(onProfiles: () -> Unit, onAddProfile: () -> Unit) {
+fun HomeScreen(onProfiles: () -> Unit, onAddProfile: () -> Unit, onEditProfile: (String) -> Unit) {
     val ctx = LocalContext.current
     val store = remember { ProfileStore(ctx) }
     // Recreated on every entry into Home (AppRoot swaps composables), so this reads the
     // latest selection without an explicit refresh.
     val profile: Profile? = remember { store.selectedId()?.let { store.load(it) } }
+
+    var importError by remember { mutableStateOf<String?>(null) }
+    val launchImport = rememberQrImport(
+        onImported = { p ->
+            store.save(p)
+            store.setSelectedId(p.id)
+            onEditProfile(p.id) // open the editor so the user can review routing/apps
+        },
+        onError = { importError = it },
+    )
 
     val state by TunnelBahnVpnService.state.collectAsStateWithLifecycle()
     val connectedSince by TunnelBahnVpnService.connectedSince.collectAsStateWithLifecycle()
@@ -97,7 +109,7 @@ fun HomeScreen(onProfiles: () -> Unit, onAddProfile: () -> Unit) {
     ) { pad ->
         Box(Modifier.fillMaxSize().padding(pad).padding(24.dp), contentAlignment = Alignment.Center) {
             if (profile == null) {
-                EmptyHome(onAddProfile)
+                EmptyHome(onAddProfile, onImport = launchImport)
             } else {
                 ConnectionHero(
                     profile = profile,
@@ -109,6 +121,15 @@ fun HomeScreen(onProfiles: () -> Unit, onAddProfile: () -> Unit) {
                 )
             }
         }
+    }
+
+    importError?.let { msg ->
+        AlertDialog(
+            onDismissRequest = { importError = null },
+            title = { Text("Import failed") },
+            text = { Text(msg) },
+            confirmButton = { TextButton(onClick = { importError = null }) { Text("OK") } },
+        )
     }
 }
 
@@ -175,7 +196,7 @@ private fun ConnectionHero(
 }
 
 @Composable
-private fun EmptyHome(onAddProfile: () -> Unit) {
+private fun EmptyHome(onAddProfile: () -> Unit, onImport: () -> Unit) {
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(16.dp),
@@ -187,6 +208,7 @@ private fun EmptyHome(onAddProfile: () -> Unit) {
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         Button(onClick = onAddProfile) { Text("Add profile") }
+        OutlinedButton(onClick = onImport) { Text("Import from QR") }
     }
 }
 
