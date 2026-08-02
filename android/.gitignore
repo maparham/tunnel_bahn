@@ -1,0 +1,17 @@
+# Build artifacts
+app/libs/*.aar
+core/mobile/*.aar
+
+# Gradle
+.gradle/
+build/
+*/build/
+local.properties
+
+# Android Studio / IntelliJ
+.idea/
+*.iml
+captures/
+
+# Kotlin
+.kotlin/
