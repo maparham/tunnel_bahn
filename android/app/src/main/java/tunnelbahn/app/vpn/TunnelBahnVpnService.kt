@@ -40,6 +40,11 @@ class TunnelBahnVpnService : VpnService() {
     // The profile currently being connected, so onHostKey can persist the TOFU key back to it.
     private var connectingProfileId: String? = null
 
+    // When a Connect intent arrives while a session is live, we stop the current session and
+    // stash the next profile id here; the worker's teardown path (endSession) picks it up and
+    // connects it, so there are never two live sessions racing on the tun.
+    private var pendingProfileId: String? = null
+
     // 2s stats poller: samples the Go counters, re-posts the notification with speeds.
     // Speed is a delta normalized by the actual elapsed time between samples, matching the
     // desktop app's steadier reading rather than assuming a fixed tick.
@@ -64,6 +69,21 @@ class TunnelBahnVpnService : VpnService() {
             stopSelf()
             return START_NOT_STICKY
         }
+
+        // Already running or connecting: switch. Stop the current session and defer the new
+        // connect until its teardown completes (endSession consumes pendingProfileId).
+        if (session != null) {
+            pendingProfileId = profileId
+            userStopping = true // this teardown is a deliberate switch, not a failed connect
+            session?.stop()
+            return START_STICKY
+        }
+
+        return beginConnect(profileId)
+    }
+
+    /** Loads [profileId] and starts a fresh connect attempt. Assumes no live session. */
+    private fun beginConnect(profileId: String): Int {
         val profile = ProfileStore(this).load(profileId)
         if (profile == null) {
             lastError.value = "profile not found: $profileId"
@@ -179,6 +199,14 @@ class TunnelBahnVpnService : VpnService() {
         connectedSince.value = 0L
         exitIp.value = ""
         exitLocation.value = ""
+        val next = pendingProfileId
+        pendingProfileId = null
+        if (next != null) {
+            // Deliberate switch: the old session is gone; connect the next profile without
+            // dropping the foreground or stopping the service.
+            beginConnect(next)
+            return
+        }
         if (failed) {
             state.value = STATE_ERROR
             Haptics.failure(this)
@@ -344,6 +372,11 @@ class TunnelBahnVpnService : VpnService() {
         /** Exit-IP and its geo location, pushed once per session by the Go probe. */
         val exitIp = MutableStateFlow("")
         val exitLocation = MutableStateFlow("")
+
+        /** Origin (pre-VPN) IP and geo. Populated by [OriginProbe], independent of a session,
+         *  so it is visible while disconnected. Same value connected or not. */
+        val originIp = MutableStateFlow("")
+        val originLocation = MutableStateFlow("")
 
         /** The live gomobile Session while running, for in-app callers (speed test).
          *  Null when not connected. Volatile: written by the service thread, read by the UI. */

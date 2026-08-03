@@ -3,7 +3,10 @@
 // declared concretely here and delegates to tunnelbahn/core via thin adapters.
 package mobile
 
-import "tunnelbahn/core"
+import (
+	"context"
+	"tunnelbahn/core"
+)
 
 // Protector wraps VpnService.protect(fd). Implemented in Kotlin.
 type Protector interface {
@@ -87,3 +90,21 @@ func (d *DirectSpeedTest) Run(sink SpeedTestSink) error {
 }
 
 func (d *DirectSpeedTest) Cancel() { d.inner.Cancel() }
+
+// OriginInfo is the pre-VPN IP + geo, returned by ProbeOrigin. Fields are named Ip (not
+// IP) so gomobile emits getIp()/getCity()/getCountry() and Kotlin sees .ip/.city/.country.
+type OriginInfo struct {
+	Ip      string
+	City    string
+	Country string
+}
+
+// ProbeOrigin fetches the device's real (pre-VPN) IP + geo. Blocking; call off the main
+// thread. Returns an error the Kotlin side can catch and treat as "not yet known".
+func ProbeOrigin() (*OriginInfo, error) {
+	ip, city, country, err := core.ProbeOrigin(context.Background())
+	if err != nil {
+		return nil, err
+	}
+	return &OriginInfo{Ip: ip, City: city, Country: country}, nil
+}

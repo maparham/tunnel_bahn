@@ -1,5 +1,13 @@
 package tunnelbahn.app.ui
 
+import android.Manifest
+import android.content.pm.PackageManager
+import android.net.VpnService
+import android.os.Build
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts.RequestPermission
+import androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult
+import androidx.core.content.ContextCompat
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -14,6 +22,7 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.QrCodeScanner
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -36,19 +45,53 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import tunnelbahn.app.profile.Profile
 import tunnelbahn.app.profile.ProfileStore
 import tunnelbahn.app.profile.appScopeSummary
+import tunnelbahn.app.vpn.TunnelBahnVpnService
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ProfilesScreen(onBack: () -> Unit, onAdd: () -> Unit, onEdit: (String) -> Unit) {
     val ctx = LocalContext.current
     val store = remember { ProfileStore(ctx) }
+    val state by TunnelBahnVpnService.state.collectAsStateWithLifecycle()
     var profiles by remember { mutableStateOf(store.all()) }
     var selectedId by remember { mutableStateOf(store.selectedId()) }
     var confirmDelete by remember { mutableStateOf<Profile?>(null) }
     var importError by remember { mutableStateOf<String?>(null) }
+
+    var pendingConnectId by remember { mutableStateOf<String?>(null) }
+    val consent = rememberLauncherForActivityResult(StartActivityForResult()) { result ->
+        val id = pendingConnectId
+        if (result.resultCode == android.app.Activity.RESULT_OK && id != null) {
+            startVpn(ctx, id)
+        }
+        pendingConnectId = null
+    }
+    val notifPermission = rememberLauncherForActivityResult(RequestPermission()) { }
+    fun ensureNotifPermission() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
+        val granted = ContextCompat.checkSelfPermission(
+            ctx, Manifest.permission.POST_NOTIFICATIONS,
+        ) == PackageManager.PERMISSION_GRANTED
+        if (!granted) {
+            notifPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
+    }
+    fun connectProfile(id: String) {
+        store.setSelectedId(id)
+        selectedId = id
+        ensureNotifPermission()
+        val prepare = VpnService.prepare(ctx)
+        if (prepare != null) {
+            pendingConnectId = id
+            consent.launch(prepare)
+        } else {
+            startVpn(ctx, id)
+        }
+    }
 
     val launchImport = rememberQrImport(
         onImported = { p ->
@@ -92,7 +135,9 @@ fun ProfilesScreen(onBack: () -> Unit, onAdd: () -> Unit, onEdit: (String) -> Un
                     ProfileRow(
                         profile = p,
                         active = p.id == selectedId,
-                        onSetActive = { store.setSelectedId(p.id); selectedId = p.id; onBack() },
+                        action = profileCardAction(p.id == selectedId, state),
+                        onConnect = { connectProfile(p.id) },
+                        onDisconnect = { stopVpn(ctx) },
                         onEdit = { onEdit(p.id) },
                         onDelete = { confirmDelete = p },
                     )
@@ -132,7 +177,9 @@ fun ProfilesScreen(onBack: () -> Unit, onAdd: () -> Unit, onEdit: (String) -> Un
 private fun ProfileRow(
     profile: Profile,
     active: Boolean,
-    onSetActive: () -> Unit,
+    action: CardAction,
+    onConnect: () -> Unit,
+    onDisconnect: () -> Unit,
     onEdit: () -> Unit,
     onDelete: () -> Unit,
 ) {
@@ -175,8 +222,9 @@ private fun ProfileRow(
                 Modifier.fillMaxWidth().padding(top = 12.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                if (!active) {
-                    OutlinedButton(onClick = onSetActive) { Text("Set active") }
+                when (action) {
+                    CardAction.CONNECT -> Button(onClick = onConnect) { Text("Connect") }
+                    CardAction.DISCONNECT -> OutlinedButton(onClick = onDisconnect) { Text("Disconnect") }
                 }
                 OutlinedButton(onClick = onEdit) { Text("Edit") }
                 TextButton(onClick = onDelete) { Text("Delete") }
