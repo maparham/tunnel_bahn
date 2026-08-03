@@ -9,6 +9,7 @@ import android.net.VpnService
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import kotlinx.coroutines.flow.MutableStateFlow
 import tunnelbahn.app.MainActivity
 import tunnelbahn.app.profile.Profile
@@ -39,11 +40,14 @@ class TunnelBahnVpnService : VpnService() {
     // The profile currently being connected, so onHostKey can persist the TOFU key back to it.
     private var connectingProfileId: String? = null
 
-    // 1s stats poller: samples the Go counters, re-posts the notification with speeds.
+    // 2s stats poller: samples the Go counters, re-posts the notification with speeds.
+    // Speed is a delta normalized by the actual elapsed time between samples, matching the
+    // desktop app's steadier reading rather than assuming a fixed tick.
     private val pollHandler = Handler(Looper.getMainLooper())
     private var pollRunnable: Runnable? = null
     private var lastRx = 0L
     private var lastTx = 0L
+    private var lastSampleMs = 0L
     private var downSpeed = 0L
     private var upSpeed = 0L
 
@@ -71,6 +75,7 @@ class TunnelBahnVpnService : VpnService() {
         reachedRunning = false
         userStopping = false
         lastError.value = ""
+        ensureNotificationChannel()
         startForeground(NOTIF_ID, buildNotification())
         state.value = STATE_CONNECTING
         startTunnel(profile)
@@ -237,36 +242,46 @@ class TunnelBahnVpnService : VpnService() {
         val s = session ?: return
         lastRx = s.rxBytes()
         lastTx = s.txBytes()
+        lastSampleMs = SystemClock.elapsedRealtime()
         val r = object : Runnable {
             override fun run() {
                 val sess = session ?: return
                 val rx = sess.rxBytes()
                 val tx = sess.txBytes()
-                downSpeed = tunnelbahn.app.ui.bytesPerSecond(lastRx, rx)
-                upSpeed = tunnelbahn.app.ui.bytesPerSecond(lastTx, tx)
+                val nowMs = SystemClock.elapsedRealtime()
+                val elapsedMs = nowMs - lastSampleMs
+                downSpeed = tunnelbahn.app.ui.bytesPerSecond(lastRx, rx, elapsedMs)
+                upSpeed = tunnelbahn.app.ui.bytesPerSecond(lastTx, tx, elapsedMs)
                 lastRx = rx
                 lastTx = tx
+                lastSampleMs = nowMs
                 val mgr = getSystemService(NotificationManager::class.java)
                 mgr.notify(NOTIF_ID, buildNotification())
-                pollHandler.postDelayed(this, 1000)
+                pollHandler.postDelayed(this, 2000)
             }
         }
         pollRunnable = r
-        pollHandler.postDelayed(r, 1000)
+        pollHandler.postDelayed(r, 2000)
     }
 
     private fun stopPolling() {
         pollRunnable?.let { pollHandler.removeCallbacks(it) }
         pollRunnable = null
-        lastRx = 0L; lastTx = 0L; downSpeed = 0L; upSpeed = 0L
+        lastRx = 0L; lastTx = 0L; lastSampleMs = 0L; downSpeed = 0L; upSpeed = 0L
+    }
+
+    /** Registers the notification channel. Called once per session before the first
+     *  notification; createNotificationChannel is idempotent but the poller re-posts every
+     *  second, so this stays off the per-tick path. */
+    private fun ensureNotificationChannel() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
+        val mgr = getSystemService(NotificationManager::class.java)
+        mgr.createNotificationChannel(
+            NotificationChannel(CHANNEL_ID, "Tunnel", NotificationManager.IMPORTANCE_LOW),
+        )
     }
 
     private fun buildNotification(): Notification {
-        val mgr = getSystemService(NotificationManager::class.java)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val channel = NotificationChannel(CHANNEL_ID, "Tunnel", NotificationManager.IMPORTANCE_LOW)
-            mgr.createNotificationChannel(channel)
-        }
         val open = PendingIntent.getActivity(
             this, 0, Intent(this, MainActivity::class.java),
             PendingIntent.FLAG_IMMUTABLE,

@@ -44,10 +44,6 @@ func runExitProbe(ctx context.Context, tr transport.Transport, sink EventSink) {
 		Transport: &http.Transport{
 			// Dial the carrier through the tunnel transport, then real TLS to ipinfo.
 			DialTLSContext: func(ctx context.Context, _, addr string) (net.Conn, error) {
-				host, _, err := net.SplitHostPort(addr)
-				if err != nil {
-					host = ipinfoHost
-				}
 				ap, err := resolveIPInfoAddrPort(ctx, addr)
 				if err != nil {
 					return nil, err
@@ -56,7 +52,8 @@ func runExitProbe(ctx context.Context, tr transport.Transport, sink EventSink) {
 				if err != nil {
 					return nil, err
 				}
-				tlsConn := tls.Client(raw, &tls.Config{ServerName: host})
+				// addr is always ipinfoHost:443 (our own fixed URL), so pin SNI to the host.
+				tlsConn := tls.Client(raw, &tls.Config{ServerName: ipinfoHost})
 				if err := tlsConn.HandshakeContext(ctx); err != nil {
 					raw.Close()
 					return nil, err
@@ -73,6 +70,9 @@ func runExitProbe(ctx context.Context, tr transport.Transport, sink EventSink) {
 		}
 		if tryExitProbe(ctx, client, sink) {
 			return
+		}
+		if attempt == 2 {
+			return // retries exhausted; do not idle in a trailing backoff nobody waits on
 		}
 		select {
 		case <-ctx.Done():

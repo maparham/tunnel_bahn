@@ -14,11 +14,18 @@ class SpeedFormatTest {
     }
 
     @Test
-    fun bytesPerSecondIsNonNegativeDelta() {
-        assertEquals(300, bytesPerSecond(1000, 1300))
-        assertEquals(0, bytesPerSecond(0, 0))
+    fun bytesPerSecondNormalizesByElapsedTime() {
+        // 300 bytes over exactly 1s -> 300 B/s
+        assertEquals(300, bytesPerSecond(1000, 1300, 1000))
+        // 3000 bytes over 2s -> 1500 B/s (the poll interval no longer skews the rate)
+        assertEquals(1500, bytesPerSecond(1000, 4000, 2000))
+        // 300 bytes over 500ms -> 600 B/s
+        assertEquals(600, bytesPerSecond(1000, 1300, 500))
+        assertEquals(0, bytesPerSecond(0, 0, 2000))
         // counter reset / first sample: never a negative speed
-        assertEquals(0, bytesPerSecond(5000, 100))
+        assertEquals(0, bytesPerSecond(5000, 100, 2000))
+        // degenerate zero interval floors at 1ms rather than dividing by zero
+        assertEquals(300_000, bytesPerSecond(1000, 1300, 0))
     }
 
     @Test

@@ -13,9 +13,15 @@ fun humanizeSpeed(bytesPerSec: Long): String {
     }
 }
 
-/** Per-second delta between two cumulative counters, clamped at 0 so a counter reset
- *  (new session) or the first sample never renders a negative speed. */
-fun bytesPerSecond(prevBytes: Long, curBytes: Long): Long = max(0L, curBytes - prevBytes)
+/** Rate in bytes/second between two cumulative counters over a measured interval, clamped
+ *  at 0 so a counter reset (new session) or the first sample never renders a negative speed.
+ *  Dividing by the actual elapsed time (rather than assuming a fixed tick) keeps the reading
+ *  steady when the poll drifts, matching the desktop app. elapsedMs is floored at 1 to avoid
+ *  divide-by-zero on a degenerate back-to-back sample. */
+fun bytesPerSecond(prevBytes: Long, curBytes: Long, elapsedMs: Long): Long {
+    val delta = max(0L, curBytes - prevBytes)
+    return delta * 1000L / max(1L, elapsedMs)
+}
 
 /** Builds a short "City, Country" label. Maps an ISO 3166 alpha-2 code to a display
  *  country name via Locale; an unknown code passes through unchanged. */
