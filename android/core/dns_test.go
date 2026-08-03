@@ -37,7 +37,8 @@ func (fakeTransport) DialTCP(ctx context.Context, dst netip.AddrPort) (net.Conn,
 func (fakeTransport) DialUDP(context.Context, netip.AddrPort) (net.PacketConn, error) {
 	return nil, transport.ErrUnsupportedProtocol
 }
-func (fakeTransport) Close() error { return nil }
+func (fakeTransport) WaitReady(context.Context) error { return nil }
+func (fakeTransport) Close() error                    { return nil }
 
 func readFull(c net.Conn, b []byte) (int, error) {
 	got := 0

@@ -28,6 +28,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.List
+import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -68,7 +69,12 @@ import tunnelbahn.app.vpn.TunnelBahnVpnService
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun HomeScreen(onProfiles: () -> Unit, onAddProfile: () -> Unit, onEditProfile: (String) -> Unit) {
+fun HomeScreen(
+    onProfiles: () -> Unit,
+    onAddProfile: () -> Unit,
+    onEditProfile: (String) -> Unit,
+    onSpeedTest: () -> Unit,
+) {
     val ctx = LocalContext.current
     val store = remember { ProfileStore(ctx) }
     // Recreated on every entry into Home (AppRoot swaps composables), so this reads the
@@ -136,6 +142,9 @@ fun HomeScreen(onProfiles: () -> Unit, onAddProfile: () -> Unit, onEditProfile: 
             TopAppBar(
                 title = { Text("TunnelBahn") },
                 actions = {
+                    IconButton(onClick = onSpeedTest) {
+                        Icon(Icons.Default.Speed, contentDescription = "Speed test")
+                    }
                     IconButton(onClick = onProfiles) {
                         Icon(Icons.AutoMirrored.Filled.List, contentDescription = "Profiles")
                     }

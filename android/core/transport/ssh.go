@@ -135,6 +135,11 @@ func (s *SSH) reconnectLoop() {
 	}
 }
 
+// WaitReady is a no-op for SSH: NewSSH already blocked on a synchronous dial and
+// handshake, so a constructed *SSH is connected. Later drops are handled by the
+// background reconnect loop and surfaced via OnState, not gated here.
+func (s *SSH) WaitReady(_ context.Context) error { return nil }
+
 func (s *SSH) DialTCP(ctx context.Context, dst netip.AddrPort) (net.Conn, error) {
 	s.mu.Lock()
 	c := s.client

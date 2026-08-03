@@ -60,7 +60,8 @@ func (f *fakeTunnelTransport) DialTCP(_ context.Context, _ netip.AddrPort) (net.
 func (f *fakeTunnelTransport) DialUDP(_ context.Context, _ netip.AddrPort) (net.PacketConn, error) {
 	return nil, transport.ErrUnsupportedProtocol
 }
-func (f *fakeTunnelTransport) Close() error { return nil }
+func (f *fakeTunnelTransport) WaitReady(context.Context) error { return nil }
+func (f *fakeTunnelTransport) Close() error                    { return nil }
 
 func TestCoreProxyCountsTunneledTCP(t *testing.T) {
 	// Router in exclude mode with an empty set => every dst is Tunnel.

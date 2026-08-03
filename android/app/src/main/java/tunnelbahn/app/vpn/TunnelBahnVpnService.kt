@@ -109,6 +109,7 @@ class TunnelBahnVpnService : VpnService() {
         val fd = pfd.detachFd() // hand fd ownership to the Go core; it closes on Stop
         val s = Mobile.newSession()
         session = s
+        activeSession = s
         worker = Thread {
             try {
                 s.start(fd.toLong(), profile.toCoreConfigJson(), AndroidProtector(this), Sink())
@@ -173,6 +174,7 @@ class TunnelBahnVpnService : VpnService() {
         stopPolling()
         session?.stop()
         session = null
+        activeSession = null
         worker = null
         connectedSince.value = 0L
         exitIp.value = ""
@@ -194,6 +196,18 @@ class TunnelBahnVpnService : VpnService() {
 
     override fun onDestroy() {
         session?.stop()
+        // A system-initiated destroy where the process survives must not leave a stale Session
+        // handle that lets a later Tunnel canRun() pass on a dead session. Clear the same
+        // companion state normal teardown does.
+        session = null
+        activeSession = null
+        // Settle a live CONNECTING/RUNNING back to DISCONNECTED, but do NOT clobber a
+        // freshly latched STATE_ERROR: a failed connect (e.g. no internet) tears the
+        // service down via endSession(failed=true)->stopSelf, and the UI must keep
+        // showing "Failed to connect" until the next attempt clears it.
+        if (state.value == STATE_CONNECTING || state.value == STATE_RUNNING) {
+            state.value = STATE_DISCONNECTED
+        }
         super.onDestroy()
     }
 
@@ -330,5 +344,10 @@ class TunnelBahnVpnService : VpnService() {
         /** Exit-IP and its geo location, pushed once per session by the Go probe. */
         val exitIp = MutableStateFlow("")
         val exitLocation = MutableStateFlow("")
+
+        /** The live gomobile Session while running, for in-app callers (speed test).
+         *  Null when not connected. Volatile: written by the service thread, read by the UI. */
+        @Volatile
+        var activeSession: Session? = null
     }
 }

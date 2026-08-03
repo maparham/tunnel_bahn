@@ -50,3 +50,40 @@ func (a sinkAdapter) OnHostKey(line string) { a.s.OnHostKey(line) }
 func (a sinkAdapter) OnExitInfo(ip, city, country string) {
 	a.s.OnExitInfo(ip, city, country)
 }
+
+// SpeedTestSink receives speed-test progress. Implemented in Kotlin.
+type SpeedTestSink interface {
+	OnPhase(name string)
+	OnLatencySummary(medianMs, jitterMs float64)
+	OnSample(phase string, offsetSeconds float64, bytes int64)
+	OnResult(downloadMbps, uploadMbps, medianLatencyMs, jitterMs float64)
+	OnError(msg string)
+}
+
+type speedTestSinkAdapter struct{ s SpeedTestSink }
+
+func (a speedTestSinkAdapter) OnPhase(n string)                      { a.s.OnPhase(n) }
+func (a speedTestSinkAdapter) OnLatencySummary(m, j float64)         { a.s.OnLatencySummary(m, j) }
+func (a speedTestSinkAdapter) OnSample(p string, o float64, b int64) { a.s.OnSample(p, o, b) }
+func (a speedTestSinkAdapter) OnResult(d, u, m, j float64)           { a.s.OnResult(d, u, m, j) }
+func (a speedTestSinkAdapter) OnError(msg string)                    { a.s.OnError(msg) }
+
+// RunSpeedTest runs the tunnel-path speed test. Blocking; call off the main thread.
+func (s *Session) RunSpeedTest(sink SpeedTestSink) error {
+	return s.inner.RunTunnelSpeedTest(speedTestSinkAdapter{sink})
+}
+
+// CancelSpeedTest cancels an in-flight tunnel speed test.
+func (s *Session) CancelSpeedTest() { s.inner.CancelSpeedTest() }
+
+// DirectSpeedTest runs the direct-path speed test, independent of a session.
+type DirectSpeedTest struct{ inner *core.DirectSpeedTest }
+
+func NewDirectSpeedTest() *DirectSpeedTest { return &DirectSpeedTest{inner: core.NewDirectSpeedTest()} }
+
+// Run runs the direct-path speed test. Blocking; call off the main thread.
+func (d *DirectSpeedTest) Run(sink SpeedTestSink) error {
+	return d.inner.Run(speedTestSinkAdapter{sink})
+}
+
+func (d *DirectSpeedTest) Cancel() { d.inner.Cancel() }

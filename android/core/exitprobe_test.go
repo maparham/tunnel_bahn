@@ -32,7 +32,8 @@ func (blockingTransport) DialTCP(ctx context.Context, _ netip.AddrPort) (net.Con
 func (blockingTransport) DialUDP(context.Context, netip.AddrPort) (net.PacketConn, error) {
 	return nil, transport.ErrUnsupportedProtocol
 }
-func (blockingTransport) Close() error { return nil }
+func (blockingTransport) WaitReady(context.Context) error { return nil }
+func (blockingTransport) Close() error                    { return nil }
 
 func TestRunExitProbeHonorsCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())

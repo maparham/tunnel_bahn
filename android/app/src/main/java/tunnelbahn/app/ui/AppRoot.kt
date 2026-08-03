@@ -13,6 +13,7 @@ sealed interface Screen {
     data object Profiles : Screen
     /** [returnTo] is where onDone lands, so adding from Home returns to Home. */
     data class Edit(val profileId: String?, val returnTo: Screen) : Screen
+    data object SpeedTest : Screen
 }
 
 @Composable
@@ -31,6 +32,7 @@ fun AppRoot() {
             onProfiles = { screen = Screen.Profiles },
             onAddProfile = { screen = Screen.Edit(null, returnTo = Screen.Home) },
             onEditProfile = { id -> screen = Screen.Edit(id, returnTo = Screen.Home) },
+            onSpeedTest = { screen = Screen.SpeedTest },
         )
         is Screen.Profiles -> ProfilesScreen(
             onBack = { screen = Screen.Home },
@@ -41,5 +43,6 @@ fun AppRoot() {
             profileId = s.profileId,
             onDone = { screen = s.returnTo },
         )
+        is Screen.SpeedTest -> SpeedTestScreen(onBack = { screen = Screen.Home })
     }
 }

@@ -9,12 +9,19 @@ import (
 	"strings"
 	"sync"
 	"syscall"
+	"time"
 
 	"golang.org/x/crypto/ssh"
 
 	"tunnelbahn/core/transport"
 	"tunnelbahn/core/wstunnel"
 )
+
+// connectTimeout bounds how long Start waits for the transport to reach the server
+// before reporting a failed connect. WG on a good network handshakes in well under a
+// second; on a dead network the carrier dial error short-circuits the wait, so this
+// only bites a reachable-but-silent server.
+const connectTimeout = 15 * time.Second
 
 // Protector wraps VpnService.protect(fd): it keeps a socket outside the tunnel so
 // the carrier and bypass flows do not route back into the tun (no loop).
@@ -37,6 +44,9 @@ type Session struct {
 	eng    *engine
 	stopCh chan struct{}
 	ctr    *counters
+
+	stMu     sync.Mutex
+	stCancel context.CancelFunc
 }
 
 func NewSession() *Session { return &Session{} }
@@ -68,6 +78,38 @@ func (s *Session) Start(tunFD int, configJSON string, prot Protector, sink Event
 	router := NewRouter(cfg.Mode, cfg.activeRuleSet())
 	proxy := newCoreProxy(newDispatcher(router, cfg.Resolver.Addr()), tr, cfg.Resolver, prot, ctr)
 
+	// Publish a stopCh and a cancellable context now, before the readiness gate, so a
+	// user Stop during "Connecting" cancels the gate promptly instead of waiting it out.
+	ctx, cancel := context.WithCancel(context.Background())
+	s.mu.Lock()
+	s.stopCh = make(chan struct{})
+	stopCh := s.stopCh
+	s.mu.Unlock()
+	go func() {
+		<-stopCh
+		cancel()
+	}()
+
+	// Gate on the transport actually reaching the server before committing the tun to
+	// an engine and announcing "running". WG builds and brings its device up with zero
+	// network I/O, so without this the UI would show Connected on a dead network. The
+	// tun fd is still owned by the deferred close on this failure path (started==false).
+	readyCtx, readyCancel := context.WithTimeout(ctx, connectTimeout)
+	err = tr.WaitReady(readyCtx)
+	readyCancel()
+	if err != nil {
+		cancel()
+		tr.Close()
+		s.mu.Lock()
+		ch := s.stopCh
+		s.stopCh = nil
+		s.mu.Unlock()
+		if ch != nil {
+			close(ch) // unblock the watcher goroutine if Stop has not already
+		}
+		return err
+	}
+
 	// The tun MTU (set by VpnService) and the engine MTU must match to avoid MSS
 	// clamping mismatches; both derive from the profile's mtu.
 	mtu := cfg.MTU
@@ -76,7 +118,15 @@ func (s *Session) Start(tunFD int, configJSON string, prot Protector, sink Event
 	}
 	eng, err := startEngine(tunFD, mtu, proxy)
 	if err != nil {
+		cancel()
 		tr.Close()
+		s.mu.Lock()
+		ch := s.stopCh
+		s.stopCh = nil
+		s.mu.Unlock()
+		if ch != nil {
+			close(ch)
+		}
 		return err
 	}
 	started = true // the engine now owns the fd and closes it on Stop
@@ -85,16 +135,7 @@ func (s *Session) Start(tunFD int, configJSON string, prot Protector, sink Event
 	s.tr = tr
 	s.eng = eng
 	s.ctr = ctr
-	s.stopCh = make(chan struct{})
-	stopCh := s.stopCh
 	s.mu.Unlock()
-
-	// Tie a cancellable context to stopCh so Stop cancels an in-flight exit probe.
-	ctx, cancel := context.WithCancel(context.Background())
-	go func() {
-		<-stopCh
-		cancel()
-	}()
 
 	if sink != nil {
 		sink.OnState("running")
@@ -141,6 +182,53 @@ func (s *Session) Stop() {
 	s.mu.Unlock()
 	if ch != nil {
 		close(ch)
+	}
+}
+
+// RunTunnelSpeedTest runs the speed test over the live transport. Blocking; call off-thread.
+// The run's context is tied to the session's stopCh, so a tunnel drop (Stop/endSession)
+// cancels the run promptly. This is load-bearing: the Kotlin coroutine is parked in this
+// blocking JNI call and cannot self-interrupt, so cancellation MUST come from the Go side.
+func (s *Session) RunTunnelSpeedTest(sink SpeedTestSink) error {
+	s.mu.Lock()
+	tr := s.tr
+	stopCh := s.stopCh
+	s.mu.Unlock()
+	if tr == nil {
+		err := fmt.Errorf("tunnel not running")
+		sink.OnError(err.Error())
+		return err
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	s.stMu.Lock()
+	s.stCancel = cancel
+	s.stMu.Unlock()
+	defer func() {
+		s.stMu.Lock()
+		s.stCancel = nil
+		s.stMu.Unlock()
+		cancel()
+	}()
+	// Cancel the run when the session stops (drop) or when it finishes normally.
+	if stopCh != nil {
+		go func() {
+			select {
+			case <-stopCh:
+				cancel()
+			case <-ctx.Done():
+			}
+		}()
+	}
+	return runSpeedTest(ctx, tunnelDialTLS(tr), sink)
+}
+
+// CancelSpeedTest cancels an in-flight tunnel speed test, if any.
+func (s *Session) CancelSpeedTest() {
+	s.stMu.Lock()
+	c := s.stCancel
+	s.stMu.Unlock()
+	if c != nil {
+		c()
 	}
 }
 

@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/netip"
 	"testing"
+	"time"
 
 	"golang.org/x/crypto/ssh"
 )
@@ -102,5 +103,25 @@ func TestSSHDialTCPEchoes(t *testing.T) {
 
 	if _, err := tr.DialUDP(context.Background(), dst); err != ErrUnsupportedProtocol {
 		t.Fatalf("DialUDP: want ErrUnsupportedProtocol, got %v", err)
+	}
+}
+
+// NewSSH already dialed and handshaked synchronously, so WaitReady is a no-op that
+// returns nil promptly: the session can announce "running" the moment SSH is built.
+func TestSSHWaitReadyNoopWhenConnected(t *testing.T) {
+	addr, hostPub, signer := startTestSSHD(t)
+	tr, err := NewSSH(SSHConfig{
+		Addr: addr, User: "u", Signer: signer, HostKey: hostPub,
+		Dial: func(_ context.Context, network, a string) (net.Conn, error) { return net.Dial(network, a) },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tr.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := tr.WaitReady(ctx); err != nil {
+		t.Fatalf("WaitReady: want nil for a connected SSH transport, got %v", err)
 	}
 }

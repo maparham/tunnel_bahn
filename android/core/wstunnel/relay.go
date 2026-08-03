@@ -37,10 +37,12 @@ type Relay struct {
 
 	writeMu sync.Mutex
 
-	stateMu sync.Mutex
-	conn    net.Conn
-	br      *bufio.Reader
-	closed  bool
+	stateMu       sync.Mutex
+	conn          net.Conn
+	br            *bufio.Reader
+	closed        bool
+	dialAttempted bool
+	dialErr       error
 }
 
 func NewRelay(cfg Config, dial DialFunc) *Relay {
@@ -50,11 +52,30 @@ func NewRelay(cfg Config, dial DialFunc) *Relay {
 func (r *Relay) ensure(ctx context.Context) error {
 	r.once.Do(func() {
 		r.err = r.open(ctx)
+		// Publish the outcome under stateMu so DialErr can read it race-free from
+		// another goroutine (the readiness gate) while WG drives this dial.
+		r.stateMu.Lock()
+		r.dialAttempted = true
+		r.dialErr = r.err
+		r.stateMu.Unlock()
 		if r.err == nil {
 			go r.readLoop()
 		}
 	})
 	return r.err
+}
+
+// DialErr reports the result of the one-shot carrier dial: nil if the dial has not
+// been attempted yet or succeeded, or the dial error if it failed. WG's keepalive
+// drives the first dial on device Up, so a readiness gate can poll this to fail fast
+// when the server is unreachable instead of waiting out a handshake timeout.
+func (r *Relay) DialErr() error {
+	r.stateMu.Lock()
+	defer r.stateMu.Unlock()
+	if !r.dialAttempted {
+		return nil
+	}
+	return r.dialErr
 }
 
 func (r *Relay) open(ctx context.Context) error {

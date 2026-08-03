@@ -9,6 +9,7 @@ import (
 	"net/netip"
 	"strings"
 	"sync"
+	"time"
 
 	"golang.zx2c4.com/wireguard/conn"
 	"golang.zx2c4.com/wireguard/device"
@@ -156,6 +157,48 @@ func NewWGWS(cfg WGConfig) (*WGWS, error) {
 		return nil, err
 	}
 	return &WGWS{dev: dev, tnet: tnet, relay: cfg.Relay}, nil
+}
+
+// WaitReady blocks until the WG peer completes its first handshake (proving the
+// tunnel actually reaches the server), or ctx is done, or the carrier dial fails.
+//
+// NewWGWS does zero network I/O, and dev.Up() only brings the local device up, so a
+// constructed WGWS is not yet connected. The peer's persistent keepalive makes
+// wireguard-go send a handshake initiation on Up, which drives the relay's lazy dial;
+// we poll last_handshake_time_sec until it goes non-zero. If that dial fails outright
+// (no internet), DialErr surfaces it immediately so we do not idle until the ctx
+// deadline.
+func (w *WGWS) WaitReady(ctx context.Context) error {
+	t := time.NewTicker(150 * time.Millisecond)
+	defer t.Stop()
+	for {
+		if w.handshakeComplete() {
+			return nil
+		}
+		if err := w.relay.DialErr(); err != nil {
+			return err
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-t.C:
+		}
+	}
+}
+
+// handshakeComplete reports whether the WG peer has a completed handshake, read from
+// the device's uapi "last_handshake_time_sec" line (0 until the first handshake).
+func (w *WGWS) handshakeComplete() bool {
+	uapi, err := w.dev.IpcGet()
+	if err != nil {
+		return false
+	}
+	for _, line := range strings.Split(uapi, "\n") {
+		if v, ok := strings.CutPrefix(line, "last_handshake_time_sec="); ok {
+			return strings.TrimSpace(v) != "" && strings.TrimSpace(v) != "0"
+		}
+	}
+	return false
 }
 
 func (w *WGWS) DialTCP(ctx context.Context, dst netip.AddrPort) (net.Conn, error) {
