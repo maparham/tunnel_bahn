@@ -539,6 +539,10 @@ final class VPNManager: ObservableObject {
                     )
                 }
             }
+            // Narrowed utun includedRoutes (include-mode destination filter) mean the tunnel no
+            // longer owns the default route, so nothing outside the filter CIDRs — including the
+            // speed test helper's measurement traffic — can traverse it.
+            let tunnelRoutesNarrowed = tunnelIncludedRoutes != nil
             let fileRuntimeData = try makeRuntimeStateData(
                 profile: extensionProfile,
                 includeSecrets: false,
@@ -560,7 +564,7 @@ final class VPNManager: ObservableObject {
                 useAppTunnelNEStack: useAppTunnelNEStack,
                 hasDefaultRoute: profileHasDefaultRoute(profile: extensionProfile),
                 destinationSplitActive: destinationSplitActive,
-                narrowedRoutes: tunnelIncludedRoutes != nil
+                narrowedRoutes: tunnelRoutesNarrowed
             )
             managerSavedEnabledThisAttempt = true
 
@@ -624,7 +628,8 @@ final class VPNManager: ObservableObject {
                     rulesForVPNManagerCount: rulesForVPNManager.count,
                     destinationSplitActive: destinationSplitActive,
                     destinationFilterIsAllowedIPsDerived: destinationFilterIsAllowedIPsDerived,
-                    isFullTunnelDestFilterShape: isFullTunnelDestFilterShape
+                    isFullTunnelDestFilterShape: isFullTunnelDestFilterShape,
+                    tunnelRoutesNarrowed: tunnelRoutesNarrowed
                 )
             case .connected:
                 await applySuccessfulConnectPostTunnel(
@@ -636,7 +641,8 @@ final class VPNManager: ObservableObject {
                     rulesForVPNManagerCount: rulesForVPNManager.count,
                     destinationSplitActive: destinationSplitActive,
                     destinationFilterIsAllowedIPsDerived: destinationFilterIsAllowedIPsDerived,
-                    isFullTunnelDestFilterShape: isFullTunnelDestFilterShape
+                    isFullTunnelDestFilterShape: isFullTunnelDestFilterShape,
+                    tunnelRoutesNarrowed: tunnelRoutesNarrowed
                 )
             }
         } catch {
@@ -766,7 +772,8 @@ final class VPNManager: ObservableObject {
         rulesForVPNManagerCount: Int,
         destinationSplitActive: Bool,
         destinationFilterIsAllowedIPsDerived: Bool = false,
-        isFullTunnelDestFilterShape: Bool = false
+        isFullTunnelDestFilterShape: Bool = false,
+        tunnelRoutesNarrowed: Bool
     ) async {
         // Mirror the grace from waitForTunnelConnectOutcome: NE can flicker to .disconnected
         // during forPerAppVPN manager reconfiguration transitions before settling into .connecting.
@@ -790,7 +797,8 @@ final class VPNManager: ObservableObject {
                     rulesForVPNManagerCount: rulesForVPNManagerCount,
                     destinationSplitActive: destinationSplitActive,
                     destinationFilterIsAllowedIPsDerived: destinationFilterIsAllowedIPsDerived,
-                    isFullTunnelDestFilterShape: isFullTunnelDestFilterShape
+                    isFullTunnelDestFilterShape: isFullTunnelDestFilterShape,
+                    tunnelRoutesNarrowed: tunnelRoutesNarrowed
                 )
                 return
             }
@@ -829,7 +837,8 @@ final class VPNManager: ObservableObject {
                 rulesForVPNManagerCount: rulesForVPNManagerCount,
                 destinationSplitActive: destinationSplitActive,
                 destinationFilterIsAllowedIPsDerived: destinationFilterIsAllowedIPsDerived,
-                isFullTunnelDestFilterShape: isFullTunnelDestFilterShape
+                isFullTunnelDestFilterShape: isFullTunnelDestFilterShape,
+                tunnelRoutesNarrowed: tunnelRoutesNarrowed
             )
             return
         }
@@ -861,7 +870,8 @@ final class VPNManager: ObservableObject {
         rulesForVPNManagerCount: Int,
         destinationSplitActive: Bool,
         destinationFilterIsAllowedIPsDerived: Bool = false,
-        isFullTunnelDestFilterShape: Bool = false
+        isFullTunnelDestFilterShape: Bool = false,
+        tunnelRoutesNarrowed: Bool
     ) async {
         Self.osLog.notice(
             "[connect] applySuccessfulConnectPostTunnel hasAppTunnelSelection=\(hasAppTunnelSelection) useAppTunnelNEStack=\(useAppTunnelNEStack) profileOkForAccounting=\(profileOkForAccounting) destinationSplitActive=\(destinationSplitActive) allowedIPsDerived=\(destinationFilterIsAllowedIPsDerived) isFullTunnelDestFilterShape=\(isFullTunnelDestFilterShape)"
@@ -878,6 +888,10 @@ final class VPNManager: ObservableObject {
         stats.destinationFilterAllowedIPsDerived = destinationFilterIsAllowedIPsDerived
         connectedTransportIsSSH = profile.transport == .ssh
         stats.tunnelHasDefaultRoute = profileOkForAccounting && !destinationSplitActive
+        // The speed test helper always carries its own NEAppRule in app-tunnel shapes, so it rides
+        // the tunnel whenever the utun still owns the default route — a destination filter that only
+        // narrows other apps' flows (exclude mode, or app-tunnel split) does not disqualify it.
+        stats.helperInternetPathIsTunnel = profileOkForAccounting && !tunnelRoutesNarrowed
 
         if useTransparentProxy {
             Self.osLog.notice("[connect] calling perAppStatsProxy.enable() destinationSplit=\(destinationSplitActive)")
@@ -1368,6 +1382,7 @@ final class VPNManager: ObservableObject {
         stats.perAppStatsCollectionActive = false
         stats.tunnelHasDefaultRoute = false
         stats.hostAppInternetPathIsTunnel = false
+        stats.helperInternetPathIsTunnel = false
         stats.bytesIn = 0
         stats.bytesOut = 0
         stats.rxBytesPerSecond = 0
@@ -1669,6 +1684,7 @@ final class VPNManager: ObservableObject {
                 stats.publicIPLocation = nil
                 stats.tunnelHasDefaultRoute = false
                 stats.hostAppInternetPathIsTunnel = false
+                stats.helperInternetPathIsTunnel = false
                 stats.connectivityProbeResult = .unknown
             }
         @unknown default: stats.state = .error

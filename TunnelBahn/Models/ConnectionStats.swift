@@ -55,9 +55,11 @@ struct ConnectionStats: Codable {
     var transparentProxyMemoryUsage: UInt64
     /// Wall-clock time of the last merged write from either extension.
     var extensionStatsUpdatedAt: Date?
-    /// True when the connected profile includes a default route (0.0.0.0/0 or ::/0) — i.e. internet
-    /// traffic flows through the tunnel. False for LAN-only / split-destination profiles where internet
-    /// requests from TunnelBahn itself will fail if the host app is in the NEAppRule list.
+    /// True when the connected profile includes a default route (0.0.0.0/0 or ::/0) AND no
+    /// destination split is active — i.e. the app's own internet requests reach the tunnel.
+    /// False for LAN-only profiles and for destination-filtered sessions, where internet requests
+    /// from TunnelBahn itself do not go through the tunnel. Drives the connectivity probe, the
+    /// public-IP refresh, and the Profiles reachability badge.
     var tunnelHasDefaultRoute: Bool
     /// Result of the post-connect connectivity probe. Not persisted (excluded from Codable).
     var connectivityProbeResult: ConnectivityProbeResult = .unknown
@@ -81,6 +83,13 @@ struct ConnectionStats: Codable {
     /// included in the NEAppRule list. Drives the speed test's Tunnel/Direct classification.
     /// Not persisted (session-scoped, set at connect).
     var hostAppInternetPathIsTunnel: Bool = false
+
+    /// True while the bundled speed test helper's internet traffic traverses the tunnel: connected
+    /// with a default-route profile and a utun that still owns that default route. Unlike
+    /// `hostAppInternetPathIsTunnel` this stays true under a destination split, because the helper
+    /// always gets its own NEAppRule in app-tunnel shapes and so bypasses the destination filter.
+    /// Not persisted (session-scoped, set at connect).
+    var helperInternetPathIsTunnel: Bool = false
 
     // Exclude connectivityProbeResult and competingProxySigningIDs from Codable synthesis.
     private enum CodingKeys: String, CodingKey {

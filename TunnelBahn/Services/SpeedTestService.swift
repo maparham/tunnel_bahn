@@ -51,18 +51,18 @@ final class SpeedTestService: ObservableObject {
     var isRunning: Bool { phase != .idle }
 
     /// Whether the given card's Run button should be enabled. Tunnel runs go through the
-    /// bundled helper, so they only need a connected tunnel that routes internet traffic
-    /// (default-route profile, no destination split). Direct runs go through the host app,
-    /// so they need the host's own path to be direct.
+    /// bundled helper, which has its own NEAppRule, so they only need a tunnel that still owns
+    /// the default route — a destination split does not disqualify them. Direct runs go through
+    /// the host app, so they need the host's own path to be direct.
     func canRun(_ path: SpeedTestPath) -> Bool {
-        guard !isRunning else { return false }
         let stats = vpnManager.stats
-        switch path {
-        case .tunnel:
-            return stats.state == .connected && stats.tunnelHasDefaultRoute
-        case .direct:
-            return stats.state != .connected || !stats.hostAppInternetPathIsTunnel
-        }
+        return SpeedTestGate.canRun(
+            path: path,
+            isRunning: isRunning,
+            isConnected: stats.state == .connected,
+            helperInternetPathIsTunnel: stats.helperInternetPathIsTunnel,
+            hostAppInternetPathIsTunnel: stats.hostAppInternetPathIsTunnel
+        )
     }
 
     /// Connected profile name, for labeling tunnel results.
@@ -82,10 +82,10 @@ final class SpeedTestService: ObservableObject {
         struct PathSignature: Equatable {
             let state: VPNConnectionState
             let isTunnel: Bool
-            let tunnelHasDefaultRoute: Bool
+            let helperPathIsTunnel: Bool
         }
         vpnManager.$stats
-            .map { PathSignature(state: $0.state, isTunnel: $0.hostAppInternetPathIsTunnel, tunnelHasDefaultRoute: $0.tunnelHasDefaultRoute) }
+            .map { PathSignature(state: $0.state, isTunnel: $0.hostAppInternetPathIsTunnel, helperPathIsTunnel: $0.helperInternetPathIsTunnel) }
             .removeDuplicates()
             .dropFirst()
             .receive(on: DispatchQueue.main)
