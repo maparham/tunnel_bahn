@@ -53,4 +53,7 @@ struct SpeedTestResult {
     let finishedAt: Date
     let downloadSamples: [ThroughputSample]
     let uploadSamples: [ThroughputSample]
+    /// Public IP the run exited from, and where it geolocates. Nil when the lookup failed.
+    let exitIP: String?
+    let exitLocation: String?
 }

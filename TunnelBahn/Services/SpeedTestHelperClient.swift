@@ -55,6 +55,12 @@ final class SpeedTestHelperClient: Sendable {
             }
             onEvent(.latencySummary(medianMs: median, jitterMs: jitter))
             return nil
+        case "exit_ip":
+            guard let ip = decoded.exitIP else {
+                throw SpeedTestHelperClientError.malformedLine(String(line.prefix(200)))
+            }
+            onEvent(.exitIP(ip: ip, location: decoded.exitLocation))
+            return nil
         case "result":
             guard let payload = decoded.result else {
                 throw SpeedTestHelperClientError.malformedLine(String(line.prefix(200)))

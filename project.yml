@@ -164,8 +164,10 @@ targets:
       - path: Shared/SpeedTestHelperProtocol.swift
       - path: Shared/SpeedTestEngine.swift
       - path: Shared/SpeedTestMath.swift
+      - path: Shared/ExitIPProbe.swift
       - path: Shared/ConnectivityProbeResult.swift
       - path: TunnelBahn/Services/SpeedTestHelperClient.swift
+      - path: TunnelBahn/Services/AndroidProfileQRCodec.swift
     settings:
       base:
         INFOPLIST_FILE: Tests/Unit/Info.plist
@@ -183,6 +185,7 @@ targets:
       - path: Shared/Constants.swift
       - path: Shared/SharedLogWriter.swift
       - path: Shared/SpeedTestMath.swift
+      - path: Shared/ExitIPProbe.swift
       - path: Shared/ConnectivityProbeResult.swift
       - path: TunnelBahn/Models/SpeedTestResult.swift
     settings:

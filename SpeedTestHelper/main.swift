@@ -28,6 +28,8 @@ case "run":
                 emit(SpeedTestHelperLine(event: "sample", readout: readout, offsetSeconds: offsetSeconds, bytes: bytes))
             case .latencySummary(let medianMs, let jitterMs):
                 emit(SpeedTestHelperLine(event: "latency_summary", medianLatencyMs: medianMs, jitterMs: jitterMs))
+            case .exitIP(let ip, let location):
+                emit(SpeedTestHelperLine(event: "exit_ip", exitIP: ip, exitLocation: location))
             }
         }
         emit(SpeedTestHelperLine(event: "result", result: payload))

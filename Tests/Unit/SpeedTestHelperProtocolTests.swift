@@ -22,11 +22,19 @@ final class SpeedTestHelperProtocolTests: XCTestCase {
             medianLatencyMs: 24,
             jitterMs: 2.5,
             downloadSamples: [ThroughputSample(offsetSeconds: 0.25, mbps: 480)],
-            uploadSamples: [ThroughputSample(offsetSeconds: 0.25, mbps: 90)]
+            uploadSamples: [ThroughputSample(offsetSeconds: 0.25, mbps: 90)],
+            exitIP: "203.0.113.7",
+            exitLocation: "Frankfurt, Hesse, Germany"
         )
         let line = SpeedTestHelperLine(event: "result", result: payload)
         let encoded = try XCTUnwrap(line.encodedLine())
         XCTAssertEqual(SpeedTestHelperLine.decode(encoded)?.result, payload)
+    }
+
+    func testExitIPLineRoundTrip() throws {
+        let line = SpeedTestHelperLine(event: "exit_ip", exitIP: "203.0.113.7", exitLocation: "Frankfurt, Hesse, Germany")
+        let encoded = try XCTUnwrap(line.encodedLine())
+        XCTAssertEqual(SpeedTestHelperLine.decode(encoded), line)
     }
 
     func testErrorLineRoundTrip() throws {

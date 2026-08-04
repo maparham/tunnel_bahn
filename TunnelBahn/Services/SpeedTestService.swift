@@ -21,6 +21,9 @@ final class SpeedTestService: ObservableObject {
         var jitterMs: Double?
         var download: LiveTransfer?
         var upload: LiveTransfer?
+        /// Filled in before the first phase, so the card names its exit while the run is live.
+        var exitIP: String?
+        var exitLocation: String?
 
         struct LiveTransfer {
             var mbps: Double
@@ -150,7 +153,9 @@ final class SpeedTestService: ObservableObject {
                 jitterMs: payload.jitterMs,
                 finishedAt: Date(),
                 downloadSamples: payload.downloadSamples,
-                uploadSamples: payload.uploadSamples
+                uploadSamples: payload.uploadSamples,
+                exitIP: payload.exitIP,
+                exitLocation: payload.exitLocation
             )
             switch path {
             case .tunnel: tunnelResult = result
@@ -182,6 +187,9 @@ final class SpeedTestService: ObservableObject {
         case .latencySummary(let medianMs, let jitterMs):
             liveRun?.latencyMs = medianMs
             liveRun?.jitterMs = jitterMs
+        case .exitIP(let ip, let location):
+            liveRun?.exitIP = ip
+            liveRun?.exitLocation = location
         case .sample(let readout, let offsetSeconds, let bytes):
             guard let offsetSeconds, let bytes else {
                 liveRun?.latencyReadout = readout

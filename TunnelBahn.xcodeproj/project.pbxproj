@@ -7,9 +7,6 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
-		AA0000000000000000000003 /* AndroidProfileQRCodec.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000001 /* AndroidProfileQRCodec.swift */; };
-		AA0000000000000000000004 /* AndroidProfileQRCodec.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000001 /* AndroidProfileQRCodec.swift */; };
-		AA0000000000000000000005 /* AndroidProfileQRCodecTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000002 /* AndroidProfileQRCodecTests.swift */; };
 		014C2FCBF12405FEFD835E63 /* ProfileDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B3B3A483CAA076196A178605 /* ProfileDetailView.swift */; };
 		022E0BCCF76A6FDB45C4492E /* main.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB7CC0C01690D66AAF808579 /* main.swift */; };
 		027F3B9FEA04135D6224A3D0 /* DestinationRouting.swift in Sources */ = {isa = PBXBuildFile; fileRef = D78392AE063F46CA11402F13 /* DestinationRouting.swift */; };
@@ -29,9 +26,11 @@
 		0C2D82BB9763235B13639EE2 /* DestinationRuleStorePerModeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 43C8CF75689341B6E2E90E14 /* DestinationRuleStorePerModeTests.swift */; };
 		0C34DC702950D29297AEED31 /* TunnelConnectivityProbe.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E9C7A1F60DF111BAC794B1F /* TunnelConnectivityProbe.swift */; };
 		0C581364B33F6F61D5722E55 /* SharedLogWriter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 748BFC2AF3A11879E344CF2E /* SharedLogWriter.swift */; };
+		0D4FA3C9888A23EF86822E6F /* ExitIPProbe.swift in Sources */ = {isa = PBXBuildFile; fileRef = FDE6360EAC0CDF9AC94FB3A0 /* ExitIPProbe.swift */; };
 		0D70007620371D92A627174E /* DestinationRouting.swift in Sources */ = {isa = PBXBuildFile; fileRef = D78392AE063F46CA11402F13 /* DestinationRouting.swift */; };
 		0E01FE6ABEB46E16049338BC /* DestinationSectionToggles.swift in Sources */ = {isa = PBXBuildFile; fileRef = ACD291CEFA112A73BADA3135 /* DestinationSectionToggles.swift */; };
 		0E304F12798C57930DC3DB52 /* EndpointBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8108BE3F731F12F6601FB84C /* EndpointBridge.swift */; };
+		0EE206C81A20FC53D388B43B /* ExitIPProbe.swift in Sources */ = {isa = PBXBuildFile; fileRef = FDE6360EAC0CDF9AC94FB3A0 /* ExitIPProbe.swift */; };
 		1029D65CDDF3C881CBCC35F6 /* WGTunnelJWT.swift in Sources */ = {isa = PBXBuildFile; fileRef = 96F40C554C8EC710FF48B351 /* WGTunnelJWT.swift */; };
 		102CE3107F086849B1E80A50 /* TCPWrapperConfigCodec.swift in Sources */ = {isa = PBXBuildFile; fileRef = 83C0A2650F93F783E2DEFF8A /* TCPWrapperConfigCodec.swift */; };
 		10972EE8489BBB0959E38D42 /* PerAppIdentityMap.swift in Sources */ = {isa = PBXBuildFile; fileRef = 925B86B12D5DC6FCBB010E74 /* PerAppIdentityMap.swift */; };
@@ -45,6 +44,7 @@
 		15A579815DA16D2B43EF3A76 /* SSHHostKeyStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = DE60DF9A0143017FBC482723 /* SSHHostKeyStore.swift */; };
 		16BD6220B88191040553B363 /* SysextReplacementPolicyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0F8142A1A52B4A204430785 /* SysextReplacementPolicyTests.swift */; };
 		176999E4564C566ED799E4FA /* TunnelRouteShape.swift in Sources */ = {isa = PBXBuildFile; fileRef = 010A76BC7A7D8A3C98D56331 /* TunnelRouteShape.swift */; };
+		17BB4370DAC477F03B97240A /* AndroidProfileQRCodecTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1288B849EB4A4525C84BC85D /* AndroidProfileQRCodecTests.swift */; };
 		17E45DD8D44E2B067098C054 /* WireGuardTCPWrapper.swift in Sources */ = {isa = PBXBuildFile; fileRef = 20ACA34BB4ED59ED85434A6D /* WireGuardTCPWrapper.swift */; };
 		19983D532895D0D988774F22 /* SSHProfile.swift in Sources */ = {isa = PBXBuildFile; fileRef = 29E109AFF9EE8302B6965E4C /* SSHProfile.swift */; };
 		19A0BF9B046537FC9CCD7033 /* UDPDatagramRoutingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DF4C6F487D5A538C1E2A6ECF /* UDPDatagramRoutingTests.swift */; };
@@ -61,6 +61,7 @@
 		2739DCF613E1351843A87F95 /* main.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5B5D39405B8A30C258107CE7 /* main.swift */; };
 		27B5010BB946EEF514F24B46 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = 47903689BD5C8A5EDA5F9C5A /* PrivacyInfo.xcprivacy */; };
 		27EDCA620298FE518812E883 /* WireGuardProfile.swift in Sources */ = {isa = PBXBuildFile; fileRef = 597D1A15AF482ECB340F8519 /* WireGuardProfile.swift */; };
+		29B294424DB67D7D1A65ADEC /* ExitIPProbe.swift in Sources */ = {isa = PBXBuildFile; fileRef = FDE6360EAC0CDF9AC94FB3A0 /* ExitIPProbe.swift */; };
 		2A3981ACBD6448C3B6161E9D /* Constants.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5FD44AFE7F187FA0508C1EC3 /* Constants.swift */; };
 		2B50B217B55FE57FF1CBC8E1 /* SpeedTestMath.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8971347C742627A9072E5C27 /* SpeedTestMath.swift */; };
 		3123B8751BCDA072D51F023D /* DestinationCidrBulkGroup.swift in Sources */ = {isa = PBXBuildFile; fileRef = 23799F926EEDE7443B12A296 /* DestinationCidrBulkGroup.swift */; };
@@ -106,13 +107,16 @@
 		5E0249FEE3548CAA4114D3AB /* ProcessResourceSampler.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6D115DCEFD0728C235552677 /* ProcessResourceSampler.swift */; };
 		5FABEE07D69B9C2B32B07328 /* ProfileRoutingStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = B4ECCB8AADB792D2100AF34B /* ProfileRoutingStore.swift */; };
 		603E69CD57BF3BD1EAA92B93 /* DestinationCidrBulkGroup.swift in Sources */ = {isa = PBXBuildFile; fileRef = 23799F926EEDE7443B12A296 /* DestinationCidrBulkGroup.swift */; };
+		60EE1B513C933B9C6970BC3C /* ExitIPProbe.swift in Sources */ = {isa = PBXBuildFile; fileRef = FDE6360EAC0CDF9AC94FB3A0 /* ExitIPProbe.swift */; };
 		613403EDF29052C1716C4A9A /* DestinationModeRuleSet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 10E2B6C28F1AF63AEDD684D8 /* DestinationModeRuleSet.swift */; };
 		61D1F3423C9F02E71DED9C25 /* TCPWrapperConfigCodec.swift in Sources */ = {isa = PBXBuildFile; fileRef = 83C0A2650F93F783E2DEFF8A /* TCPWrapperConfigCodec.swift */; };
 		627E3762335C3042F993ECFD /* AppGroup.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A326E604708829F35A2C2FE /* AppGroup.swift */; };
 		645E45AFF63D847F56C88567 /* AppBackup.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1BB8A172AE3AB9DE5971BBB /* AppBackup.swift */; };
 		6A02F45914681CF879D0A996 /* DestinationCidrBulkGroup.swift in Sources */ = {isa = PBXBuildFile; fileRef = 23799F926EEDE7443B12A296 /* DestinationCidrBulkGroup.swift */; };
 		6A875DEF40282A9C962FB171 /* ProfileEditorSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6DF2B41F806A433B201BFFDA /* ProfileEditorSheet.swift */; };
+		6A95E7875B1BF481601C4FEF /* AndroidProfileQRCodec.swift in Sources */ = {isa = PBXBuildFile; fileRef = A66397F4BE5CA6E8D1BC1148 /* AndroidProfileQRCodec.swift */; };
 		6AA13820BB8D91B4226E4FC2 /* WireGuardTCPWrapper.swift in Sources */ = {isa = PBXBuildFile; fileRef = 20ACA34BB4ED59ED85434A6D /* WireGuardTCPWrapper.swift */; };
+		6BE7F22C6157BA5B6254BC23 /* AndroidProfileQRCodec.swift in Sources */ = {isa = PBXBuildFile; fileRef = A66397F4BE5CA6E8D1BC1148 /* AndroidProfileQRCodec.swift */; };
 		6CA153D164DFC4C20347F757 /* PerDestinationCounterAggregator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 03ABE89825ADE7047580191F /* PerDestinationCounterAggregator.swift */; };
 		700C61FBDAF08267932AF206 /* DestinationRuleStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0FF498AA49464F1ADD8B8D60 /* DestinationRuleStore.swift */; };
 		7365E242225D556D2DE65003 /* WireGuardProfile.swift in Sources */ = {isa = PBXBuildFile; fileRef = 597D1A15AF482ECB340F8519 /* WireGuardProfile.swift */; };
@@ -140,6 +144,7 @@
 		8DFBFB0DC5A51DB7C9BE3B93 /* BuildStampView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0B46E999C89C21E4365C8F0 /* BuildStampView.swift */; };
 		8FFE82963E66E3D37A97FD0E /* SpeedTestResult.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0B2D42B5A08AF2A37EE522EB /* SpeedTestResult.swift */; };
 		90690117DEA38BA9F5242751 /* WireGuardConfigTCPWrapperTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 436CBF313E8934ED0DE2F9A8 /* WireGuardConfigTCPWrapperTests.swift */; };
+		9091E164C6B0BD5749AFD091 /* SpeedTestGateTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A7D0A75810DEC87026D95A3F /* SpeedTestGateTests.swift */; };
 		90E609CF0B7509F6FC46372E /* RelayWireFrame.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8172D2F62168E74984689F83 /* RelayWireFrame.swift */; };
 		9218BD1308ABA5BBCDE2D1E6 /* AppGroup.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A326E604708829F35A2C2FE /* AppGroup.swift */; };
 		9251C9221C3C37AC119CC489 /* AppGroup.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A326E604708829F35A2C2FE /* AppGroup.swift */; };
@@ -153,7 +158,6 @@
 		99DBF552B25C9A2C55F509D4 /* BuildInfo.swift in Sources */ = {isa = PBXBuildFile; fileRef = CE3E1BCC9751C9C8054A99B9 /* BuildInfo.swift */; };
 		9A35E9242DE88AB9AEF5DF4B /* AppLog.swift in Sources */ = {isa = PBXBuildFile; fileRef = C555A6EC9D28808AD8B285BE /* AppLog.swift */; };
 		9ABD8CC81040FC616DD9D42D /* SpeedTestMathTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 755E2A7FDB0631CA70D2A41D /* SpeedTestMathTests.swift */; };
-		AA10FC0000000000000000B1 /* SpeedTestGateTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA10FC0000000000000000A1 /* SpeedTestGateTests.swift */; };
 		9C58252B83BCBFC4392969DD /* WGTCPWrapperRelay.swift in Sources */ = {isa = PBXBuildFile; fileRef = 43688349C593EAABEBFB8120 /* WGTCPWrapperRelay.swift */; };
 		9C6F18B022DA3CE8022BB563 /* VPNManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = CF5CCD4C2857BFC6B0CC64D5 /* VPNManager.swift */; };
 		9C96C74B7E5F615BDED14A8D /* ProfileRoutingSnapshot.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7203132BD62E6535BAFA5268 /* ProfileRoutingSnapshot.swift */; };
@@ -172,6 +176,8 @@
 		A7236DEDC5D196CAE299BE89 /* ProfileListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0E0A94BF06DD5B0AE3302B9C /* ProfileListView.swift */; };
 		A795F9984DD264323A8560DC /* PerAppSigningCatalog.swift in Sources */ = {isa = PBXBuildFile; fileRef = 58E05756E27A7F82EAE7E623 /* PerAppSigningCatalog.swift */; };
 		A86E88A2EAE8BE3B64B79F5D /* ResourceMonitor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8662E8905AA143B0792E3460 /* ResourceMonitor.swift */; };
+		A964895BD7E93305026880A6 /* ExitIPProbeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 75A330BD26294E2B95EC4CB6 /* ExitIPProbeTests.swift */; };
+		AC81EA4D727F0B516C272BE6 /* ExitIPProbe.swift in Sources */ = {isa = PBXBuildFile; fileRef = FDE6360EAC0CDF9AC94FB3A0 /* ExitIPProbe.swift */; };
 		AD04AD58E4051D15E0B23E00 /* TCPWrapperConfigCodec.swift in Sources */ = {isa = PBXBuildFile; fileRef = 83C0A2650F93F783E2DEFF8A /* TCPWrapperConfigCodec.swift */; };
 		AD0969FAC4FADDE8E0FA0319 /* SpeedTestMath.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8971347C742627A9072E5C27 /* SpeedTestMath.swift */; };
 		AE002EF8D50B5715C57F9BDD /* PerAppSigningCatalog.swift in Sources */ = {isa = PBXBuildFile; fileRef = 58E05756E27A7F82EAE7E623 /* PerAppSigningCatalog.swift */; };
@@ -305,8 +311,6 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
-		AA0000000000000000000001 /* AndroidProfileQRCodec.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AndroidProfileQRCodec.swift; sourceTree = "<group>"; };
-		AA0000000000000000000002 /* AndroidProfileQRCodecTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AndroidProfileQRCodecTests.swift; sourceTree = "<group>"; };
 		010A76BC7A7D8A3C98D56331 /* TunnelRouteShape.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TunnelRouteShape.swift; sourceTree = "<group>"; };
 		03ABE89825ADE7047580191F /* PerDestinationCounterAggregator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PerDestinationCounterAggregator.swift; sourceTree = "<group>"; };
 		05001C79DA1982E77CB30793 /* LogsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LogsView.swift; sourceTree = "<group>"; };
@@ -318,6 +322,7 @@
 		0E0A94BF06DD5B0AE3302B9C /* ProfileListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProfileListView.swift; sourceTree = "<group>"; };
 		0FF498AA49464F1ADD8B8D60 /* DestinationRuleStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DestinationRuleStore.swift; sourceTree = "<group>"; };
 		10E2B6C28F1AF63AEDD684D8 /* DestinationModeRuleSet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DestinationModeRuleSet.swift; sourceTree = "<group>"; };
+		1288B849EB4A4525C84BC85D /* AndroidProfileQRCodecTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AndroidProfileQRCodecTests.swift; sourceTree = "<group>"; };
 		132EDEF0EA68675638E19645 /* WireGuardConfigParser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WireGuardConfigParser.swift; sourceTree = "<group>"; };
 		147A18331F2C2E8D4BE615DC /* ConnectionStats.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectionStats.swift; sourceTree = "<group>"; };
 		1B55AE43555852786D1D7E49 /* RoutingMode.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RoutingMode.swift; sourceTree = "<group>"; };
@@ -373,7 +378,7 @@
 		7280270F66534C0574E7B2C9 /* SmoltcpRelayBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SmoltcpRelayBridge.swift; sourceTree = "<group>"; };
 		748BFC2AF3A11879E344CF2E /* SharedLogWriter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SharedLogWriter.swift; sourceTree = "<group>"; };
 		755E2A7FDB0631CA70D2A41D /* SpeedTestMathTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpeedTestMathTests.swift; sourceTree = "<group>"; };
-		AA10FC0000000000000000A1 /* SpeedTestGateTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpeedTestGateTests.swift; sourceTree = "<group>"; };
+		75A330BD26294E2B95EC4CB6 /* ExitIPProbeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExitIPProbeTests.swift; sourceTree = "<group>"; };
 		7758E4B01EF07FE4AFE8EA1C /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		7A326E604708829F35A2C2FE /* AppGroup.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppGroup.swift; sourceTree = "<group>"; };
 		7AAA1FCAD780732BB9EAA949 /* WGTCPWrapperRelayTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WGTCPWrapperRelayTests.swift; sourceTree = "<group>"; };
@@ -403,6 +408,8 @@
 		9F17F6C4055FC55613166EF9 /* SpeedTestEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpeedTestEngine.swift; sourceTree = "<group>"; };
 		A1BD680CCC456AA0DBEE0047 /* TransparentProxyRelayClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TransparentProxyRelayClient.swift; sourceTree = "<group>"; };
 		A56B1DE7C326C9F499E31D20 /* AppState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppState.swift; sourceTree = "<group>"; };
+		A66397F4BE5CA6E8D1BC1148 /* AndroidProfileQRCodec.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AndroidProfileQRCodec.swift; sourceTree = "<group>"; };
+		A7D0A75810DEC87026D95A3F /* SpeedTestGateTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpeedTestGateTests.swift; sourceTree = "<group>"; };
 		ACD291CEFA112A73BADA3135 /* DestinationSectionToggles.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DestinationSectionToggles.swift; sourceTree = "<group>"; };
 		AFB1B465358966C01999ACA3 /* SysextReplacementPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SysextReplacementPolicy.swift; sourceTree = "<group>"; };
 		B0F8142A1A52B4A204430785 /* SysextReplacementPolicyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SysextReplacementPolicyTests.swift; sourceTree = "<group>"; };
@@ -449,6 +456,7 @@
 		FA4697EAC901C64656CC48F7 /* RelayFlowTransport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RelayFlowTransport.swift; sourceTree = "<group>"; };
 		FB7CC0C01690D66AAF808579 /* main.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = main.swift; sourceTree = "<group>"; };
 		FCE101ED62A34E86DDD8A55F /* TCPWrapperConfigCodecTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TCPWrapperConfigCodecTests.swift; sourceTree = "<group>"; };
+		FDE6360EAC0CDF9AC94FB3A0 /* ExitIPProbe.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExitIPProbe.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -582,7 +590,7 @@
 		6F7870A8A816866F9C1FBAB9 /* Services */ = {
 			isa = PBXGroup;
 			children = (
-				AA0000000000000000000001 /* AndroidProfileQRCodec.swift */,
+				A66397F4BE5CA6E8D1BC1148 /* AndroidProfileQRCodec.swift */,
 				C1BB8A172AE3AB9DE5971BBB /* AppBackup.swift */,
 				9C3EBCDA1A0C341A0630B092 /* AppDiscoveryService.swift */,
 				9295D880B3CBBD2AF7DF3388 /* AppRuleStore.swift */,
@@ -614,16 +622,17 @@
 		8302FE1151B97911B1E940DF /* Unit */ = {
 			isa = PBXGroup;
 			children = (
-				AA0000000000000000000002 /* AndroidProfileQRCodecTests.swift */,
+				1288B849EB4A4525C84BC85D /* AndroidProfileQRCodecTests.swift */,
 				089E892C735D440F61FEAFA1 /* DestinationRoutingModeTests.swift */,
 				43C8CF75689341B6E2E90E14 /* DestinationRuleStorePerModeTests.swift */,
+				75A330BD26294E2B95EC4CB6 /* ExitIPProbeTests.swift */,
 				E629683F7392901EDFDE8CDB /* Info.plist */,
 				692EFA42BF336F3C93F19A94 /* ProfileRoutingSnapshotCodecTests.swift */,
 				C2C76AE31D6C59B473C2740A /* SpeedTestEngineTests.swift */,
+				A7D0A75810DEC87026D95A3F /* SpeedTestGateTests.swift */,
 				67E8F1AE1CF18CBD99354633 /* SpeedTestHelperClientTests.swift */,
 				244C11CD570862377BF1939A /* SpeedTestHelperProtocolTests.swift */,
 				755E2A7FDB0631CA70D2A41D /* SpeedTestMathTests.swift */,
-				AA10FC0000000000000000A1 /* SpeedTestGateTests.swift */,
 				B0F8142A1A52B4A204430785 /* SysextReplacementPolicyTests.swift */,
 				FCE101ED62A34E86DDD8A55F /* TCPWrapperConfigCodecTests.swift */,
 				1EA6DE0080125D49F4001A23 /* TCPWrapperEnabledFlagTests.swift */,
@@ -693,6 +702,7 @@
 				97B1D4F190095588CBEB6E11 /* ConnectivityProbeResult.swift */,
 				5FD44AFE7F187FA0508C1EC3 /* Constants.swift */,
 				D78392AE063F46CA11402F13 /* DestinationRouting.swift */,
+				FDE6360EAC0CDF9AC94FB3A0 /* ExitIPProbe.swift */,
 				B8E4AA7BE0C447E51BE149BC /* KeychainService.swift */,
 				925B86B12D5DC6FCBB010E74 /* PerAppIdentityMap.swift */,
 				58E05756E27A7F82EAE7E623 /* PerAppSigningCatalog.swift */,
@@ -1070,8 +1080,8 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				AA0000000000000000000004 /* AndroidProfileQRCodec.swift in Sources */,
-				AA0000000000000000000005 /* AndroidProfileQRCodecTests.swift in Sources */,
+				6BE7F22C6157BA5B6254BC23 /* AndroidProfileQRCodec.swift in Sources */,
+				17BB4370DAC477F03B97240A /* AndroidProfileQRCodecTests.swift in Sources */,
 				9251C9221C3C37AC119CC489 /* AppGroup.swift in Sources */,
 				EA31616FBB4B4152791A103F /* AppLog.swift in Sources */,
 				B4E96509298A4607568EE819 /* AppRule.swift in Sources */,
@@ -1087,6 +1097,8 @@
 				85FBAE99C2386CAB871CDD53 /* DestinationRuleStore.swift in Sources */,
 				0C2D82BB9763235B13639EE2 /* DestinationRuleStorePerModeTests.swift in Sources */,
 				9486737C5C8ABE21004DC688 /* DestinationSectionToggles.swift in Sources */,
+				0D4FA3C9888A23EF86822E6F /* ExitIPProbe.swift in Sources */,
+				A964895BD7E93305026880A6 /* ExitIPProbeTests.swift in Sources */,
 				BA39D6C36C3608C249058CC5 /* KeychainService.swift in Sources */,
 				54D7C5A28F63CCAE643F6747 /* ProfileRoutingSnapshot.swift in Sources */,
 				5CFC714F5D34F040318C7A66 /* ProfileRoutingSnapshotCodecTests.swift in Sources */,
@@ -1096,13 +1108,13 @@
 				0307DA1B17F9DCDF85FA5597 /* SharedLogWriter.swift in Sources */,
 				1F8EAA4AEAC1B6CEECFEB3A9 /* SpeedTestEngine.swift in Sources */,
 				CAD632AAE3FEB000F18FBF1E /* SpeedTestEngineTests.swift in Sources */,
+				9091E164C6B0BD5749AFD091 /* SpeedTestGateTests.swift in Sources */,
 				BA4F22CDAD10CFB6D8DDEB07 /* SpeedTestHelperClient.swift in Sources */,
 				437F0D5746D35A777CA93C63 /* SpeedTestHelperClientTests.swift in Sources */,
 				F7B0C15499111247B0BD3A47 /* SpeedTestHelperProtocol.swift in Sources */,
 				32544F2E785736AEFA5A1691 /* SpeedTestHelperProtocolTests.swift in Sources */,
 				EDC20F63180154DB3ED0A5D8 /* SpeedTestMath.swift in Sources */,
 				9ABD8CC81040FC616DD9D42D /* SpeedTestMathTests.swift in Sources */,
-				AA10FC0000000000000000B1 /* SpeedTestGateTests.swift in Sources */,
 				9954C28BC054F6978C88C37F /* SpeedTestResult.swift in Sources */,
 				A355AB0F4DE30500ED3550B7 /* SysextReplacementPolicy.swift in Sources */,
 				16BD6220B88191040553B363 /* SysextReplacementPolicyTests.swift in Sources */,
@@ -1144,6 +1156,7 @@
 				C231187759A8DDD60E924364 /* DestinationModeRuleSet.swift in Sources */,
 				7E90A632EB40AB5B8B1A97E3 /* DestinationRouting.swift in Sources */,
 				40F75D6E4DAC6DF85C9B46B4 /* DestinationSectionToggles.swift in Sources */,
+				60EE1B513C933B9C6970BC3C /* ExitIPProbe.swift in Sources */,
 				139A74645FABEA868BEFD896 /* KeychainService.swift in Sources */,
 				83F7A2736B5E56EC8342004F /* PacketTunnelProvider.swift in Sources */,
 				BB6EC204C7FC5589F969B2BF /* PacketTunnelRelayServer.swift in Sources */,
@@ -1186,6 +1199,7 @@
 				4A666E9D077F956AE9D2C3A3 /* AppLog.swift in Sources */,
 				437D5D526CB97D0063E0A1E8 /* ConnectivityProbeResult.swift in Sources */,
 				BEF9418FA24795D7D1215BC4 /* Constants.swift in Sources */,
+				0EE206C81A20FC53D388B43B /* ExitIPProbe.swift in Sources */,
 				E87110DF67956AFE98E30E90 /* SharedLogWriter.swift in Sources */,
 				D9EE35DD94065496803856B0 /* SpeedTestEngine.swift in Sources */,
 				D8690361F9CD0D9E32369C77 /* SpeedTestHelperProtocol.swift in Sources */,
@@ -1200,7 +1214,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				AA0000000000000000000003 /* AndroidProfileQRCodec.swift in Sources */,
+				6A95E7875B1BF481601C4FEF /* AndroidProfileQRCodec.swift in Sources */,
 				645E45AFF63D847F56C88567 /* AppBackup.swift in Sources */,
 				950889D4805B0B825BCFC1DC /* AppDiscoveryService.swift in Sources */,
 				9218BD1308ABA5BBCDE2D1E6 /* AppGroup.swift in Sources */,
@@ -1229,6 +1243,7 @@
 				0E01FE6ABEB46E16049338BC /* DestinationSectionToggles.swift in Sources */,
 				9F0656D786AA084B8C0D1C60 /* DomainResolutionCoordinator.swift in Sources */,
 				25DE2084079EB63FB5892E61 /* DomainResolver.swift in Sources */,
+				29B294424DB67D7D1A65ADEC /* ExitIPProbe.swift in Sources */,
 				D09AEE5FB1067A952BE70E74 /* InstantTooltip.swift in Sources */,
 				428F287EAFBF9878D30436DC /* KeychainService.swift in Sources */,
 				A685DC94E4525F366418659B /* LaunchAtLoginService.swift in Sources */,
@@ -1304,6 +1319,7 @@
 				F433B9A3B49C35D7A4A03AE4 /* DestinationRouting.swift in Sources */,
 				F47D9AB0E7497C6D5255291C /* DestinationSectionToggles.swift in Sources */,
 				0E304F12798C57930DC3DB52 /* EndpointBridge.swift in Sources */,
+				AC81EA4D727F0B516C272BE6 /* ExitIPProbe.swift in Sources */,
 				DE8098D54768316DFCDA0BC3 /* KeychainService.swift in Sources */,
 				DB47FCCFDD0A705F0FBA98C9 /* PerAppCounterAggregator.swift in Sources */,
 				10972EE8489BBB0959E38D42 /* PerAppIdentityMap.swift in Sources */,

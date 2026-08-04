@@ -130,6 +130,9 @@ enum SpeedTestEngineEvent: Equatable {
     /// Emitted once, after the latency phase completes, so the UI can show the
     /// settled median and jitter while the transfer phases run.
     case latencySummary(medianMs: Double, jitterMs: Double)
+    /// Emitted once, before any measurement, so the card can show which exit this
+    /// run is measuring while it is still running.
+    case exitIP(ip: String, location: String?)
 }
 
 struct SpeedTestEngineError: LocalizedError {
@@ -171,6 +174,14 @@ final class SpeedTestEngine: @unchecked Sendable {
     }
 
     func run(onEvent: @escaping @Sendable (SpeedTestEngineEvent) -> Void) async throws -> SpeedTestRunPayload {
+        // Probed first and on this process's own path, so the reported exit is the one the
+        // measurement below actually travels through. Sequential rather than concurrent: geo
+        // traffic overlapping the latency phase would skew the very numbers it annotates.
+        let exit = await ExitIPProbe.probe()
+        if let exit {
+            onEvent(.exitIP(ip: exit.ip, location: exit.location))
+        }
+        try Task.checkCancellation()
         onEvent(.phase(.latency))
         let latency = try await measureLatency(onEvent: onEvent)
         onEvent(.latencySummary(medianMs: latency.median, jitterMs: latency.jitter))
@@ -185,7 +196,9 @@ final class SpeedTestEngine: @unchecked Sendable {
             medianLatencyMs: latency.median,
             jitterMs: latency.jitter,
             downloadSamples: download.samples,
-            uploadSamples: upload.samples
+            uploadSamples: upload.samples,
+            exitIP: exit?.ip,
+            exitLocation: exit?.location
         )
     }
 

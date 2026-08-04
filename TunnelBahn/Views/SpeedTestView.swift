@@ -84,6 +84,12 @@ struct SpeedTestView: View {
                     }
                 }
                 Divider()
+                // Always rendered (with placeholders) so empty, running, and filled cards
+                // stay the same height and the two columns keep aligning.
+                exitRow(
+                    ip: isCardRunning ? service.liveRun?.exitIP : result?.exitIP,
+                    location: isCardRunning ? service.liveRun?.exitLocation : result?.exitLocation
+                )
                 Group {
                     if isCardRunning, let live = service.liveRun {
                         runningBody(live: live)
@@ -100,6 +106,25 @@ struct SpeedTestView: View {
                 .frame(maxWidth: .infinity, minHeight: Self.cardBodyMinHeight, alignment: .top)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    /// Exit address of the path this card measures, looked up by the measuring process itself,
+    /// so the Tunnel and Direct cards can show different exits at the same time.
+    private func exitRow(ip: String?, location: String?) -> some View {
+        HStack(spacing: 6) {
+            Text("Exit IP")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Text(ip ?? "--")
+                .font(.callout.monospacedDigit())
+                .foregroundStyle(ip == nil ? AnyShapeStyle(.tertiary) : AnyShapeStyle(.primary))
+            Text(ip == nil ? "" : (location ?? "Location unavailable"))
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .truncationMode(.tail)
+            Spacer(minLength: 0)
         }
     }
 

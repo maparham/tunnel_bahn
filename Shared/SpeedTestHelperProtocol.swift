@@ -31,11 +31,14 @@ struct SpeedTestRunPayload: Codable, Equatable {
     var jitterMs: Double
     var downloadSamples: [ThroughputSample]
     var uploadSamples: [ThroughputSample]
+    /// Exit IP seen by the measuring process; nil when the lookup failed.
+    var exitIP: String? = nil
+    var exitLocation: String? = nil
 }
 
 /// One NDJSON line on the helper's stdout. `event` selects which optional fields are set:
 /// "phase" -> phase; "sample" -> readout (plus offsetSeconds/bytes during transfer phases);
-/// "latency_summary" -> medianLatencyMs + jitterMs;
+/// "latency_summary" -> medianLatencyMs + jitterMs; "exit_ip" -> exitIP (plus exitLocation);
 /// "result" -> result (helper then exits 0); "error" -> message (helper then exits nonzero).
 struct SpeedTestHelperLine: Codable, Equatable {
     var event: String
@@ -45,6 +48,8 @@ struct SpeedTestHelperLine: Codable, Equatable {
     var bytes: Int? = nil
     var medianLatencyMs: Double? = nil
     var jitterMs: Double? = nil
+    var exitIP: String? = nil
+    var exitLocation: String? = nil
     var result: SpeedTestRunPayload? = nil
     var message: String? = nil
 }
