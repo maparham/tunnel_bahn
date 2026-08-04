@@ -30,7 +30,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.List
-import androidx.compose.material.icons.filled.Speed
+import tunnelbahn.app.ui.icons.Speed
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -81,9 +81,15 @@ fun HomeScreen(
 ) {
     val ctx = LocalContext.current
     val store = remember { ProfileStore(ctx) }
-    // Recreated on every entry into Home (AppRoot swaps composables), so this reads the
-    // latest selection without an explicit refresh.
-    val profile: Profile? = remember { store.selectedId()?.let { store.load(it) } }
+    // While a tunnel is live the hero shows the running profile; otherwise the selected
+    // one. Keying off the running id (not just the selection) stops an import-while-
+    // connected from relabelling the hero as connected to a profile that isn't the live
+    // tunnel. Recomputed on every entry into Home (AppRoot swaps composables), so it also
+    // reads the latest selection without an explicit refresh.
+    val runningId by TunnelBahnVpnService.runningProfileId.collectAsStateWithLifecycle()
+    val profile: Profile? = remember(runningId) {
+        (runningId ?: store.selectedId())?.let { store.load(it) }
+    }
 
     var importError by remember { mutableStateOf<String?>(null) }
     val launchImport = rememberQrImport(

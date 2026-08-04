@@ -1,6 +1,14 @@
 package wstunnel
 
-import "encoding/binary"
+import (
+	"encoding/binary"
+	"fmt"
+)
+
+// maxFramePayload caps a single decoded frame. WG-over-wstunnel datagrams are one MTU
+// (~1.3 KB), so 1 MiB is far above any legitimate frame while bounding the allocation a
+// garbled or hostile 64-bit length field could otherwise drive.
+const maxFramePayload = 1 << 20
 
 // WebSocket opcodes (RFC 6455 §5.2).
 const (
@@ -41,9 +49,9 @@ func encodeFrame(opcode byte, payload []byte) []byte {
 // payload, the number of bytes consumed, and ok=false if a full frame is not yet
 // buffered. It unmasks if the peer ever sets the mask bit (the server won't, but the
 // read path stays tolerant).
-func decodeFrame(buf []byte) (opcode byte, payload []byte, consumed int, ok bool) {
+func decodeFrame(buf []byte) (opcode byte, payload []byte, consumed int, ok bool, err error) {
 	if len(buf) < 2 {
-		return 0, nil, 0, false
+		return 0, nil, 0, false, nil
 	}
 	opcode = buf[0] & 0x0f
 	masked := buf[1]&0x80 != 0
@@ -52,30 +60,33 @@ func decodeFrame(buf []byte) (opcode byte, payload []byte, consumed int, ok bool
 	switch length {
 	case 126:
 		if len(buf) < off+2 {
-			return 0, nil, 0, false
+			return 0, nil, 0, false, nil
 		}
 		length = int(buf[off])<<8 | int(buf[off+1])
 		off += 2
 	case 127:
 		if len(buf) < off+8 {
-			return 0, nil, 0, false
+			return 0, nil, 0, false, nil
 		}
-		length = 0
-		for i := 0; i < 8; i++ {
-			length = length<<8 | int(buf[off+i])
+		// Read as uint64 and bound it before narrowing to int: a raw 64-bit length can
+		// exceed a 32-bit int (going negative) and would drive an unbounded make().
+		u := binary.BigEndian.Uint64(buf[off : off+8])
+		if u > maxFramePayload {
+			return 0, nil, 0, false, fmt.Errorf("wstunnel: frame payload too large: %d", u)
 		}
+		length = int(u)
 		off += 8
 	}
 	var mask [4]byte
 	if masked {
 		if len(buf) < off+4 {
-			return 0, nil, 0, false
+			return 0, nil, 0, false, nil
 		}
 		copy(mask[:], buf[off:off+4])
 		off += 4
 	}
 	if len(buf) < off+length {
-		return 0, nil, 0, false
+		return 0, nil, 0, false, nil
 	}
 	payload = make([]byte, length)
 	copy(payload, buf[off:off+length])
@@ -84,5 +95,5 @@ func decodeFrame(buf []byte) (opcode byte, payload []byte, consumed int, ok bool
 			payload[i] ^= mask[i%4]
 		}
 	}
-	return opcode, payload, off + length, true
+	return opcode, payload, off + length, true, nil
 }

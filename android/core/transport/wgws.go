@@ -128,9 +128,34 @@ type WGWS struct {
 func NewWGWS(cfg WGConfig) (*WGWS, error) {
 	tunDev, tnet, err := netstack.CreateNetTUN(cfg.LocalAddrs, cfg.DNS, mtuOrDefault(cfg.MTU))
 	if err != nil {
+		cfg.Relay.Close()
 		return nil, err
 	}
 	inbound := make(chan []byte, 256)
+	bind := newRelayBind(cfg.Relay.Send, inbound)
+	dev := device.NewDevice(tunDev, bind, device.NewLogger(device.LogLevelError, "wg "))
+
+	uapi, err := uapiConfig(cfg)
+	if err != nil {
+		dev.Close()
+		cfg.Relay.Close()
+		return nil, err
+	}
+	if err := dev.IpcSet(uapi); err != nil {
+		dev.Close()
+		cfg.Relay.Close()
+		return nil, err
+	}
+	if err := dev.Up(); err != nil {
+		dev.Close()
+		cfg.Relay.Close()
+		return nil, err
+	}
+	// Forward relay -> WG only after the device is up. Starting this before the
+	// fallible IpcSet/Up steps meant an early construction failure left the goroutine
+	// blocked on Recv() forever and the relay leaked (the relay dials lazily, so its
+	// Recv channel never closes on its own). close(inbound) fires when the relay is
+	// closed, which unblocks the bind's receive fn.
 	go func() {
 		defer close(inbound)
 		for dg := range cfg.Relay.Recv() {
@@ -140,22 +165,6 @@ func NewWGWS(cfg WGConfig) (*WGWS, error) {
 			}
 		}
 	}()
-	bind := newRelayBind(cfg.Relay.Send, inbound)
-	dev := device.NewDevice(tunDev, bind, device.NewLogger(device.LogLevelError, "wg "))
-
-	uapi, err := uapiConfig(cfg)
-	if err != nil {
-		dev.Close()
-		return nil, err
-	}
-	if err := dev.IpcSet(uapi); err != nil {
-		dev.Close()
-		return nil, err
-	}
-	if err := dev.Up(); err != nil {
-		dev.Close()
-		return nil, err
-	}
 	return &WGWS{dev: dev, tnet: tnet, relay: cfg.Relay}, nil
 }
 

@@ -20,7 +20,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.CheckCircle
-import androidx.compose.material.icons.filled.QrCodeScanner
+import tunnelbahn.app.ui.icons.QrCodeScanner
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -57,6 +57,7 @@ fun ProfilesScreen(onBack: () -> Unit, onAdd: () -> Unit, onEdit: (String) -> Un
     val ctx = LocalContext.current
     val store = remember { ProfileStore(ctx) }
     val state by TunnelBahnVpnService.state.collectAsStateWithLifecycle()
+    val runningId by TunnelBahnVpnService.runningProfileId.collectAsStateWithLifecycle()
     var profiles by remember { mutableStateOf(store.all()) }
     var selectedId by remember { mutableStateOf(store.selectedId()) }
     var confirmDelete by remember { mutableStateOf<Profile?>(null) }
@@ -131,11 +132,15 @@ fun ProfilesScreen(onBack: () -> Unit, onAdd: () -> Unit, onEdit: (String) -> Un
                 Text("No profiles yet. Tap + to add one.", Modifier.padding(top = 24.dp))
             }
             LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                // While a session is live the running profile owns the active highlight and
+                // the Disconnect button; only when idle does the merely-selected id decide.
+                // This keeps an import-while-connected from mislabelling the live tunnel.
+                val activeId = runningId ?: selectedId
                 items(profiles, key = { it.id }) { p ->
                     ProfileRow(
                         profile = p,
-                        active = p.id == selectedId,
-                        action = profileCardAction(p.id == selectedId, state),
+                        active = p.id == activeId,
+                        action = profileCardAction(p.id == activeId, state),
                         onConnect = { connectProfile(p.id) },
                         onDisconnect = { stopVpn(ctx) },
                         onEdit = { onEdit(p.id) },

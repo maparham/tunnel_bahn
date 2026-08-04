@@ -37,16 +37,19 @@ type Relay struct {
 
 	writeMu sync.Mutex
 
+	done chan struct{} // closed by Close to break the reconnect backoff promptly
+
 	stateMu       sync.Mutex
 	conn          net.Conn
 	br            *bufio.Reader
 	closed        bool
+	readStarted   bool
 	dialAttempted bool
 	dialErr       error
 }
 
 func NewRelay(cfg Config, dial DialFunc) *Relay {
-	return &Relay{cfg: cfg, dial: dial, inbox: make(chan []byte, 256)}
+	return &Relay{cfg: cfg, dial: dial, inbox: make(chan []byte, 256), done: make(chan struct{})}
 }
 
 func (r *Relay) ensure(ctx context.Context) error {
@@ -99,6 +102,18 @@ func (r *Relay) open(ctx context.Context) error {
 		return err
 	}
 
+	// Bound the TLS handshake + WS upgrade with an internal deadline. The driving
+	// Send path passes context.Background() (no deadline), so without this a server
+	// that completes the TCP dial but stalls mid-handshake would hang the WG send
+	// goroutine forever, and DialErr would never learn of it (it stays nil until open
+	// returns). Cleared once the upgrade completes. The deadline lives on the raw conn
+	// and continues to apply through the tls.Client wrapper below.
+	hsDeadline := time.Now().Add(15 * time.Second)
+	if dl, ok := ctx.Deadline(); ok && dl.Before(hsDeadline) {
+		hsDeadline = dl
+	}
+	_ = conn.SetDeadline(hsDeadline)
+
 	if u.Scheme == "wss" || r.cfg.TLSConfig != nil {
 		tlsCfg := r.cfg.TLSConfig
 		if tlsCfg == nil {
@@ -114,10 +129,6 @@ func (r *Relay) open(ctx context.Context) error {
 			return err
 		}
 		conn = tconn
-	}
-
-	if dl, ok := ctx.Deadline(); ok {
-		_ = conn.SetDeadline(dl)
 	}
 
 	proto, err := BuildTunnelRequest(r.cfg.ForwardHost, r.cfg.ForwardPort, 30*time.Second)
@@ -170,19 +181,68 @@ func (r *Relay) open(ctx context.Context) error {
 	_ = conn.SetDeadline(time.Time{}) // clear the handshake deadline
 
 	r.stateMu.Lock()
+	if r.closed {
+		// Close() ran while this dial was in flight. It saw a nil conn and could not
+		// close it, so publishing now would leak a live connection (and start a
+		// readLoop the caller believes is gone). Abort instead.
+		r.stateMu.Unlock()
+		conn.Close()
+		return fmt.Errorf("wstunnel: closed during dial")
+	}
 	r.conn = conn
 	r.br = br
+	r.readStarted = true
 	r.stateMu.Unlock()
 	return nil
 }
 
+// readLoop supervises the carrier for the life of the relay: it pumps frames from the
+// current connection and, when that connection drops, transparently re-dials and resumes
+// (like the SSH transport's reconnect loop) instead of tearing the tunnel down. WG
+// tolerates the gap and re-handshakes over the fresh carrier via its persistent
+// keepalive. It exits, closing inbox, only when the relay is Closed.
 func (r *Relay) readLoop() {
 	defer close(r.inbox)
+	for {
+		r.stateMu.Lock()
+		br := r.br
+		closed := r.closed
+		r.stateMu.Unlock()
+		if closed {
+			return
+		}
+		if br == nil {
+			if !r.reconnect() {
+				return // Closed before the carrier could be re-established.
+			}
+			continue
+		}
+
+		r.pump(br)
+
+		// pump returned: the carrier errored or the peer sent a close frame. Drop this
+		// connection; the top of the loop re-dials unless we've been Closed.
+		r.stateMu.Lock()
+		if r.conn != nil {
+			_ = r.conn.Close()
+		}
+		r.conn = nil
+		r.br = nil
+		r.stateMu.Unlock()
+	}
+}
+
+// pump reads and dispatches frames from one carrier until it errors or a close frame
+// arrives, then returns so the supervisor can decide whether to reconnect.
+func (r *Relay) pump(br *bufio.Reader) {
 	var buf []byte
 	tmp := make([]byte, 65536)
 	for {
 		for {
-			op, payload, consumed, ok := decodeFrame(buf)
+			op, payload, consumed, ok, err := decodeFrame(buf)
+			if err != nil {
+				return // malformed framing: the stream is desynced, drop the carrier
+			}
 			if !ok {
 				break
 			}
@@ -201,12 +261,42 @@ func (r *Relay) readLoop() {
 				return
 			}
 		}
-		n, err := r.br.Read(tmp)
+		n, err := br.Read(tmp)
 		if n > 0 {
 			buf = append(buf, tmp[:n]...)
 		}
 		if err != nil {
 			return
+		}
+	}
+}
+
+// reconnect re-dials the carrier with exponential backoff, publishing the fresh conn via
+// open(). Returns false if the relay is Closed before a connection is re-established.
+// This runs only after the first dial already succeeded, so it never masks an initial
+// "server unreachable" failure (that surfaces through DialErr/WaitReady).
+func (r *Relay) reconnect() bool {
+	backoff := 100 * time.Millisecond
+	for {
+		r.stateMu.Lock()
+		closed := r.closed
+		r.stateMu.Unlock()
+		if closed {
+			return false
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		err := r.open(ctx) // sets r.conn/r.br on success, or aborts if Closed mid-dial
+		cancel()
+		if err == nil {
+			return true
+		}
+		select {
+		case <-r.done:
+			return false
+		case <-time.After(backoff):
+		}
+		if backoff < 30*time.Second {
+			backoff *= 2
 		}
 	}
 }
@@ -244,9 +334,20 @@ func (r *Relay) Close() error {
 	}
 	r.closed = true
 	c := r.conn
+	started := r.readStarted
 	r.stateMu.Unlock()
+
+	close(r.done) // wake any reconnect backoff so the supervisor exits promptly
+
+	if !started {
+		// No supervisor ever started (the first dial never succeeded, or Send was never
+		// called), so nothing else will close inbox. Close it here so consumers ranging
+		// over Recv() (e.g. the WGWS forwarder) unblock instead of leaking. A started
+		// readLoop always closes inbox itself on exit, so this can't double-close.
+		close(r.inbox)
+	}
 	if c != nil {
-		return c.Close() // unblocks readLoop, which closes inbox
+		return c.Close() // unblocks pump; readLoop then sees closed and closes inbox
 	}
 	return nil
 }

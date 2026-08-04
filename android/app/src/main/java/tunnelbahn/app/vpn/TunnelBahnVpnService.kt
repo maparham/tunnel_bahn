@@ -91,6 +91,7 @@ class TunnelBahnVpnService : VpnService() {
             return START_NOT_STICKY
         }
         connectingProfileId = profile.id
+        runningProfileId.value = profile.id
         // Fresh attempt: clear the previous outcome so stale errors do not linger.
         reachedRunning = false
         userStopping = false
@@ -103,23 +104,32 @@ class TunnelBahnVpnService : VpnService() {
     }
 
     private fun startTunnel(profile: Profile) {
-        val builder = Builder()
-            .setSession("TunnelBahn")
-            .setMtu(if (profile.wgMtu > 0) profile.wgMtu else 1500)
-            .addAddress("10.0.0.2", 32)
+        // Configuring the builder can throw on malformed profile input (e.g. an IPv6 or
+        // otherwise unparseable resolver reaching addRoute/addDnsServer). Keep it inside
+        // the try so a bad profile latches STATE_ERROR instead of crashing the service
+        // out of onStartCommand.
+        val pfd = try {
+            val builder = Builder()
+                .setSession("TunnelBahn")
+                .setMtu(if (profile.wgMtu > 0) profile.wgMtu else 1500)
+                .addAddress("10.0.0.2", 32)
 
-        when (profile.routingMode) {
-            RoutingMode.EXCLUDE -> builder.addRoute("0.0.0.0", 0)
-            RoutingMode.INCLUDE -> {
-                profile.includeCIDRs.forEach { addRouteCidr(builder, it) }
-                resolverIp(profile.resolver)?.let { builder.addRoute(it, 32) }
+            when (profile.routingMode) {
+                RoutingMode.EXCLUDE -> builder.addRoute("0.0.0.0", 0)
+                RoutingMode.INCLUDE -> {
+                    profile.includeCIDRs.forEach { addRouteCidr(builder, it) }
+                    resolverIp(profile.resolver)?.let { builder.addRoute(it, 32) }
+                }
             }
+
+            resolverIp(profile.resolver)?.let { builder.addDnsServer(it) }
+            applyPerApp(builder, profile)
+            builder.establish()
+        } catch (e: Exception) {
+            lastError.value = e.message ?: "failed to configure VPN"
+            endSession(failed = true)
+            return
         }
-
-        resolverIp(profile.resolver)?.let { builder.addDnsServer(it) }
-        applyPerApp(builder, profile)
-
-        val pfd = builder.establish()
         if (pfd == null) {
             lastError.value = "VpnService.establish() returned null (consent revoked?)"
             endSession(failed = true)
@@ -179,8 +189,19 @@ class TunnelBahnVpnService : VpnService() {
     }
 
     private fun resolverIp(resolver: String): String? {
-        val i = resolver.lastIndexOf(':')
-        val ip = if (i > 0) resolver.substring(0, i) else resolver
+        val r = resolver.trim()
+        if (r.isEmpty()) return null
+        // Bracketed IPv6 with optional port: [2606:4700:4700::1111] or [..]:53
+        if (r.startsWith("[")) {
+            val end = r.indexOf(']')
+            return if (end > 1) r.substring(1, end) else null
+        }
+        // A bare IPv6 literal has multiple colons and no port; host:port has exactly one.
+        val ip = when (r.count { it == ':' }) {
+            0 -> r
+            1 -> r.substringBefore(':')
+            else -> r
+        }
         return ip.ifEmpty { null }
     }
 
@@ -207,6 +228,7 @@ class TunnelBahnVpnService : VpnService() {
             beginConnect(next)
             return
         }
+        runningProfileId.value = null
         if (failed) {
             state.value = STATE_ERROR
             Haptics.failure(this)
@@ -223,12 +245,14 @@ class TunnelBahnVpnService : VpnService() {
     }
 
     override fun onDestroy() {
+        stopPolling()
         session?.stop()
         // A system-initiated destroy where the process survives must not leave a stale Session
         // handle that lets a later Tunnel canRun() pass on a dead session. Clear the same
         // companion state normal teardown does.
         session = null
         activeSession = null
+        runningProfileId.value = null
         // Settle a live CONNECTING/RUNNING back to DISCONNECTED, but do NOT clobber a
         // freshly latched STATE_ERROR: a failed connect (e.g. no internet) tears the
         // service down via endSession(failed=true)->stopSelf, and the UI must keep
@@ -364,6 +388,12 @@ class TunnelBahnVpnService : VpnService() {
         /** Observed by the UI. Single-process, so a shared flow is simpler than a broadcast. */
         val state = MutableStateFlow(STATE_DISCONNECTED)
         val lastError = MutableStateFlow("")
+
+        /** Id of the profile currently connecting or running, or null when no session is
+         *  live. The Profiles list keys its active highlight and Disconnect button off this
+         *  (not the merely-selected id), so importing a profile while connected cannot
+         *  mislabel which profile owns the live tunnel. */
+        val runningProfileId = MutableStateFlow<String?>(null)
 
         /** Epoch millis when the tunnel reached RUNNING, or 0 when not running. Drives the
          *  Home screen's elapsed-time display. */

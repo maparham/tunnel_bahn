@@ -50,22 +50,32 @@ func (s *SSH) connect(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	s.mu.Lock()
+	hostKey := s.cfg.HostKey
+	s.mu.Unlock()
 	ccfg := &ssh.ClientConfig{
 		User: s.cfg.User,
 		Auth: []ssh.AuthMethod{ssh.PublicKeys(s.cfg.Signer)},
 	}
-	if s.cfg.HostKey != nil {
-		ccfg.HostKeyCallback = ssh.FixedHostKey(s.cfg.HostKey)
+	if hostKey != nil {
+		ccfg.HostKeyCallback = ssh.FixedHostKey(hostKey)
 		// Constrain negotiation to the pinned key's type, otherwise the server may
 		// present a different host key algorithm (e.g. ecdsa) that will never match
 		// the pinned key and the handshake fails with "host key mismatch".
-		ccfg.HostKeyAlgorithms = []string{s.cfg.HostKey.Type()}
+		ccfg.HostKeyAlgorithms = []string{hostKey.Type()}
 	} else {
-		// TOFU: accept whatever the server presents on this first connect and report it.
+		// TOFU: accept whatever the server presents on this first connect, report it,
+		// and pin it for the remainder of this session. Without pinning here, the
+		// background reconnect loop would re-run accept-any on every reconnect, so an
+		// on-path attacker (this app's threat model) could drop the carrier to force a
+		// reconnect and then present a substitute host key that is silently accepted.
 		ccfg.HostKeyCallback = func(_ string, _ net.Addr, key ssh.PublicKey) error {
 			if s.cfg.OnHostKey != nil {
 				s.cfg.OnHostKey(strings.TrimSpace(string(ssh.MarshalAuthorizedKey(key))))
 			}
+			s.mu.Lock()
+			s.cfg.HostKey = key
+			s.mu.Unlock()
 			return nil
 		}
 	}
@@ -76,6 +86,14 @@ func (s *SSH) connect(ctx context.Context) error {
 	}
 	client := ssh.NewClient(conn, chans, reqs)
 	s.mu.Lock()
+	if s.closed {
+		// Close() ran while this connect was mid-handshake. Don't publish the client
+		// or start keepAlive, or we'd leak a live connection and emit a spurious
+		// "connected" state after Close returned.
+		s.mu.Unlock()
+		client.Close()
+		return fmt.Errorf("ssh: closed during connect")
+	}
 	s.client = client
 	s.mu.Unlock()
 	if s.cfg.OnState != nil {

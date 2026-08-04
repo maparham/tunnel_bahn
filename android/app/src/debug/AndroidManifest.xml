@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <application>
+        <!-- DEBUG-ONLY: the headless e2e driver and its browsable deep link exist only in
+             debug builds. Keeping this out of src/main means the release APK ships no
+             externally reachable VPN control surface. -->
+        <activity
+            android:name=".debug.HeadlessDriver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="tunnelbahn-android" android:host="test" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>

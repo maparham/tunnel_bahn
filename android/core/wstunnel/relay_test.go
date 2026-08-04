@@ -5,6 +5,7 @@ import (
 	"context"
 	"io"
 	"net"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -31,9 +32,9 @@ func TestDecodeFrameExtendedLengthRoundTrip(t *testing.T) {
 		payload[i] = byte(i)
 	}
 	enc := encodeFrame(opBinary, payload)
-	op, got, consumed, ok := decodeFrame(enc)
-	if !ok || op != opBinary || consumed != len(enc) || string(got) != string(payload) {
-		t.Fatalf("roundtrip failed: ok=%v op=%d consumed=%d len=%d", ok, op, consumed, len(got))
+	op, got, consumed, ok, err := decodeFrame(enc)
+	if err != nil || !ok || op != opBinary || consumed != len(enc) || string(got) != string(payload) {
+		t.Fatalf("roundtrip failed: err=%v ok=%v op=%d consumed=%d len=%d", err, ok, op, consumed, len(got))
 	}
 }
 
@@ -77,7 +78,10 @@ func serveFakeWS(c net.Conn) {
 	tmp := make([]byte, 4096)
 	for {
 		for {
-			op, payload, consumed, ok := decodeFrame(buf)
+			op, payload, consumed, ok, err := decodeFrame(buf)
+			if err != nil {
+				return
+			}
 			if !ok {
 				break
 			}
@@ -120,4 +124,115 @@ func TestRelayLazyDialAndEcho(t *testing.T) {
 	case <-ctx.Done():
 		t.Fatal("timeout waiting for echo")
 	}
+}
+
+// upgradeFakeWS drains the client's HTTP upgrade request and writes the 101 response.
+func upgradeFakeWS(c net.Conn) *bufio.Reader {
+	br := bufio.NewReader(c)
+	for {
+		line, err := br.ReadString('\n')
+		if err != nil {
+			return nil
+		}
+		if line == "\r\n" {
+			break
+		}
+	}
+	io.WriteString(c, "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n")
+	return br
+}
+
+// serveFakeWSDropAfterOne completes the upgrade, echoes exactly one binary frame, then
+// hangs up, simulating a carrier that drops after being briefly usable.
+func serveFakeWSDropAfterOne(c net.Conn) {
+	defer c.Close()
+	br := upgradeFakeWS(c)
+	if br == nil {
+		return
+	}
+	var buf []byte
+	tmp := make([]byte, 4096)
+	for {
+		for {
+			op, payload, consumed, ok, err := decodeFrame(buf)
+			if err != nil || !ok {
+				break
+			}
+			buf = buf[consumed:]
+			if op == opBinary {
+				c.Write(encodeFrame(opBinary, payload))
+				return // drop the carrier right after one echo
+			}
+		}
+		n, err := br.Read(tmp)
+		if n > 0 {
+			buf = append(buf, tmp[:n]...)
+		}
+		if err != nil {
+			return
+		}
+	}
+}
+
+// TestRelayReconnectsAfterCarrierDrop proves the relay transparently re-dials when the
+// underlying carrier drops, instead of permanently killing the tunnel.
+func TestRelayReconnectsAfterCarrierDrop(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+
+	var accepted int32
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			// First carrier drops after one echo; the reconnect lands on a stable one.
+			if atomic.AddInt32(&accepted, 1) == 1 {
+				go serveFakeWSDropAfterOne(c)
+			} else {
+				go serveFakeWS(c)
+			}
+		}
+	}()
+
+	wsURL := "ws://" + ln.Addr().String() + "/p/events"
+	r := NewRelay(Config{WSURL: wsURL, ForwardHost: "127.0.0.1", ForwardPort: 51840},
+		func(ctx context.Context, network, a string) (net.Conn, error) {
+			return (&net.Dialer{}).DialContext(ctx, network, a)
+		})
+	defer r.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := r.Send(ctx, []byte("one")); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case got := <-r.Recv():
+		if string(got) != "one" {
+			t.Fatalf("first echo: %q", got)
+		}
+	case <-ctx.Done():
+		t.Fatal("timeout waiting for first echo")
+	}
+
+	// The server has now dropped carrier 1. Keep sending: sends during the reconnect
+	// window error and are dropped (WG would retransmit), but once the relay re-dials to
+	// carrier 2 a send lands and echoes back. Fail if that never happens.
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		_ = r.Send(context.Background(), []byte("two"))
+		select {
+		case got := <-r.Recv():
+			if string(got) == "two" {
+				return // reconnected and carried traffic again
+			}
+		case <-time.After(200 * time.Millisecond):
+		}
+	}
+	t.Fatal("relay did not recover after carrier drop")
 }

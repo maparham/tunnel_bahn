@@ -1,6 +1,7 @@
 package transport
 
 import (
+	"bytes"
 	"context"
 	"crypto/ed25519"
 	"net"
@@ -72,8 +73,22 @@ func TestSSHTOFUReportsHostKey(t *testing.T) {
 
 	time.Sleep(50 * time.Millisecond)
 	mu.Lock()
-	defer mu.Unlock()
-	if got != wantLine {
-		t.Fatalf("OnHostKey line = %q, want %q", got, wantLine)
+	gotLine := got
+	mu.Unlock()
+	if gotLine != wantLine {
+		t.Fatalf("OnHostKey line = %q, want %q", gotLine, wantLine)
+	}
+
+	// Security regression: after the first TOFU acceptance the key must be pinned into
+	// the live config so the background reconnect loop enforces FixedHostKey. Without
+	// this, an on-path attacker could force a reconnect and substitute a host key.
+	s.mu.Lock()
+	pinned := s.cfg.HostKey
+	s.mu.Unlock()
+	if pinned == nil {
+		t.Fatal("HostKey not pinned after TOFU: reconnect would re-accept any host key")
+	}
+	if !bytes.Equal(pinned.Marshal(), hostSigner.PublicKey().Marshal()) {
+		t.Fatalf("pinned HostKey = %x, want %x", pinned.Marshal(), hostSigner.PublicKey().Marshal())
 	}
 }

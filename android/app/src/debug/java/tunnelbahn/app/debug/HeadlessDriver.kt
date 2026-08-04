@@ -10,16 +10,16 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import tunnelbahn.app.profile.Profile
 import tunnelbahn.app.profile.ProfileStore
 import tunnelbahn.app.vpn.TunnelBahnVpnService
-import java.net.HttpURLConnection
-import java.net.URL
 
 /**
- * Headless e2e driver, mirroring the macOS tunnelbahn://test URL driver.
+ * Headless e2e driver, mirroring the macOS tunnelbahn://test URL driver. DEBUG-ONLY:
+ * this Activity lives in the debug source set so it (and its browsable intent filter)
+ * are compiled out of release builds entirely, never shipping a remotely-triggerable
+ * VPN control surface.
  *
  *   adb shell am start -a android.intent.action.VIEW \
  *     -d "tunnelbahn-android://test?profile=<id>" tunnelbahn.app
@@ -29,7 +29,8 @@ import java.net.URL
  *     -d "tunnelbahn-android://test?seed=<base64>" tunnelbahn.app
  *
  * It seeds/loads the profile, handles the one-time VPN consent dialog, waits for
- * RUNNING, fetches an exit-IP echo through the tunnel, and logs PASS/FAIL. View via:
+ * RUNNING, then waits for the Go core's through-tunnel exit IP and asserts it differs
+ * from the off-tunnel origin IP. View via:
  *   adb logcat -s TB_E2E
  */
 class HeadlessDriver : Activity() {
@@ -102,11 +103,20 @@ class HeadlessDriver : Activity() {
                 finish()
                 return@launch
             }
-            val direct = withContext(Dispatchers.IO) { fetchExitIp() }
-            if (direct != null) {
-                Log.i(TAG, "PASS: exit IP through tunnel = $direct")
-            } else {
-                Log.e(TAG, "FAIL: exit-IP probe failed through tunnel (err=${TunnelBahnVpnService.lastError.value})")
+            // Do NOT probe an echo service from this Activity: the app's own package is
+            // excluded from the tun in every routing scope, so such a request rides the
+            // normal network and returns the ORIGIN IP, passing on any connectivity (the
+            // documented false-PASS bug). The Go core measures the exit IP through the
+            // tunnel; gate PASS on that, and require it to differ from the off-tunnel origin.
+            val exit = awaitExitIp(timeoutMs = 15_000)
+            val origin = TunnelBahnVpnService.originIp.value
+            when {
+                exit == null ->
+                    Log.e(TAG, "FAIL: no exit IP from core within timeout (err=${TunnelBahnVpnService.lastError.value})")
+                origin.isNotBlank() && exit == origin ->
+                    Log.e(TAG, "FAIL: exit IP == origin IP ($exit); traffic is not traversing the tunnel")
+                else ->
+                    Log.i(TAG, "PASS: exit IP through tunnel = $exit (origin=${origin.ifBlank { "unknown" }})")
             }
             cleanupSeed()
             finish()
@@ -126,6 +136,18 @@ class HeadlessDriver : Activity() {
         return TunnelBahnVpnService.state.value == target
     }
 
+    /** Waits for the Go core to report the through-tunnel exit IP, or null on timeout. */
+    private suspend fun awaitExitIp(timeoutMs: Long): String? {
+        var waited = 0L
+        while (waited < timeoutMs) {
+            val v = TunnelBahnVpnService.exitIp.value
+            if (v.isNotBlank()) return v
+            delay(200)
+            waited += 200
+        }
+        return TunnelBahnVpnService.exitIp.value.ifBlank { null }
+    }
+
     /** Removes the throwaway profile this run seeded, if any. The service already holds
      *  the profile in memory, so deleting it from the store does not disturb the tunnel. */
     private fun cleanupSeed() {
@@ -135,19 +157,8 @@ class HeadlessDriver : Activity() {
         seededId = null
     }
 
-    private fun fetchExitIp(): String? = try {
-        val conn = URL(EXIT_IP_URL).openConnection() as HttpURLConnection
-        conn.connectTimeout = 10000
-        conn.readTimeout = 10000
-        conn.inputStream.bufferedReader().use { it.readText().trim() }
-    } catch (e: Exception) {
-        Log.e(TAG, "exit-IP probe error: ${e.message}")
-        null
-    }
-
     private companion object {
         const val TAG = "TB_E2E"
-        const val EXIT_IP_URL = "https://api.ipify.org"
         const val REQ_CONSENT = 1001
     }
 }
