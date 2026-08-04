@@ -543,6 +543,15 @@ final class VPNManager: ObservableObject {
             // longer owns the default route, so nothing outside the filter CIDRs — including the
             // speed test helper's measurement traffic — can traverse it.
             let tunnelRoutesNarrowed = tunnelIncludedRoutes != nil
+            // Whether the bundled speed test helper's traffic reaches the tunnel: the profile must
+            // route the internet, the utun must keep that route, and in NEAppRule shapes the helper
+            // rule must actually have been built (it is nil when the helper binary is missing).
+            // Anything else and a tunnel-side measurement would silently measure the direct path.
+            let helperRuleOnTunnel = !useAppTunnelNEStack || finalAppRules.contains {
+                $0.matchSigningIdentifier == SpeedTestHelperConstants.signingIdentifier
+            }
+            let helperInternetPathIsTunnel =
+                profileOkForAccounting && !tunnelRoutesNarrowed && helperRuleOnTunnel
             let fileRuntimeData = try makeRuntimeStateData(
                 profile: extensionProfile,
                 includeSecrets: false,
@@ -629,7 +638,7 @@ final class VPNManager: ObservableObject {
                     destinationSplitActive: destinationSplitActive,
                     destinationFilterIsAllowedIPsDerived: destinationFilterIsAllowedIPsDerived,
                     isFullTunnelDestFilterShape: isFullTunnelDestFilterShape,
-                    tunnelRoutesNarrowed: tunnelRoutesNarrowed
+                    helperInternetPathIsTunnel: helperInternetPathIsTunnel
                 )
             case .connected:
                 await applySuccessfulConnectPostTunnel(
@@ -642,7 +651,7 @@ final class VPNManager: ObservableObject {
                     destinationSplitActive: destinationSplitActive,
                     destinationFilterIsAllowedIPsDerived: destinationFilterIsAllowedIPsDerived,
                     isFullTunnelDestFilterShape: isFullTunnelDestFilterShape,
-                    tunnelRoutesNarrowed: tunnelRoutesNarrowed
+                    helperInternetPathIsTunnel: helperInternetPathIsTunnel
                 )
             }
         } catch {
@@ -773,7 +782,7 @@ final class VPNManager: ObservableObject {
         destinationSplitActive: Bool,
         destinationFilterIsAllowedIPsDerived: Bool = false,
         isFullTunnelDestFilterShape: Bool = false,
-        tunnelRoutesNarrowed: Bool
+        helperInternetPathIsTunnel: Bool
     ) async {
         // Mirror the grace from waitForTunnelConnectOutcome: NE can flicker to .disconnected
         // during forPerAppVPN manager reconfiguration transitions before settling into .connecting.
@@ -798,7 +807,7 @@ final class VPNManager: ObservableObject {
                     destinationSplitActive: destinationSplitActive,
                     destinationFilterIsAllowedIPsDerived: destinationFilterIsAllowedIPsDerived,
                     isFullTunnelDestFilterShape: isFullTunnelDestFilterShape,
-                    tunnelRoutesNarrowed: tunnelRoutesNarrowed
+                    helperInternetPathIsTunnel: helperInternetPathIsTunnel
                 )
                 return
             }
@@ -838,7 +847,7 @@ final class VPNManager: ObservableObject {
                 destinationSplitActive: destinationSplitActive,
                 destinationFilterIsAllowedIPsDerived: destinationFilterIsAllowedIPsDerived,
                 isFullTunnelDestFilterShape: isFullTunnelDestFilterShape,
-                tunnelRoutesNarrowed: tunnelRoutesNarrowed
+                helperInternetPathIsTunnel: helperInternetPathIsTunnel
             )
             return
         }
@@ -871,7 +880,7 @@ final class VPNManager: ObservableObject {
         destinationSplitActive: Bool,
         destinationFilterIsAllowedIPsDerived: Bool = false,
         isFullTunnelDestFilterShape: Bool = false,
-        tunnelRoutesNarrowed: Bool
+        helperInternetPathIsTunnel: Bool
     ) async {
         Self.osLog.notice(
             "[connect] applySuccessfulConnectPostTunnel hasAppTunnelSelection=\(hasAppTunnelSelection) useAppTunnelNEStack=\(useAppTunnelNEStack) profileOkForAccounting=\(profileOkForAccounting) destinationSplitActive=\(destinationSplitActive) allowedIPsDerived=\(destinationFilterIsAllowedIPsDerived) isFullTunnelDestFilterShape=\(isFullTunnelDestFilterShape)"
@@ -888,10 +897,7 @@ final class VPNManager: ObservableObject {
         stats.destinationFilterAllowedIPsDerived = destinationFilterIsAllowedIPsDerived
         connectedTransportIsSSH = profile.transport == .ssh
         stats.tunnelHasDefaultRoute = profileOkForAccounting && !destinationSplitActive
-        // The speed test helper always carries its own NEAppRule in app-tunnel shapes, so it rides
-        // the tunnel whenever the utun still owns the default route — a destination filter that only
-        // narrows other apps' flows (exclude mode, or app-tunnel split) does not disqualify it.
-        stats.helperInternetPathIsTunnel = profileOkForAccounting && !tunnelRoutesNarrowed
+        stats.helperInternetPathIsTunnel = helperInternetPathIsTunnel
 
         if useTransparentProxy {
             Self.osLog.notice("[connect] calling perAppStatsProxy.enable() destinationSplit=\(destinationSplitActive)")

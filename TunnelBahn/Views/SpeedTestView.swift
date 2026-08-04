@@ -26,7 +26,7 @@ struct SpeedTestView: View {
                         path: .tunnel,
                         title: "Tunnel",
                         result: service.tunnelResult,
-                        emptyHint: "Connect a tunnel and run the test to fill this column.",
+                        emptyHint: "Run the test with a tunnel that carries internet traffic to fill this column.",
                         enabledTooltip: "Runs through the connected tunnel using a bundled helper, even in per-app mode.",
                         disabledTooltip: "Connect a tunnel that routes internet traffic to enable this test."
                     )

@@ -85,9 +85,11 @@ struct ConnectionStats: Codable {
     var hostAppInternetPathIsTunnel: Bool = false
 
     /// True while the bundled speed test helper's internet traffic traverses the tunnel: connected
-    /// with a default-route profile and a utun that still owns that default route. Unlike
-    /// `hostAppInternetPathIsTunnel` this stays true under a destination split, because the helper
-    /// always gets its own NEAppRule in app-tunnel shapes and so bypasses the destination filter.
+    /// with a default-route profile, a utun that still owns that default route, and — in NEAppRule
+    /// shapes — a helper rule that was actually built. In plain full-tunnel shapes there are no
+    /// NEAppRules at all and the helper rides the system-wide utun like everything else. Unlike
+    /// `hostAppInternetPathIsTunnel` this stays true under a destination split, because the helper's
+    /// own NEAppRule bypasses the destination filter.
     /// Not persisted (session-scoped, set at connect).
     var helperInternetPathIsTunnel: Bool = false
 

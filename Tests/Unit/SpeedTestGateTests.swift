@@ -23,14 +23,15 @@ final class SpeedTestGateTests: XCTestCase {
         XCTAssertTrue(canRun(.tunnel, isConnected: true, helper: true, hostApp: true))
     }
 
-    /// App-tunnel with a destination filter: the host app stays direct, but the helper carries its
-    /// own NEAppRule into a utun that still owns the default route, so the tunnel test is valid.
-    func testTunnelEnabledWithDestinationSplitWhileHostAppIsDirect() {
+    /// The two paths are independent inputs: a direct host app (destination split, per-app mode)
+    /// must not disable the tunnel card. Whether the helper is really tunneled is decided in
+    /// VPNManager; this only asserts the gate does not conflate the two.
+    func testTunnelEnabledWhileHostAppPathIsDirect() {
         XCTAssertTrue(canRun(.tunnel, isConnected: true, helper: true, hostApp: false))
     }
 
-    /// Narrowed utun routes (include-mode full-tunnel filter) or a LAN-only profile: the helper
-    /// cannot reach the measurement endpoints through the tunnel.
+    /// Callers pass false when the helper cannot reach the measurement endpoints through the
+    /// tunnel (narrowed utun routes, LAN-only profile, or no helper NEAppRule).
     func testTunnelDisabledWhenHelperPathIsNotTunnel() {
         XCTAssertFalse(canRun(.tunnel, isConnected: true, helper: false, hostApp: false))
     }
