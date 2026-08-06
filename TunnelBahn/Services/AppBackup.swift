@@ -18,10 +18,13 @@ struct AppSettingsSnapshot: Codable {
 }
 
 struct ProfileBackupEntry: Codable {
-    // profile.interface.privateKeyRef is a stale keychain account ID — the actual
-    // key material travels in privateKeyValue. On import, a fresh account ID is minted.
+    // Keychain refs inside `profile` are stale account IDs — the actual key material
+    // travels in the *Value fields below. On import, fresh account IDs are minted.
     var profile: WireGuardProfile
-    var privateKeyValue: String
+    /// WG interface private key. nil for SSH-transport profiles (they carry no WG key).
+    var privateKeyValue: String?
     var peerPresharedKeys: [String: String]   // peer.id.uuidString -> raw PSK
+    /// PEM private key for SSH-transport profiles. nil otherwise.
+    var sshPrivateKeyValue: String?
     var routingSnapshot: ProfileRoutingSnapshot?
 }

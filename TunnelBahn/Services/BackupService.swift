@@ -40,6 +40,7 @@ enum BackupServiceError: LocalizedError {
     case unsupportedVersion(Int)
     case keychainReadFailed(profileName: String, underlying: Error)
     case keychainWriteFailed(profileName: String, underlying: Error)
+    case missingKeyMaterial(profileName: String)
 
     var errorDescription: String? {
         switch self {
@@ -49,6 +50,8 @@ enum BackupServiceError: LocalizedError {
             return "Could not read private key for profile \"\(name)\": \(err.localizedDescription)"
         case let .keychainWriteFailed(name, err):
             return "Could not save private key for profile \"\(name)\": \(err.localizedDescription)"
+        case let .missingKeyMaterial(name):
+            return "The backup entry for profile \"\(name)\" is missing its private key."
         }
     }
 }
@@ -99,7 +102,7 @@ final class BackupService {
 
         if options.includeProfiles {
             backup.profiles = try profileStore.profiles.map { profile in
-                let (privateKey, psks) = try resolveProfileSecrets(profile: profile)
+                let (privateKey, psks, sshKey) = try resolveProfileSecrets(profile: profile)
 
                 var snapshot: ProfileRoutingSnapshot? = nil
                 if options.includeAppRouting || options.includeDestinationRouting {
@@ -127,6 +130,7 @@ final class BackupService {
                     profile: profile,
                     privateKeyValue: privateKey,
                     peerPresharedKeys: psks,
+                    sshPrivateKeyValue: sshKey,
                     routingSnapshot: snapshot
                 )
             }
@@ -224,7 +228,20 @@ final class BackupService {
 
     // MARK: - Private Helpers
 
-    private func resolveProfileSecrets(profile: WireGuardProfile) throws -> (privateKey: String, psks: [String: String]) {
+    private func resolveProfileSecrets(profile: WireGuardProfile) throws -> (privateKey: String?, psks: [String: String], sshKey: String?) {
+        // SSH-transport profiles have no WG interface key (privateKeyRef is ""); their
+        // credential is the PEM key under ssh.privateKeyRef.
+        if profile.transport == .ssh {
+            guard let ref = profile.ssh?.privateKeyRef, !ref.isEmpty else {
+                throw BackupServiceError.missingKeyMaterial(profileName: profile.name)
+            }
+            do {
+                return (nil, [:], try keychainService.read(account: ref))
+            } catch {
+                throw BackupServiceError.keychainReadFailed(profileName: profile.name, underlying: error)
+            }
+        }
+
         let privateKey: String
         do {
             privateKey = try keychainService.read(account: profile.interface.privateKeyRef)
@@ -241,10 +258,30 @@ final class BackupService {
                 throw BackupServiceError.keychainReadFailed(profileName: profile.name, underlying: error)
             }
         }
-        return (privateKey, psks)
+        return (privateKey, psks, nil)
     }
 
     private func saveProfileSecrets(entry: ProfileBackupEntry) throws -> WireGuardProfile {
+        if entry.profile.transport == .ssh {
+            guard var ssh = entry.profile.ssh, let pem = entry.sshPrivateKeyValue else {
+                throw BackupServiceError.missingKeyMaterial(profileName: entry.profile.name)
+            }
+            let sshRef = "ssh-key-\(UUID().uuidString)"
+            do {
+                try keychainService.save(pem, account: sshRef)
+            } catch {
+                throw BackupServiceError.keychainWriteFailed(profileName: entry.profile.name, underlying: error)
+            }
+            ssh.privateKeyRef = sshRef
+            var importedProfile = entry.profile
+            importedProfile.ssh = ssh
+            return importedProfile
+        }
+
+        guard let privateKeyValue = entry.privateKeyValue else {
+            throw BackupServiceError.missingKeyMaterial(profileName: entry.profile.name)
+        }
+
         var mintedAccounts: [String] = []
         defer {
             if !mintedAccounts.isEmpty {
@@ -256,7 +293,7 @@ final class BackupService {
 
         let privateKeyRef = "wg.private.\(UUID().uuidString)"
         do {
-            try keychainService.save(entry.privateKeyValue, account: privateKeyRef)
+            try keychainService.save(privateKeyValue, account: privateKeyRef)
         } catch {
             throw BackupServiceError.keychainWriteFailed(profileName: entry.profile.name, underlying: error)
         }
@@ -292,7 +329,12 @@ final class BackupService {
     }
 
     private func cleanupProfileSecrets(_ profile: WireGuardProfile) {
-        try? keychainService.delete(account: profile.interface.privateKeyRef)
+        if let sshRef = profile.ssh?.privateKeyRef, !sshRef.isEmpty {
+            try? keychainService.delete(account: sshRef)
+        }
+        if !profile.interface.privateKeyRef.isEmpty {
+            try? keychainService.delete(account: profile.interface.privateKeyRef)
+        }
         for peer in profile.peers {
             if let ref = peer.presharedKeyRef {
                 try? keychainService.delete(account: ref)
