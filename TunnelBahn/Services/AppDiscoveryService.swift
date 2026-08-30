@@ -95,27 +95,38 @@ final class AppDiscoveryService: ObservableObject {
         }
     }
 
-    /// Opens an NSOpenPanel so the user can pick a .app bundle.
-    /// Captures a security-scoped bookmark while access is granted by the panel.
+    /// Opens an NSOpenPanel so the user can pick a .app bundle or a bare executable
+    /// (CLI binary). Captures a security-scoped bookmark while access is granted by the panel.
     func pickAndRegisterApp() async -> DiscoveredApp? {
         let panel = NSOpenPanel()
-        panel.allowedContentTypes = [UTType.applicationBundle]
+        panel.allowedContentTypes = [UTType.applicationBundle, UTType.unixExecutable]
         panel.allowsMultipleSelection = false
         panel.canChooseDirectories = true
         panel.canChooseFiles = true
+        panel.showsHiddenFiles = true
         panel.directoryURL = URL(fileURLWithPath: "/Applications")
         panel.prompt = "Add"
-        panel.message = "Choose an app to route through the VPN"
+        panel.message = "Choose an app or a command-line executable to route through the VPN"
 
         guard await panel.begin() == .OK, let url = panel.url else { return nil }
 
-        guard let bundle = Bundle(url: url),
-              let bundleID = bundle.bundleIdentifier?.trimmingCharacters(in: .whitespacesAndNewlines),
-              !bundleID.isEmpty
-        else { return nil }
-
-        let name = bundle.object(forInfoDictionaryKey: kCFBundleNameKey as String) as? String
-            ?? url.deletingPathExtension().lastPathComponent
+        let name: String
+        let bundleID: String
+        if let bundle = Bundle(url: url),
+           let id = bundle.bundleIdentifier?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !id.isEmpty
+        {
+            bundleID = id
+            name = bundle.object(forInfoDictionaryKey: kCFBundleNameKey as String) as? String
+                ?? url.deletingPathExtension().lastPathComponent
+        } else {
+            // Bare executable: flows are matched by the binary's code-signing identifier.
+            guard FileManager.default.isExecutableFile(atPath: url.path),
+                  let id = NEAppRuleBuilder.signingIdentifier(forExecutableAtPath: url.path)
+            else { return nil }
+            bundleID = id
+            name = url.lastPathComponent
+        }
         let icon = NSWorkspace.shared.icon(forFile: url.path)
 
         let bookmarkData = try? url.bookmarkData(

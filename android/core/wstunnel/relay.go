@@ -23,7 +23,31 @@ type Config struct {
 	ForwardHost string // wstunnel forward target host (the local WG relay listen host)
 	ForwardPort int    // wstunnel forward target port
 	TLSConfig   *tls.Config
+
+	// KeepAlive is the interval between client WebSocket pings, and the unit the idle
+	// timeout is derived from. Defaults to defaultKeepAlive. Tests scale it down.
+	KeepAlive time.Duration
+
+	// OnState reports carrier liveness: false when the current carrier is dropped,
+	// true once a replacement is established. Optional. It mirrors the SSH transport's
+	// OnState so the UI can show "Reconnecting" instead of claiming Connected while the
+	// tunnel carries nothing.
+	OnState func(connected bool)
 }
+
+// defaultKeepAlive is the ping interval when Config.KeepAlive is unset.
+//
+// Detection latency is what this number buys: a blackholed carrier still accepts writes
+// into the socket buffer, so a failed ping is not the signal — the missing pong is. The
+// idle timeout is two intervals, so two consecutive unanswered pings (~20s) condemn the
+// carrier. That is close to the SSH transport's 15s probe while still tolerating the
+// ordinary multi-second stalls of a mobile link, and a false positive only costs a
+// sub-second re-dial that WG rides out via its own keepalive.
+const defaultKeepAlive = 10 * time.Second
+
+// defaultHandshakeBudget bounds the TLS + WS upgrade for a caller that supplied no
+// deadline of its own (the WG send path dials with context.Background()).
+const defaultHandshakeBudget = 15 * time.Second
 
 // Relay carries UDP datagrams to a wstunnel v10 server as unmasked WebSocket binary
 // frames. It dials lazily on the first Send.
@@ -50,6 +74,24 @@ type Relay struct {
 
 func NewRelay(cfg Config, dial DialFunc) *Relay {
 	return &Relay{cfg: cfg, dial: dial, inbox: make(chan []byte, 256), done: make(chan struct{})}
+}
+
+func (r *Relay) keepAlive() time.Duration {
+	if r.cfg.KeepAlive > 0 {
+		return r.cfg.KeepAlive
+	}
+	return defaultKeepAlive
+}
+
+// idleTimeout is how long the carrier may produce nothing at all before it is declared
+// dead. Any inbound byte resets it, and our own pings elicit pongs, so a healthy carrier
+// never trips it even when WG itself is idle.
+func (r *Relay) idleTimeout() time.Duration { return 2 * r.keepAlive() }
+
+func (r *Relay) notifyState(connected bool) {
+	if r.cfg.OnState != nil {
+		r.cfg.OnState(connected)
+	}
 }
 
 func (r *Relay) ensure(ctx context.Context) error {
@@ -102,14 +144,17 @@ func (r *Relay) open(ctx context.Context) error {
 		return err
 	}
 
-	// Bound the TLS handshake + WS upgrade with an internal deadline. The driving
-	// Send path passes context.Background() (no deadline), so without this a server
-	// that completes the TCP dial but stalls mid-handshake would hang the WG send
-	// goroutine forever, and DialErr would never learn of it (it stays nil until open
-	// returns). Cleared once the upgrade completes. The deadline lives on the raw conn
-	// and continues to apply through the tls.Client wrapper below.
-	hsDeadline := time.Now().Add(15 * time.Second)
-	if dl, ok := ctx.Deadline(); ok && dl.Before(hsDeadline) {
+	// Bound the TLS handshake + WS upgrade. The driving Send path passes
+	// context.Background() (no deadline), so without this a server that completes the
+	// TCP dial but stalls mid-handshake would hang the WG send goroutine forever, and
+	// DialErr would never learn of it (it stays nil until open returns). A caller that
+	// does supply a deadline gets exactly that budget: reconnect() asks for a longer one
+	// because an interfered-with path can take >15s to upgrade, and failing fast there
+	// only strands the tunnel that much longer. Cleared once the upgrade completes. The
+	// deadline lives on the raw conn and continues to apply through the tls.Client
+	// wrapper below.
+	hsDeadline := time.Now().Add(defaultHandshakeBudget)
+	if dl, ok := ctx.Deadline(); ok {
 		hsDeadline = dl
 	}
 	_ = conn.SetDeadline(hsDeadline)
@@ -205,6 +250,7 @@ func (r *Relay) readLoop() {
 	defer close(r.inbox)
 	for {
 		r.stateMu.Lock()
+		conn := r.conn
 		br := r.br
 		closed := r.closed
 		r.stateMu.Unlock()
@@ -215,13 +261,21 @@ func (r *Relay) readLoop() {
 			if !r.reconnect() {
 				return // Closed before the carrier could be re-established.
 			}
+			r.notifyState(true)
 			continue
 		}
 
-		r.pump(br)
+		// Ping for the life of this carrier. Without it a blackholed connection — open
+		// at the TCP layer but silently discarding everything — is indistinguishable
+		// from an idle one, and pump would block on Read forever.
+		stopPing := make(chan struct{})
+		go r.pingLoop(conn, stopPing)
+		r.pump(conn, br)
+		close(stopPing)
 
-		// pump returned: the carrier errored or the peer sent a close frame. Drop this
-		// connection; the top of the loop re-dials unless we've been Closed.
+		// pump returned: the carrier errored, went silent, or the peer sent a close
+		// frame. Drop this connection; the top of the loop re-dials unless we've been
+		// Closed.
 		r.stateMu.Lock()
 		if r.conn != nil {
 			_ = r.conn.Close()
@@ -229,12 +283,35 @@ func (r *Relay) readLoop() {
 		r.conn = nil
 		r.br = nil
 		r.stateMu.Unlock()
+		r.notifyState(false)
+	}
+}
+
+// pingLoop probes the carrier so silence becomes an observable failure. A failed write
+// means the carrier is already unusable, so it closes the connection to unblock pump
+// immediately rather than leaving it to wait out the idle timeout.
+func (r *Relay) pingLoop(conn net.Conn, stop <-chan struct{}) {
+	t := time.NewTicker(r.keepAlive())
+	defer t.Stop()
+	for {
+		select {
+		case <-stop:
+			return
+		case <-r.done:
+			return
+		case <-t.C:
+			if err := r.writeFrame(opPing, nil); err != nil {
+				_ = conn.Close()
+				return
+			}
+		}
 	}
 }
 
 // pump reads and dispatches frames from one carrier until it errors or a close frame
 // arrives, then returns so the supervisor can decide whether to reconnect.
-func (r *Relay) pump(br *bufio.Reader) {
+func (r *Relay) pump(conn net.Conn, br *bufio.Reader) {
+	idle := r.idleTimeout()
 	var buf []byte
 	tmp := make([]byte, 65536)
 	for {
@@ -261,6 +338,9 @@ func (r *Relay) pump(br *bufio.Reader) {
 				return
 			}
 		}
+		// Any inbound byte (data, pong, or ping) resets the clock; only total silence
+		// for a full idle window ends the loop and sends the supervisor to reconnect.
+		_ = conn.SetReadDeadline(time.Now().Add(idle))
 		n, err := br.Read(tmp)
 		if n > 0 {
 			buf = append(buf, tmp[:n]...)
@@ -310,6 +390,11 @@ func (r *Relay) writeFrame(op byte, payload []byte) error {
 	}
 	r.writeMu.Lock()
 	defer r.writeMu.Unlock()
+	// Bound the write. On a blackholed carrier the kernel send buffer fills and an
+	// unbounded Write blocks forever while holding writeMu, parking wireguard-go's send
+	// goroutine. Failing instead lets WG drop the datagram and retransmit over the
+	// carrier the supervisor is already re-dialing.
+	_ = c.SetWriteDeadline(time.Now().Add(r.idleTimeout()))
 	_, err := c.Write(encodeFrame(op, payload))
 	return err
 }

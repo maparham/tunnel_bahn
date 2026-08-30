@@ -291,6 +291,20 @@ func buildTransport(cfg *coreConfig, prot Protector, sink EventSink) (transport.
 			// servers use bare-IP certs with no SANs, so verifying would break every connect
 			// for no security gain. This matches wstunnel's own default and the macOS side.
 			TLSConfig: &tls.Config{InsecureSkipVerify: true}, //nolint:gosec // see comment
+			// Surface carrier drops the way the SSH transport does. Networks that
+			// blackhole a long-lived connection (rather than resetting it) leave the
+			// tunnel carrying nothing; without this the UI would keep showing Connected
+			// for the whole outage instead of "Reconnecting".
+			OnState: func(connected bool) {
+				if sink == nil {
+					return
+				}
+				if connected {
+					sink.OnState("running")
+				} else {
+					sink.OnState("degraded")
+				}
+			},
 		}, wstunnel.DialFunc(dial))
 		return transport.NewWGWS(transport.WGConfig{
 			PrivateKey:       cfg.WG.PrivateKey,

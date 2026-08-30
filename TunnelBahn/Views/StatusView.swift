@@ -57,6 +57,7 @@ struct StatusView: View {
     @State private var hoveredAppTrafficRow: String?
     @State private var hoveredDestinationRow: String?
     @State private var copiedApp: String?
+    @State private var addedToSelectedApps: String?
 
     private let perAppStatsTopN = 10
     /// Caps vertical growth of the app rows; list scrolls when expanded nodes exceed this.
@@ -224,6 +225,10 @@ struct StatusView: View {
                                             destRows: destRows,
                                             residual: residual
                                         )
+
+                                        if addedToSelectedApps == app || !unroutedSigningIdentifiers(in: entry).isEmpty {
+                                            trafficAppAddToVPNButton(app: app, entry: entry)
+                                        }
                                     }
                                     .padding(.vertical, 8)
                                     .padding(.horizontal, 10)
@@ -606,6 +611,73 @@ struct StatusView: View {
         .buttonStyle(.borderless)
         .instantTooltip(isCopied ? "Copied!" : "Copy IP list")
         .accessibilityLabel(isCopied ? "Copied" : "Copy IP list for \(app)")
+    }
+
+    // MARK: - Add monitored app to Selected Apps
+
+    /// Signing identifiers seen on this row that are not yet covered by a Route-via-VPN rule.
+    private func unroutedSigningIdentifiers(in entry: AppTransferEntry) -> [String] {
+        let routed = Set(
+            appState.appRuleStore.rules
+                .filter { $0.action == .routeVPN }
+                .map(\.bundleIdentifier)
+        )
+        return entry.signingIdentifiers
+            .filter { !$0.isEmpty && !routed.contains($0) }
+            .sorted()
+    }
+
+    /// Display name for a rule created from a bare signing identifier: last reverse-DNS
+    /// component when the ID looks like one ("com.anthropic.claude-code" -> "claude-code").
+    private func signingOnlyDisplayName(_ signingID: String) -> String {
+        let components = signingID.split(separator: ".")
+        guard components.count > 2, let last = components.last else { return signingID }
+        return String(last)
+    }
+
+    private func addToSelectedApps(app: String, entry: AppTransferEntry) {
+        for id in unroutedSigningIdentifiers(in: entry) {
+            if let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: id) {
+                // Installed app bundle: store its real path so the NEAppRule gets the
+                // binary's actual designated requirement.
+                let name = Bundle(url: url)?.object(forInfoDictionaryKey: kCFBundleNameKey as String) as? String
+                    ?? url.deletingPathExtension().lastPathComponent
+                appState.appRuleStore.setRule(
+                    for: DiscoveredApp(
+                        displayName: name,
+                        bundleIdentifier: id,
+                        appPath: url.path,
+                        icon: NSImage()
+                    ),
+                    action: .routeVPN
+                )
+            } else {
+                appState.appRuleStore.addSigningIdentifierRule(
+                    displayName: signingOnlyDisplayName(id),
+                    signingIdentifier: id
+                )
+            }
+        }
+    }
+
+    private func trafficAppAddToVPNButton(app: String, entry: AppTransferEntry) -> some View {
+        let isAdded = addedToSelectedApps == app
+        return Button {
+            addToSelectedApps(app: app, entry: entry)
+            addedToSelectedApps = app
+            Task {
+                try? await Task.sleep(for: .seconds(2))
+                if addedToSelectedApps == app { addedToSelectedApps = nil }
+            }
+        } label: {
+            Image(systemName: isAdded ? "checkmark" : "plus.circle")
+                .font(.caption)
+                .foregroundStyle(isAdded ? .green : .secondary)
+                .animation(.easeInOut(duration: 0.15), value: isAdded)
+        }
+        .buttonStyle(.borderless)
+        .instantTooltip(isAdded ? "Added!" : "Add to selected apps. Applies on next connect.")
+        .accessibilityLabel(isAdded ? "Added to selected apps" : "Add \(app) to selected apps")
     }
 
     private func trafficOtherResidualCopyButton() -> some View {

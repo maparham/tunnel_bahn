@@ -168,6 +168,8 @@ targets:
       - path: Shared/ConnectivityProbeResult.swift
       - path: TunnelBahn/Services/SpeedTestHelperClient.swift
       - path: TunnelBahn/Services/AndroidProfileQRCodec.swift
+      - path: TunnelBahn/Services/NEAppRuleBuilder.swift
+      - path: Shared/PerAppSigningCatalog.swift
     settings:
       base:
         INFOPLIST_FILE: Tests/Unit/Info.plist

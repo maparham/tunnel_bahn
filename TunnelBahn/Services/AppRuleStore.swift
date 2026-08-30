@@ -27,6 +27,22 @@ final class AppRuleStore: ObservableObject {
         save()
     }
 
+    /// Adds (or re-enables) a rule identified only by its code-signing identifier, with no
+    /// on-disk path. Used by the Tunnel Monitor, which observes flows by signing ID.
+    func addSigningIdentifierRule(displayName: String, signingIdentifier: String) {
+        if let index = rules.firstIndex(where: { $0.bundleIdentifier == signingIdentifier }) {
+            rules[index].action = .routeVPN
+        } else {
+            rules.append(AppRule(
+                displayName: displayName,
+                bundleIdentifier: signingIdentifier,
+                appPath: AppRule.signingOnlyPath(for: signingIdentifier),
+                action: .routeVPN
+            ))
+        }
+        save()
+    }
+
     func isEnabled(for appPath: String) -> Bool {
         rules.first(where: { $0.appPath == appPath })?.useVPN ?? false
     }

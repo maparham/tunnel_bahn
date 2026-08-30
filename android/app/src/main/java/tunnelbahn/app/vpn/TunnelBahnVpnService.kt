@@ -272,7 +272,12 @@ class TunnelBahnVpnService : VpnService() {
         override fun onState(s: String) {
             state.value = s
             if (s == STATE_RUNNING) {
-                connectedSince.value = System.currentTimeMillis()
+                // The wgws transport re-reports "running" after every carrier reconnect,
+                // so only stamp this once per session: uptime should track the tunnel,
+                // not the current carrier.
+                if (connectedSince.value == 0L) {
+                    connectedSince.value = System.currentTimeMillis()
+                }
                 if (!reachedRunning) {
                     reachedRunning = true
                     Haptics.success(this@TunnelBahnVpnService)

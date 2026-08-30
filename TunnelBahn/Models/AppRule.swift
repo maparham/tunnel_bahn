@@ -29,6 +29,15 @@ struct AppRule: Codable, Identifiable, Hashable {
         get { action == .routeVPN }
         set { action = newValue ? .routeVPN : .bypass }
     }
+
+    /// Surrogate `appPath` for rules added by signing identifier alone (e.g. from the
+    /// Tunnel Monitor), where no on-disk executable path is known. Keeps `appPath`
+    /// unique because the store and views key rules by it.
+    static func signingOnlyPath(for signingIdentifier: String) -> String {
+        "signing-id://" + signingIdentifier
+    }
+
+    var isSigningOnly: Bool { appPath.hasPrefix("signing-id://") }
 }
 
 struct DiscoveredApp: Identifiable, Hashable {

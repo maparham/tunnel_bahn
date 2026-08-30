@@ -123,7 +123,7 @@ struct AppsView: View {
                                 }
                                 .frame(minHeight: 180)
 
-                                Button("Add App…") {
+                                Button("Add App or Executable…") {
                                     Task {
                                         if let app = await appState.appDiscovery.pickAndRegisterApp() {
                                             appState.appRuleStore.setRule(for: app, action: .routeVPN)
