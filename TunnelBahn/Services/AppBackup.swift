@@ -1,7 +1,11 @@
 import Foundation
 
 struct AppBackup: Codable {
-    static let currentVersion = 1
+    /// v2: `privateKeyValue` became optional and `sshPrivateKeyValue` was added for
+    /// SSH-transport profiles. Version 1 builds decode `privateKeyValue` as non-optional,
+    /// so without this bump they would fail a v2 import with a raw decoding error instead
+    /// of their `unsupportedVersion` message.
+    static let currentVersion = 2
 
     var version: Int
     var createdAt: Date

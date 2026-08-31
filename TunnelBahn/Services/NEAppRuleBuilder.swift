@@ -53,23 +53,29 @@ enum NEAppRuleBuilder {
                 log("buildAppRules: expanding appPath=\(rule.appPath) displayName=\(rule.displayName)")
             }
             // Rules added by signing identifier alone (Tunnel Monitor) or whose binary is gone:
-            // match on the stored signing ID only. No Apple anchor here — these rules exist
-            // precisely for binaries we cannot inspect on disk, which includes ad-hoc signed
-            // CLI tools; an ad-hoc signature has no certificate chain, so an Apple-anchored
-            // requirement would produce a rule that silently matches nothing. The identifier
-            // is already the value NE matches flows on, so the anchor added no real constraint.
+            // match on the stored signing ID only. Signing-only rules carry no Apple anchor —
+            // they exist precisely for binaries we cannot inspect on disk, which includes
+            // ad-hoc signed CLI tools; an ad-hoc signature has no certificate chain, so an
+            // Apple-anchored requirement would produce a rule that silently matches nothing.
+            // A path-based rule whose binary is merely absent (unmounted volume, moved bundle)
+            // keeps the anchor: dropping it would let any local ad-hoc binary claim the app's
+            // identifier and ride the VPN in its place.
             guard !rule.isSigningOnly, FileManager.default.fileExists(atPath: rule.appPath) else {
                 let bundleID = rule.bundleIdentifier.trimmingCharacters(in: .whitespacesAndNewlines)
                 guard !bundleID.isEmpty else {
                     log("WARNING: buildAppRules: rule \(rule.displayName) has no path and no signing identifier; skipped")
                     continue
                 }
-                guard let requirement = identifierRequirement(bundleID, anchoredToApple: false) else {
+                guard let requirement = identifierRequirement(bundleID, anchoredToApple: !rule.isSigningOnly) else {
                     log("WARNING: buildAppRules: unsafe characters in signing identifier \(bundleID); rule skipped")
                     continue
                 }
                 appendRule(signingIdentifier: bundleID, requirement: requirement, into: &appRules, log: log)
-                log("buildAppRules: signing-ID-only rule for \(bundleID) (no on-disk path)")
+                if rule.isSigningOnly {
+                    log("buildAppRules: signing-ID-only rule for \(bundleID)")
+                } else {
+                    log("WARNING: buildAppRules: binary missing at \(rule.appPath); using anchored identifier fallback for \(bundleID)")
+                }
                 continue
             }
             let bundleIDsAndPaths = bundleIdentifiersAndPathsForNetworkingProcesses(appPath: rule.appPath)

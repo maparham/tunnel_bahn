@@ -616,15 +616,34 @@ struct StatusView: View {
     // MARK: - Add monitored app to Selected Apps
 
     /// Signing identifiers seen on this row that are not yet covered by a Route-via-VPN rule.
+    ///
+    /// "Covered" must mirror what the rule builder and the stats rollup already do, not just
+    /// exact bundle-ID equality: a routed app's helper processes (Chrome's GPU helper, etc.)
+    /// reach the tunnel through catalog expansion and nested-bundle scanning, and roll up
+    /// into this very row via `PerAppIdentityMap`'s prefix/catalog logic. Counting them as
+    /// unrouted would show the "+" on an already-routed app and mint redundant helper rules.
     private func unroutedSigningIdentifiers(in entry: AppTransferEntry) -> [String] {
-        let routed = Set(
-            appState.appRuleStore.rules
-                .filter { $0.action == .routeVPN }
-                .map(\.bundleIdentifier)
-        )
+        let routedRules = appState.appRuleStore.rules.filter { $0.action == .routeVPN }
         return entry.signingIdentifiers
-            .filter { !$0.isEmpty && !routed.contains($0) }
+            .filter { !$0.isEmpty && !isCoveredByRoutedRule($0, routedRules: routedRules) }
             .sorted()
+    }
+
+    private func isCoveredByRoutedRule(_ signingID: String, routedRules: [AppRule]) -> Bool {
+        if routedRules.contains(where: { $0.bundleIdentifier == signingID }) { return true }
+        // Helper under a routed parent (com.example.app.helper covered by com.example.app):
+        // the builder's nested-bundle scan emits rules for these at connect time.
+        if routedRules.contains(where: { rule in
+            !rule.bundleIdentifier.isEmpty && signingID.hasPrefix(rule.bundleIdentifier + ".")
+        }) { return true }
+        // Curated catalog: the builder expands these IDs whenever their parent app is routed
+        // (e.g. Safari's WebKit.Networking, Chrome's helpers with non-nested signing IDs).
+        if let rollup = PerAppSigningCatalog.knownRollupBySigningIdentifier[signingID],
+           routedRules.contains(where: {
+               PerAppSigningCatalog.knownRollupBySigningIdentifier[$0.bundleIdentifier] == rollup
+           })
+        { return true }
+        return false
     }
 
     /// Display name for a rule created from a bare signing identifier: last reverse-DNS
@@ -637,7 +656,15 @@ struct StatusView: View {
 
     private func addToSelectedApps(app: String, entry: AppTransferEntry) {
         for id in unroutedSigningIdentifiers(in: entry) {
-            if let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: id) {
+            if appState.appRuleStore.rules.contains(where: { $0.bundleIdentifier == id }) {
+                // A rule for this identifier already exists (e.g. set to Bypass earlier).
+                // Re-enable it rather than appending a second rule for the same identifier
+                // whose action would silently fight the existing one.
+                appState.appRuleStore.addSigningIdentifierRule(
+                    displayName: signingOnlyDisplayName(id),
+                    signingIdentifier: id
+                )
+            } else if let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: id) {
                 // Installed app bundle: store its real path so the NEAppRule gets the
                 // binary's actual designated requirement.
                 let name = Bundle(url: url)?.object(forInfoDictionaryKey: kCFBundleNameKey as String) as? String

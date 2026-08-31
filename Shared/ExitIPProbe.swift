@@ -32,6 +32,10 @@ enum ExitIPProbe {
         let config = URLSessionConfiguration.ephemeral
         config.requestCachePolicy = .reloadIgnoringLocalAndRemoteCacheData
         config.timeoutIntervalForRequest = timeoutSeconds
+        // Also cap total duration: the request timeout only bounds idle gaps, so a server
+        // dripping bytes could otherwise hold the probe (and the speed test awaiting it) open
+        // for the default 7-day resource timeout.
+        config.timeoutIntervalForResource = timeoutSeconds
         let session = URLSession(configuration: config)
         defer { session.invalidateAndCancel() }
         var request = URLRequest(url: endpoint)

@@ -50,6 +50,25 @@ final class NEAppRuleBuilderTests: XCTestCase {
         )
     }
 
+    /// A path-based rule whose binary is missing (unmounted volume, moved bundle) must NOT
+    /// degrade to the anchor-free signing-only form: a bare `identifier "X"` requirement is
+    /// satisfiable by any locally ad-hoc-signed binary claiming that identifier, which would
+    /// route an impostor's traffic through the VPN as if it were the app.
+    func testMissingPathRuleKeepsAppleAnchor() {
+        let rule = AppRule(
+            displayName: "Gone",
+            bundleIdentifier: "com.example.gone",
+            appPath: "/Volumes/Missing/Gone.app",
+            action: .routeVPN
+        )
+        let built = NEAppRuleBuilder.build(from: [rule], log: { _ in })
+        XCTAssertEqual(built.count, 1)
+        XCTAssertEqual(
+            built.first?.matchDesignatedRequirement,
+            #"anchor apple generic and identifier "com.example.gone""#
+        )
+    }
+
     func testBuildSkipsBypassRules() {
         let rule = AppRule(
             displayName: "ls",

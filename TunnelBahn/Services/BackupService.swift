@@ -18,6 +18,9 @@ struct ImportSummary {
     var profilesReplaced: Int = 0
     var profilesSkipped: Int = 0
     var settingsRestored: Bool = false
+    /// Per-profile import failures ("name: reason"). A bad entry must not abort the rest
+    /// of the import, but it must not vanish silently either.
+    var profileFailures: [String] = []
 
     var description: String {
         var parts: [String] = []
@@ -32,6 +35,9 @@ struct ImportSummary {
             parts.append("Profiles: \(profilesSkipped) skipped (already exist)")
         }
         if settingsRestored { parts.append("General settings restored") }
+        if !profileFailures.isEmpty {
+            parts.append("\(profileFailures.count) profile(s) could not be imported: \(profileFailures.joined(separator: "; "))")
+        }
         return parts.isEmpty ? "Nothing imported" : parts.joined(separator: ". ")
     }
 }
@@ -177,7 +183,15 @@ final class BackupService {
 
         if options.includeProfiles, let entries = backup.profiles {
             for entry in entries {
-                let importedProfile = try saveProfileSecrets(entry: entry)
+                let importedProfile: WireGuardProfile
+                do {
+                    importedProfile = try saveProfileSecrets(entry: entry)
+                } catch {
+                    // Record and move on — aborting here would leave an unannounced partial
+                    // import (earlier entries and settings are already committed).
+                    summary.profileFailures.append("\(entry.profile.name): \(error.localizedDescription)")
+                    continue
+                }
 
                 let existing = profileStore.profiles.first { $0.name == importedProfile.name }
 
@@ -229,17 +243,30 @@ final class BackupService {
     // MARK: - Private Helpers
 
     private func resolveProfileSecrets(profile: WireGuardProfile) throws -> (privateKey: String?, psks: [String: String], sshKey: String?) {
-        // SSH-transport profiles have no WG interface key (privateKeyRef is ""); their
-        // credential is the PEM key under ssh.privateKeyRef.
+        // SSH-transport profiles authenticate with the PEM key under ssh.privateKeyRef, but a
+        // profile converted from WireGuard still carries its WG interface key and peer PSKs
+        // (the editor preserves interface/peers across conversion so the user can switch
+        // back). Export all of it — dropping the WG material would make the restored profile
+        // unable to ever return to WireGuard transport.
         if profile.transport == .ssh {
             guard let ref = profile.ssh?.privateKeyRef, !ref.isEmpty else {
                 throw BackupServiceError.missingKeyMaterial(profileName: profile.name)
             }
+            let sshKey: String
             do {
-                return (nil, [:], try keychainService.read(account: ref))
+                sshKey = try keychainService.read(account: ref)
             } catch {
                 throw BackupServiceError.keychainReadFailed(profileName: profile.name, underlying: error)
             }
+            var wgKey: String? = nil
+            if !profile.interface.privateKeyRef.isEmpty {
+                do {
+                    wgKey = try keychainService.read(account: profile.interface.privateKeyRef)
+                } catch {
+                    throw BackupServiceError.keychainReadFailed(profileName: profile.name, underlying: error)
+                }
+            }
+            return (wgKey, try readPeerPresharedKeys(of: profile), sshKey)
         }
 
         let privateKey: String
@@ -248,83 +275,83 @@ final class BackupService {
         } catch {
             throw BackupServiceError.keychainReadFailed(profileName: profile.name, underlying: error)
         }
+        return (privateKey, try readPeerPresharedKeys(of: profile), nil)
+    }
 
+    private func readPeerPresharedKeys(of profile: WireGuardProfile) throws -> [String: String] {
         var psks: [String: String] = [:]
         for peer in profile.peers {
-            guard let ref = peer.presharedKeyRef else { continue }
+            guard let ref = peer.presharedKeyRef, !ref.isEmpty else { continue }
             do {
                 psks[peer.id.uuidString] = try keychainService.read(account: ref)
             } catch {
                 throw BackupServiceError.keychainReadFailed(profileName: profile.name, underlying: error)
             }
         }
-        return (privateKey, psks, nil)
+        return psks
     }
 
+    /// Returns the imported profile with EVERY keychain ref freshly minted (or cleared).
+    /// The refs inside `entry.profile` are the source machine's account IDs; on a
+    /// same-machine restore they alias the live profile's keys, so carrying any of them
+    /// over would let `cleanupProfileSecrets` (skip path) destroy live key material.
     private func saveProfileSecrets(entry: ProfileBackupEntry) throws -> WireGuardProfile {
-        if entry.profile.transport == .ssh {
-            guard var ssh = entry.profile.ssh, let pem = entry.sshPrivateKeyValue else {
-                throw BackupServiceError.missingKeyMaterial(profileName: entry.profile.name)
-            }
-            let sshRef = "ssh-key-\(UUID().uuidString)"
-            do {
-                try keychainService.save(pem, account: sshRef)
-            } catch {
-                throw BackupServiceError.keychainWriteFailed(profileName: entry.profile.name, underlying: error)
-            }
-            ssh.privateKeyRef = sshRef
-            var importedProfile = entry.profile
-            importedProfile.ssh = ssh
-            return importedProfile
-        }
-
-        guard let privateKeyValue = entry.privateKeyValue else {
-            throw BackupServiceError.missingKeyMaterial(profileName: entry.profile.name)
-        }
-
         var mintedAccounts: [String] = []
+        var committed = false
         defer {
-            if !mintedAccounts.isEmpty {
+            if !committed {
                 for account in mintedAccounts {
                     try? keychainService.delete(account: account)
                 }
             }
         }
 
-        let privateKeyRef = "wg.private.\(UUID().uuidString)"
-        do {
-            try keychainService.save(privateKeyValue, account: privateKeyRef)
-        } catch {
-            throw BackupServiceError.keychainWriteFailed(profileName: entry.profile.name, underlying: error)
+        func mint(_ value: String, prefix: String) throws -> String {
+            let ref = "\(prefix)\(UUID().uuidString)"
+            do {
+                try keychainService.save(value, account: ref)
+            } catch {
+                throw BackupServiceError.keychainWriteFailed(profileName: entry.profile.name, underlying: error)
+            }
+            mintedAccounts.append(ref)
+            return ref
         }
-        mintedAccounts.append(privateKeyRef)
+
+        var importedProfile = entry.profile
+
+        if entry.profile.transport == .ssh {
+            guard var ssh = entry.profile.ssh, let pem = entry.sshPrivateKeyValue else {
+                throw BackupServiceError.missingKeyMaterial(profileName: entry.profile.name)
+            }
+            ssh.privateKeyRef = try mint(pem, prefix: "ssh-key-")
+            importedProfile.ssh = ssh
+            // WG material of a profile converted from WireGuard: restore it when the backup
+            // carries it, otherwise clear the stale source-machine refs.
+            if let privateKeyValue = entry.privateKeyValue {
+                importedProfile.interface.privateKeyRef = try mint(privateKeyValue, prefix: "wg.private.")
+            } else {
+                importedProfile.interface.privateKeyRef = ""
+            }
+        } else {
+            guard let privateKeyValue = entry.privateKeyValue else {
+                throw BackupServiceError.missingKeyMaterial(profileName: entry.profile.name)
+            }
+            importedProfile.interface.privateKeyRef = try mint(privateKeyValue, prefix: "wg.private.")
+        }
 
         var updatedPeers: [WireGuardPeer] = []
         for peer in entry.profile.peers {
             var updatedPeer = peer
             if let rawPsk = entry.peerPresharedKeys[peer.id.uuidString] {
-                let pskRef = "wg.psk.\(UUID().uuidString)"
-                do {
-                    try keychainService.save(rawPsk, account: pskRef)
-                } catch {
-                    throw BackupServiceError.keychainWriteFailed(profileName: entry.profile.name, underlying: error)
-                }
-                mintedAccounts.append(pskRef)
-                updatedPeer.presharedKeyRef = pskRef
+                updatedPeer.presharedKeyRef = try mint(rawPsk, prefix: "wg.psk.")
             } else {
                 updatedPeer.presharedKeyRef = nil
             }
             updatedPeers.append(updatedPeer)
         }
-
-        mintedAccounts.removeAll()
-
-        var updatedInterface = entry.profile.interface
-        updatedInterface.privateKeyRef = privateKeyRef
-
-        var importedProfile = entry.profile
-        importedProfile.interface = updatedInterface
         importedProfile.peers = updatedPeers
+
+        committed = true
         return importedProfile
     }
 
