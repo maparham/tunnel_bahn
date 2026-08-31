@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -63,6 +64,13 @@ type Relay struct {
 
 	done chan struct{} // closed by Close to break the reconnect backoff promptly
 
+	// delivered and dropped count inbound datagrams handed to the consumer versus
+	// discarded because the inbox was full. A non-zero drop count means the app itself
+	// is losing packets the carrier successfully received, which on a high-latency link
+	// costs a retransmit round trip each and collapses throughput.
+	delivered atomic.Uint64
+	dropped   atomic.Uint64
+
 	stateMu       sync.Mutex
 	conn          net.Conn
 	br            *bufio.Reader
@@ -70,6 +78,12 @@ type Relay struct {
 	readStarted   bool
 	dialAttempted bool
 	dialErr       error
+}
+
+// Counters reports inbound datagrams delivered to the consumer and dropped for a full
+// inbox, cumulative for the life of the relay.
+func (r *Relay) Counters() (delivered, dropped uint64) {
+	return r.delivered.Load(), r.dropped.Load()
 }
 
 func NewRelay(cfg Config, dial DialFunc) *Relay {
@@ -329,7 +343,9 @@ func (r *Relay) pump(conn net.Conn, br *bufio.Reader) {
 				if len(payload) > 0 {
 					select {
 					case r.inbox <- payload:
+						r.delivered.Add(1)
 					default: // drop if the consumer is slow
+						r.dropped.Add(1)
 					}
 				}
 			case opPing:

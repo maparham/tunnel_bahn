@@ -37,9 +37,18 @@ type SSH struct {
 	closed bool
 }
 
-func NewSSH(cfg SSHConfig) (*SSH, error) {
+// NewSSH connects with no deadline. Retained for callers that supply their own
+// bounded Dial; prefer NewSSHContext on the connect path.
+func NewSSH(cfg SSHConfig) (*SSH, error) { return NewSSHContext(context.Background(), cfg) }
+
+// NewSSHContext dials and completes the SSH handshake, bounded and cancelled by ctx.
+//
+// This is the only place the SSH transport proves it reached the server — WaitReady is
+// a no-op — so ctx is what stops a connect attempt against an unreachable or silent
+// server from blocking its caller indefinitely.
+func NewSSHContext(ctx context.Context, cfg SSHConfig) (*SSH, error) {
 	s := &SSH{cfg: cfg}
-	if err := s.connect(context.Background()); err != nil {
+	if err := s.connect(ctx); err != nil {
 		return nil, err
 	}
 	return s, nil
@@ -79,11 +88,43 @@ func (s *SSH) connect(ctx context.Context) error {
 			return nil
 		}
 	}
+	// ssh.NewClientConn ignores ctx, so the handshake is bounded on the connection
+	// itself and a cancellation closes the socket out from under it. Without this, a
+	// server that completes the TCP handshake and then never sends its version banner
+	// — the signature of a silently filtered connection — parks here forever.
+	if dl, ok := ctx.Deadline(); ok {
+		_ = nc.SetDeadline(dl)
+	}
+	var guard sync.Mutex
+	handshakeOver := false
+	unwatch := make(chan struct{})
+	go func() {
+		select {
+		case <-ctx.Done():
+			// Only tear down a handshake still in flight; once it has completed the
+			// connection is the caller's and must outlive ctx.
+			guard.Lock()
+			if !handshakeOver {
+				nc.Close()
+			}
+			guard.Unlock()
+		case <-unwatch:
+		}
+	}()
 	conn, chans, reqs, err := ssh.NewClientConn(nc, s.cfg.Addr, ccfg)
+	guard.Lock()
+	handshakeOver = true
+	guard.Unlock()
+	close(unwatch)
 	if err != nil {
 		nc.Close()
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return fmt.Errorf("ssh handshake to %s: %w", s.cfg.Addr, ctxErr)
+		}
 		return err
 	}
+	// The handshake budget must not outlive the handshake: the session is long-lived.
+	_ = nc.SetDeadline(time.Time{})
 	client := ssh.NewClient(conn, chans, reqs)
 	s.mu.Lock()
 	if s.closed {

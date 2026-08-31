@@ -91,6 +91,18 @@ func (d *DirectSpeedTest) Run(sink SpeedTestSink) error {
 
 func (d *DirectSpeedTest) Cancel() { d.inner.Cancel() }
 
+// LogText returns the diagnostic log as newline-separated lines, oldest first. The
+// buffer lives in the core package rather than on a Session, so it still explains a
+// connect attempt after that attempt failed and tore its session down.
+func LogText() string { return core.LogText() }
+
+// ClearLog empties the diagnostic log.
+func ClearLog() { core.ClearLog() }
+
+// Log appends one line from the Android layer, so service and UI lifecycle events
+// interleave with the core's own lines in a single ordered view.
+func Log(msg string) { core.Log(msg) }
+
 // OriginInfo is the pre-VPN IP + geo, returned by ProbeOrigin. Fields are named Ip (not
 // IP) so gomobile emits getIp()/getCity()/getCountry() and Kotlin sees .ip/.city/.country.
 type OriginInfo struct {

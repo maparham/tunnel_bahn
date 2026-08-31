@@ -3,6 +3,7 @@ package core
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"net"
 	"net/netip"
@@ -38,12 +39,24 @@ type EventSink interface {
 	OnExitInfo(ip, city, country string)
 }
 
+// errStopped is returned by Start when Stop was already requested. Stop latches, so a
+// cancel that races ahead of Start cannot be lost.
+var errStopped = errors.New("session stopped before it started")
+
 type Session struct {
 	mu     sync.Mutex
 	tr     transport.Transport
 	eng    *engine
 	stopCh chan struct{}
 	ctr    *counters
+
+	// stopRequested latches Stop. Without it a Stop arriving before Start published
+	// stopCh was dropped on the floor, and Start would then run to completion — or
+	// block forever — with nothing left to cancel it.
+	stopRequested bool
+	// stopClosed guards stopCh against a double close when both Stop and the Start
+	// teardown reach it.
+	stopClosed bool
 
 	stMu     sync.Mutex
 	stCancel context.CancelFunc
@@ -65,30 +78,50 @@ func (s *Session) Start(tunFD int, configJSON string, prot Protector, sink Event
 
 	cfg, err := parseConfig(configJSON)
 	if err != nil {
+		Logf("connect: bad config: %v", err)
+		return err
+	}
+	Logf("connect: start transport=%s mode=%v mtu=%d", cfg.Transport, cfg.Mode, cfg.MTU)
+
+	// Publish the stop channel BEFORE building the transport. Transport construction
+	// performs network I/O (the SSH handshake happens inside NewSSH), and until stopCh
+	// exists Stop() has nothing to close, so a cancel arriving during construction was
+	// silently dropped and the UI span "Connecting" with no way out.
+	ctx, cancel := context.WithCancel(context.Background())
+	stopCh, err := s.publishStop()
+	if err != nil {
+		Logf("connect: aborted before start (stop already requested)")
+		cancel()
+		return err
+	}
+	go func() {
+		<-stopCh
+		cancel()
+	}()
+	// From here on every failure path must retire stopCh so a later Start can publish
+	// a fresh one and the watcher goroutine above exits.
+	fail := func(err error) error {
+		Logf("connect: failed: %v", err)
+		cancel()
+		s.retireStop()
 		return err
 	}
 
-	tr, err := buildTransport(cfg, prot, sink)
+	// Bound transport construction by the same budget as the readiness gate, and make
+	// it cancellable, so a server that accepts TCP but never completes a handshake
+	// cannot wedge the connect forever.
+	buildCtx, buildCancel := context.WithTimeout(ctx, connectTimeout)
+	tr, err := buildTransport(buildCtx, cfg, prot, sink)
+	buildCancel()
 	if err != nil {
-		return err
+		return fail(fmt.Errorf("build transport: %w", err))
 	}
+	Logf("connect: transport built, waiting for server")
 
 	ctr := &counters{}
 
 	router := NewRouter(cfg.Mode, cfg.activeRuleSet())
 	proxy := newCoreProxy(newDispatcher(router, cfg.Resolver.Addr()), tr, cfg.Resolver, prot, ctr)
-
-	// Publish a stopCh and a cancellable context now, before the readiness gate, so a
-	// user Stop during "Connecting" cancels the gate promptly instead of waiting it out.
-	ctx, cancel := context.WithCancel(context.Background())
-	s.mu.Lock()
-	s.stopCh = make(chan struct{})
-	stopCh := s.stopCh
-	s.mu.Unlock()
-	go func() {
-		<-stopCh
-		cancel()
-	}()
 
 	// Gate on the transport actually reaching the server before committing the tun to
 	// an engine and announcing "running". WG builds and brings its device up with zero
@@ -98,17 +131,10 @@ func (s *Session) Start(tunFD int, configJSON string, prot Protector, sink Event
 	err = tr.WaitReady(readyCtx)
 	readyCancel()
 	if err != nil {
-		cancel()
 		tr.Close()
-		s.mu.Lock()
-		ch := s.stopCh
-		s.stopCh = nil
-		s.mu.Unlock()
-		if ch != nil {
-			close(ch) // unblock the watcher goroutine if Stop has not already
-		}
-		return err
+		return fail(fmt.Errorf("server not reachable: %w", err))
 	}
+	Logf("connect: server reached")
 
 	// The tun MTU (set by VpnService) and the engine MTU must match to avoid MSS
 	// clamping mismatches; both derive from the profile's mtu.
@@ -118,16 +144,8 @@ func (s *Session) Start(tunFD int, configJSON string, prot Protector, sink Event
 	}
 	eng, err := startEngine(tunFD, mtu, proxy)
 	if err != nil {
-		cancel()
 		tr.Close()
-		s.mu.Lock()
-		ch := s.stopCh
-		s.stopCh = nil
-		s.mu.Unlock()
-		if ch != nil {
-			close(ch)
-		}
-		return err
+		return fail(fmt.Errorf("start engine: %w", err))
 	}
 	started = true // the engine now owns the fd and closes it on Stop
 
@@ -137,6 +155,7 @@ func (s *Session) Start(tunFD int, configJSON string, prot Protector, sink Event
 	s.ctr = ctr
 	s.mu.Unlock()
 
+	Logf("connect: running (mtu=%d)", mtu)
 	if sink != nil {
 		sink.OnState("running")
 	}
@@ -144,6 +163,8 @@ func (s *Session) Start(tunFD int, configJSON string, prot Protector, sink Event
 
 	<-stopCh
 	cancel()
+	s.retireStop()
+	Logf("disconnect: tearing down")
 
 	eng.stop()
 	tr.Close()
@@ -176,11 +197,42 @@ func (s *Session) TxBytes() int64 {
 }
 
 func (s *Session) Stop() {
+	Logf("disconnect: stop requested")
+	s.mu.Lock()
+	s.stopRequested = true
+	ch := s.stopCh
+	closed := s.stopClosed
+	s.stopClosed = true
+	s.mu.Unlock()
+	if ch != nil && !closed {
+		close(ch)
+	}
+}
+
+// publishStop installs a fresh stop channel for a starting session, or reports
+// errStopped if Stop already ran. Callers must pair it with retireStop.
+func (s *Session) publishStop() (chan struct{}, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.stopRequested {
+		return nil, errStopped
+	}
+	ch := make(chan struct{})
+	s.stopCh = ch
+	s.stopClosed = false
+	return ch, nil
+}
+
+// retireStop closes the published stop channel if nobody has yet (unblocking the
+// watcher goroutine that cancels the session context) and clears it.
+func (s *Session) retireStop() {
 	s.mu.Lock()
 	ch := s.stopCh
+	closed := s.stopClosed
 	s.stopCh = nil
+	s.stopClosed = true
 	s.mu.Unlock()
-	if ch != nil {
+	if ch != nil && !closed {
 		close(ch)
 	}
 }
@@ -234,7 +286,11 @@ func (s *Session) CancelSpeedTest() {
 
 // buildTransport constructs the SSH or WG-over-wstunnel transport from config. The
 // carrier socket is protected so it egresses directly instead of looping into the tun.
-func buildTransport(cfg *coreConfig, prot Protector, sink EventSink) (transport.Transport, error) {
+//
+// ctx bounds and cancels any network I/O construction performs. That matters for SSH,
+// which completes its whole handshake here (its WaitReady is a no-op), so without a
+// deadline a server that accepts TCP and then goes silent would block Start forever.
+func buildTransport(ctx context.Context, cfg *coreConfig, prot Protector, sink EventSink) (transport.Transport, error) {
 	dial := protectedDialFunc(prot)
 
 	switch cfg.Transport {
@@ -250,7 +306,8 @@ func buildTransport(cfg *coreConfig, prot Protector, sink EventSink) (transport.
 				return nil, fmt.Errorf("ssh host key: %w", err)
 			}
 		}
-		return transport.NewSSH(transport.SSHConfig{
+		Logf("connect: ssh dial %s user=%s", cfg.SSH.Addr, cfg.SSH.User)
+		return transport.NewSSHContext(ctx, transport.SSHConfig{
 			Addr:    cfg.SSH.Addr,
 			User:    cfg.SSH.User,
 			Signer:  signer,
@@ -262,6 +319,7 @@ func buildTransport(cfg *coreConfig, prot Protector, sink EventSink) (transport.
 				}
 			},
 			OnState: func(connected bool) {
+				logCarrier("ssh", connected)
 				if sink == nil {
 					return
 				}
@@ -274,6 +332,7 @@ func buildTransport(cfg *coreConfig, prot Protector, sink EventSink) (transport.
 		})
 
 	case "wgws":
+		Logf("connect: wgws carrier %s -> %s:%d", cfg.WG.WSURL, cfg.WG.ForwardHost, cfg.WG.ForwardPort)
 		locals, err := parseAddrs(cfg.WG.LocalAddrs)
 		if err != nil {
 			return nil, fmt.Errorf("wg localAddrs: %w", err)
@@ -296,6 +355,7 @@ func buildTransport(cfg *coreConfig, prot Protector, sink EventSink) (transport.
 			// tunnel carrying nothing; without this the UI would keep showing Connected
 			// for the whole outage instead of "Reconnecting".
 			OnState: func(connected bool) {
+				logCarrier("wgws", connected)
 				if sink == nil {
 					return
 				}
@@ -318,6 +378,16 @@ func buildTransport(cfg *coreConfig, prot Protector, sink EventSink) (transport.
 
 	default:
 		return nil, fmt.Errorf("unknown transport %q", cfg.Transport)
+	}
+}
+
+// logCarrier records carrier liveness flips, which is the signal that distinguishes a
+// server that is down from a network that silently drops long-lived connections.
+func logCarrier(kind string, connected bool) {
+	if connected {
+		Logf("carrier(%s): connected", kind)
+	} else {
+		Logf("carrier(%s): dropped, reconnecting", kind)
 	}
 }
 
