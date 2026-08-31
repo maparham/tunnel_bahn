@@ -67,7 +67,8 @@ fun AppPickerScreen(
         topBar = {
             TopAppBar(
                 title = { Text("Apps (${selected.size})") },
-                navigationIcon = { TextButton(onClick = { onDone(selected.toList()) }) { Text("Done") } },
+                navigationIcon = { TextButton(onClick = { onDone(initialPackages) }) { Text("Cancel") } },
+                actions = { TextButton(onClick = { onDone(selected.toList()) }) { Text("Done") } },
             )
         },
     ) { pad ->

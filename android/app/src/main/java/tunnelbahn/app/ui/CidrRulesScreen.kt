@@ -52,6 +52,9 @@ fun CidrRulesScreen(
             TopAppBar(
                 title = { Text("Destinations") },
                 navigationIcon = {
+                    TextButton(onClick = { onDone(initialMode, initialInclude, initialExclude) }) { Text("Cancel") }
+                },
+                actions = {
                     TextButton(onClick = { onDone(mode, include.toList(), exclude.toList()) }) { Text("Done") }
                 },
             )

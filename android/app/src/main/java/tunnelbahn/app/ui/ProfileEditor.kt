@@ -7,10 +7,10 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -81,17 +81,36 @@ fun ProfileEditor(profileId: String?, onDone: () -> Unit) {
             TopAppBar(
                 title = { Text(if (profileId == null) "New profile" else "Edit profile") },
                 navigationIcon = { TextButton(onClick = onDone) { Text("Cancel") } },
+                actions = {
+                    TextButton(
+                        onClick = { store.save(draft); onDone() },
+                        enabled = draft.name.isNotBlank(),
+                    ) {
+                        Text("Save")
+                    }
+                },
             )
         },
     ) { pad ->
         Column(
-            Modifier.fillMaxSize().padding(pad).padding(16.dp).verticalScroll(rememberScrollState()),
+            Modifier
+                .fillMaxSize()
+                .padding(pad)
+                .imePadding()
+                .verticalScroll(rememberScrollState())
+                .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             OutlinedTextField(
                 value = draft.name,
                 onValueChange = { draft = draft.copy(name = it) },
                 label = { Text("Name") },
+                singleLine = true,
+                supportingText = if (draft.name.isBlank()) {
+                    { Text("Required before you can save") }
+                } else {
+                    null
+                },
                 modifier = Modifier.fillMaxWidth(),
             )
 
@@ -134,14 +153,6 @@ fun ProfileEditor(profileId: String?, onDone: () -> Unit) {
                 draft = draft,
                 onDestinations = { subScreen = EditorSub.CIDRS },
             )
-
-            Button(
-                onClick = { store.save(draft); onDone() },
-                enabled = draft.name.isNotBlank(),
-                modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
-            ) {
-                Text("Save")
-            }
         }
     }
 }
