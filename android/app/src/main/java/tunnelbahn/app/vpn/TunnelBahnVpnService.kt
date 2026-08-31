@@ -48,6 +48,13 @@ class TunnelBahnVpnService : VpnService() {
     // 2s stats poller: samples the Go counters, re-posts the notification with speeds.
     // Speed is a delta normalized by the actual elapsed time between samples, matching the
     // desktop app's steadier reading rather than assuming a fixed tick.
+    // Backstop for a connect that never resolves. The Go core bounds transport
+    // construction and the readiness gate at connectTimeout each, so a healthy failure
+    // lands well inside this; if it fires, the core failed to honour its own budget and
+    // the log line below says so rather than reporting a generic connection failure.
+    private val watchdogHandler = Handler(Looper.getMainLooper())
+    private var watchdogRunnable: Runnable? = null
+
     private val pollHandler = Handler(Looper.getMainLooper())
     private var pollRunnable: Runnable? = null
     private var lastRx = 0L
@@ -59,6 +66,7 @@ class TunnelBahnVpnService : VpnService() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_STOP -> {
+                Mobile.log("service: stop requested by user (state=${state.value})")
                 userStopping = true
                 endSession(failed = false)
                 return START_NOT_STICKY
@@ -73,6 +81,7 @@ class TunnelBahnVpnService : VpnService() {
         // Already running or connecting: switch. Stop the current session and defer the new
         // connect until its teardown completes (endSession consumes pendingProfileId).
         if (session != null) {
+            Mobile.log("service: switching to profile $profileId; stopping the live session")
             pendingProfileId = profileId
             userStopping = true // this teardown is a deliberate switch, not a failed connect
             session?.stop()
@@ -99,6 +108,8 @@ class TunnelBahnVpnService : VpnService() {
         ensureNotificationChannel()
         startForeground(NOTIF_ID, buildNotification())
         state.value = STATE_CONNECTING
+        Mobile.log("service: connecting \"${profile.name}\" (${profile.transport})")
+        armConnectWatchdog()
         startTunnel(profile)
         return START_STICKY
     }
@@ -142,7 +153,7 @@ class TunnelBahnVpnService : VpnService() {
         activeSession = s
         worker = Thread {
             try {
-                s.start(fd.toLong(), profile.toCoreConfigJson(), AndroidProtector(this), Sink())
+                s.start(fd.toLong(), profile.toCoreConfigJson(), AndroidProtector(this), Sink(s))
             } catch (e: Exception) {
                 lastError.value = e.message ?: "session failed"
             }
@@ -212,6 +223,7 @@ class TunnelBahnVpnService : VpnService() {
      * Idempotent: safe to call twice (e.g. user stop, then the worker's own teardown).
      */
     private fun endSession(failed: Boolean) {
+        cancelConnectWatchdog()
         stopPolling()
         session?.stop()
         session = null
@@ -230,9 +242,11 @@ class TunnelBahnVpnService : VpnService() {
         }
         runningProfileId.value = null
         if (failed) {
+            Mobile.log("service: connect failed: ${lastError.value.ifBlank { "no detail" }}")
             state.value = STATE_ERROR
             Haptics.failure(this)
         } else {
+            Mobile.log("service: disconnected")
             state.value = STATE_DISCONNECTED
         }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
@@ -245,6 +259,7 @@ class TunnelBahnVpnService : VpnService() {
     }
 
     override fun onDestroy() {
+        cancelConnectWatchdog()
         stopPolling()
         session?.stop()
         // A system-initiated destroy where the process survives must not leave a stale Session
@@ -268,8 +283,25 @@ class TunnelBahnVpnService : VpnService() {
         endSession(failed = false)
     }
 
-    private inner class Sink : EventSink {
-        override fun onState(s: String) {
+    /**
+     * Receives lifecycle events from the Go core for one specific [owner] session.
+     *
+     * Every callback hops to the main thread and drops events from a session that is no
+     * longer the current one. Both halves matter: the transports report carrier flips
+     * from their own goroutines, so without this a late "degraded" landing after
+     * [endSession] would overwrite DISCONNECTED and put the UI back on a spinning ring
+     * for a tunnel the user had just cancelled.
+     */
+    private inner class Sink(private val owner: Session) : EventSink {
+        /** Runs [body] on the main thread unless [owner] has been superseded or torn down. */
+        private fun ifCurrent(body: () -> Unit) {
+            mainHandler.post { if (session === owner) body() }
+        }
+
+        override fun onState(s: String) = ifCurrent {
+            if (state.value != s) {
+                Mobile.log("state: ${state.value} -> $s")
+            }
             state.value = s
             if (s == STATE_RUNNING) {
                 // The wgws transport re-reports "running" after every carrier reconnect,
@@ -282,11 +314,12 @@ class TunnelBahnVpnService : VpnService() {
                     reachedRunning = true
                     Haptics.success(this@TunnelBahnVpnService)
                 }
-                mainHandler.post { startPolling() }
+                startPolling() // already on the main thread
             }
         }
 
-        override fun onError(msg: String) {
+        override fun onError(msg: String) = ifCurrent {
+            Mobile.log("core error: $msg")
             lastError.value = msg
         }
 
@@ -302,10 +335,40 @@ class TunnelBahnVpnService : VpnService() {
             }
         }
 
-        override fun onExitInfo(ip: String, city: String, country: String) {
+        override fun onExitInfo(ip: String, city: String, country: String) = ifCurrent {
             exitIp.value = ip
             exitLocation.value = tunnelbahn.app.ui.formatLocation(city, country)
         }
+    }
+
+    /**
+     * Fails the attempt if it is still CONNECTING after [CONNECT_WATCHDOG_MS].
+     *
+     * The connect path is bounded in the Go core, so this should never fire. It exists
+     * because the state it guards is one no other code path can clear: if the core ever
+     * blocks past its own budget, the worker thread never returns, [endSession] is never
+     * posted, and the UI spins forever. Cancelling is now always available to the user,
+     * but the UI must also recover on its own.
+     */
+    private fun armConnectWatchdog() {
+        cancelConnectWatchdog()
+        val r = Runnable {
+            watchdogRunnable = null
+            if (state.value != STATE_CONNECTING) return@Runnable
+            Mobile.log("watchdog: still connecting after ${CONNECT_WATCHDOG_MS / 1000}s; giving up")
+            if (lastError.value.isBlank()) {
+                lastError.value = "Timed out while connecting"
+            }
+            userStopping = false
+            endSession(failed = true)
+        }
+        watchdogRunnable = r
+        watchdogHandler.postDelayed(r, CONNECT_WATCHDOG_MS)
+    }
+
+    private fun cancelConnectWatchdog() {
+        watchdogRunnable?.let { watchdogHandler.removeCallbacks(it) }
+        watchdogRunnable = null
     }
 
     private fun startPolling() {
@@ -385,7 +448,16 @@ class TunnelBahnVpnService : VpnService() {
         const val STATE_DISCONNECTED = "disconnected"
         const val STATE_CONNECTING = "connecting"
         const val STATE_RUNNING = "running"
+
+        /** The transport lost its carrier and is retrying. A session is still live and
+         *  the retry loop runs indefinitely, so the UI must keep offering a way out. */
+        const val STATE_DEGRADED = "degraded"
         const val STATE_ERROR = "error"
+
+        /** Upper bound on a connect attempt. The core allows connectTimeout (15s) for
+         *  transport construction and another for the readiness gate, so this sits above
+         *  their sum with margin and only fires when the core has misbehaved. */
+        private const val CONNECT_WATCHDOG_MS = 40_000L
 
         private const val NOTIF_ID = 1
         private const val CHANNEL_ID = "tunnel"

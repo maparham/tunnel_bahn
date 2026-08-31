@@ -30,6 +30,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.List
+import tunnelbahn.app.ui.icons.Description
 import tunnelbahn.app.ui.icons.Speed
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -78,6 +79,7 @@ fun HomeScreen(
     onAddProfile: () -> Unit,
     onEditProfile: (String) -> Unit,
     onSpeedTest: () -> Unit,
+    onLogs: () -> Unit,
 ) {
     val ctx = LocalContext.current
     val store = remember { ProfileStore(ctx) }
@@ -153,6 +155,9 @@ fun HomeScreen(
             TopAppBar(
                 title = { Text("TunnelBahn") },
                 actions = {
+                    IconButton(onClick = onLogs) {
+                        Icon(Icons.Default.Description, contentDescription = "Show logs")
+                    }
                     IconButton(onClick = onSpeedTest) {
                         Icon(Icons.Default.Speed, contentDescription = "Speed test")
                     }
@@ -208,19 +213,21 @@ private fun ConnectionHero(
 ) {
     val running = state == TunnelBahnVpnService.STATE_RUNNING
     val connecting = state == TunnelBahnVpnService.STATE_CONNECTING
+    val degraded = state == TunnelBahnVpnService.STATE_DEGRADED
+    val action = ringAction(state)
     val accent = stateColor(state)
 
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
         modifier = Modifier.fillMaxWidth(),
     ) {
-        // The ring is the primary control: tap to connect when idle, tap to disconnect when
-        // running. Taps are ignored mid-connect so the request cannot be cut off in flight.
+        // The ring is the primary control, and it must always offer an exit. It used to be
+        // inert while connecting and to fire *connect* while reconnecting, so an attempt
+        // that never succeeded left the user watching a spinner with no way to stop it.
         StatusRing(
             state = state,
             accent = accent,
-            enabled = !connecting,
-            onTap = if (running) onDisconnect else onConnect,
+            onTap = if (action == RingAction.CONNECT) onConnect else onDisconnect,
         )
         Spacer(Modifier.height(20.dp))
         Text(
@@ -264,7 +271,8 @@ private fun ConnectionHero(
         Text(
             when {
                 running -> "Tap the ring to disconnect"
-                connecting -> "Connecting..."
+                connecting -> "Tap the ring to cancel"
+                degraded -> "Carrier lost. Tap the ring to stop retrying."
                 else -> "Tap the ring to connect"
             },
             style = MaterialTheme.typography.bodyMedium,
@@ -340,11 +348,10 @@ private fun IpGeoRow(label: String, ip: String, location: String) {
 private fun StatusRing(
     state: String,
     accent: Color,
-    enabled: Boolean = false,
     onTap: (() -> Unit)? = null,
 ) {
     val running = state == TunnelBahnVpnService.STATE_RUNNING
-    val connecting = state == TunnelBahnVpnService.STATE_CONNECTING || state == "degraded"
+    val connecting = state == TunnelBahnVpnService.STATE_CONNECTING || state == TunnelBahnVpnService.STATE_DEGRADED
     val error = state == TunnelBahnVpnService.STATE_ERROR
     val track = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.14f)
 
@@ -369,11 +376,14 @@ private fun StatusRing(
     val dotColor = if (running || connecting || error) accent else track.copy(alpha = 0.6f)
 
     val tapModifier = if (onTap != null) {
+        val label = when (ringAction(state)) {
+            RingAction.CANCEL -> "Cancel"
+            RingAction.DISCONNECT -> "Disconnect"
+            RingAction.CONNECT -> "Connect"
+        }
         Modifier
             .clip(CircleShape)
-            .clickable(enabled = enabled, onClickLabel = if (running) "Disconnect" else "Connect") {
-                onTap()
-            }
+            .clickable(onClickLabel = label) { onTap() }
     } else {
         Modifier
     }
@@ -443,7 +453,7 @@ private fun EmptyHome(onAddProfile: () -> Unit, onImport: () -> Unit) {
 @Composable
 private fun stateColor(state: String): Color = when (state) {
     TunnelBahnVpnService.STATE_RUNNING -> Color(0xFF2E9E5B)
-    TunnelBahnVpnService.STATE_CONNECTING, "degraded" -> Color(0xFFE0A106)
+    TunnelBahnVpnService.STATE_CONNECTING, TunnelBahnVpnService.STATE_DEGRADED -> Color(0xFFE0A106)
     TunnelBahnVpnService.STATE_ERROR -> Color(0xFFD1493F)
     else -> MaterialTheme.colorScheme.onSurfaceVariant
 }
@@ -451,7 +461,7 @@ private fun stateColor(state: String): Color = when (state) {
 private fun stateLabel(state: String): String = when (state) {
     TunnelBahnVpnService.STATE_RUNNING -> "Connected"
     TunnelBahnVpnService.STATE_CONNECTING -> "Connecting"
-    "degraded" -> "Reconnecting"
+    TunnelBahnVpnService.STATE_DEGRADED -> "Reconnecting"
     TunnelBahnVpnService.STATE_ERROR -> "Failed to connect"
     else -> "Disconnected"
 }

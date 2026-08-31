@@ -10,7 +10,7 @@ import androidx.compose.ui.unit.dp
 /**
  * Icons vendored from androidx.compose.material:material-icons-extended.
  *
- * Only these three glyphs are used by the app and none of them ship in
+ * Only these four glyphs are used by the app and none of them ship in
  * material-icons-core, so we inline them here and depend on -core instead of
  * pulling the whole ~34 MB extended set into the build. Path data is a
  * verbatim reconstruction of the library's own ImageVectors; do not edit the
@@ -230,4 +230,50 @@ val Icons.AutoMirrored.Filled.HelpOutline: ImageVector
                 close()
             }
         }.build().also { _helpOutline = it }
+    }
+
+private var _description: ImageVector? = null
+
+/** A document with ruled lines: the "Show logs" affordance. */
+val Icons.Filled.Description: ImageVector
+    get() {
+        _description?.let { return it }
+        return ImageVector.Builder(
+            name = "Filled.Description",
+            defaultWidth = 24.dp,
+            defaultHeight = 24.dp,
+            viewportWidth = 24f,
+            viewportHeight = 24f,
+        ).apply {
+            path(fill = SolidColor(Color.Black)) {
+                moveTo(8.0f, 16.0f)
+                horizontalLineToRelative(8.0f)
+                verticalLineToRelative(2.0f)
+                horizontalLineTo(8.0f)
+                close()
+                moveToRelative(0.0f, -4.0f)
+                horizontalLineToRelative(8.0f)
+                verticalLineToRelative(2.0f)
+                horizontalLineTo(8.0f)
+                close()
+                moveTo(14.0f, 2.0f)
+                horizontalLineTo(6.0f)
+                curveToRelative(-1.1f, 0.0f, -2.0f, 0.9f, -2.0f, 2.0f)
+                verticalLineToRelative(16.0f)
+                curveToRelative(0.0f, 1.1f, 0.89f, 2.0f, 1.99f, 2.0f)
+                horizontalLineTo(18.0f)
+                curveToRelative(1.1f, 0.0f, 2.0f, -0.9f, 2.0f, -2.0f)
+                verticalLineTo(8.0f)
+                lineToRelative(-6.0f, -6.0f)
+                close()
+                moveTo(18.0f, 20.0f)
+                horizontalLineTo(6.0f)
+                verticalLineTo(4.0f)
+                horizontalLineToRelative(7.0f)
+                verticalLineToRelative(5.0f)
+                horizontalLineToRelative(5.0f)
+                verticalLineToRelative(11.0f)
+                close()
+            }
+        }.build().also { _description = it }
     }
