@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/netip"
+	"strings"
 )
 
 // sshParams / wgParams mirror the JSON the Kotlin layer emits from a Profile.
@@ -25,6 +26,9 @@ type wgParams struct {
 	WSURL            string   `json:"wsURL"`
 	ForwardHost      string   `json:"forwardHost"`
 	ForwardPort      int      `json:"forwardPort"`
+	// Plain-UDP WireGuard only ("wg" transport).
+	Endpoint  string `json:"endpoint"`  // host:port of the WG peer
+	Keepalive int    `json:"keepalive"` // persistent keepalive seconds; 0 => 25
 }
 
 type rawConfig struct {
@@ -58,6 +62,10 @@ func parseConfig(s string) (*coreConfig, error) {
 
 	switch raw.Transport {
 	case "ssh", "wgws":
+	case "wg":
+		if strings.TrimSpace(raw.WG.Endpoint) == "" {
+			return nil, fmt.Errorf("config: wg endpoint required")
+		}
 	default:
 		return nil, fmt.Errorf("config: unknown transport %q", raw.Transport)
 	}

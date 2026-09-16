@@ -41,3 +41,28 @@ func TestParseConfigRejectsBadCIDR(t *testing.T) {
 		t.Fatal("want error for malformed CIDR")
 	}
 }
+
+func TestParseConfigWGRequiresEndpoint(t *testing.T) {
+	if _, err := parseConfig(`{"transport":"wg","wg":{"endpoint":""}}`); err == nil {
+		t.Fatal("want error for wg without endpoint")
+	}
+	if _, err := parseConfig(`{"transport":"wg","wg":{"endpoint":"   "}}`); err == nil {
+		t.Fatal("want error for whitespace-only wg endpoint")
+	}
+}
+
+func TestParseConfigWGCarriesEndpointAndKeepalive(t *testing.T) {
+	c, err := parseConfig(`{"transport":"wg","wg":{"endpoint":"3.139.146.5:51820","keepalive":15}}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Transport != "wg" {
+		t.Fatalf("transport: %q", c.Transport)
+	}
+	if c.WG.Endpoint != "3.139.146.5:51820" {
+		t.Fatalf("endpoint: %q", c.WG.Endpoint)
+	}
+	if c.WG.Keepalive != 15 {
+		t.Fatalf("keepalive: %d", c.WG.Keepalive)
+	}
+}
