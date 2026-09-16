@@ -49,6 +49,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import tunnelbahn.app.profile.Profile
 import tunnelbahn.app.profile.ProfileStore
 import tunnelbahn.app.profile.appScopeSummary
+import tunnelbahn.app.profile.displayEndpoint
 import tunnelbahn.app.vpn.TunnelBahnVpnService
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -213,7 +214,7 @@ private fun ProfileRow(
                 )
             }
             Text(
-                "${profile.transport} · ${profile.endpoint.ifEmpty { profile.wsUrl }}",
+                "${profile.transport} · ${profile.displayEndpoint()}",
                 style = MaterialTheme.typography.bodyMedium,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,

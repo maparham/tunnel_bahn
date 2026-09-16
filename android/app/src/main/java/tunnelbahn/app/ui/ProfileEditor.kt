@@ -120,7 +120,12 @@ fun ProfileEditor(profileId: String?, onDone: () -> Unit) {
                     selected = draft.transport == Transport.SSH,
                     onClick = { draft = draft.copy(transport = Transport.SSH) },
                 )
-                Text("SSH", Modifier.padding(end = 16.dp))
+                Text("SSH", Modifier.padding(end = 12.dp))
+                RadioButton(
+                    selected = draft.transport == Transport.WG,
+                    onClick = { draft = draft.copy(transport = Transport.WG) },
+                )
+                Text("WireGuard", Modifier.padding(end = 12.dp))
                 RadioButton(
                     selected = draft.transport == Transport.WGWS,
                     onClick = { draft = draft.copy(transport = Transport.WGWS) },
@@ -235,12 +240,22 @@ private fun SshFields(draft: Profile, update: (Profile) -> Unit) {
 
 @Composable
 private fun WgFields(draft: Profile, update: (Profile) -> Unit) {
-    OutlinedTextField(
-        value = draft.wsUrl,
-        onValueChange = { update(draft.copy(wsUrl = it)) },
-        label = { Text("wstunnel URL (wss://host/path/events)") },
-        modifier = Modifier.fillMaxWidth(),
-    )
+    if (draft.transport == Transport.WG) {
+        OutlinedTextField(
+            value = draft.wgEndpoint,
+            onValueChange = { update(draft.copy(wgEndpoint = it)) },
+            label = { Text("WireGuard endpoint (host:port)") },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth(),
+        )
+    } else {
+        OutlinedTextField(
+            value = draft.wsUrl,
+            onValueChange = { update(draft.copy(wsUrl = it)) },
+            label = { Text("wstunnel URL (wss://host/path/events)") },
+            modifier = Modifier.fillMaxWidth(),
+        )
+    }
     OutlinedTextField(
         value = draft.wgPrivateKey,
         onValueChange = { update(draft.copy(wgPrivateKey = it)) },
