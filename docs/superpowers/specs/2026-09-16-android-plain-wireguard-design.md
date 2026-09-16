@@ -2,7 +2,7 @@
 
 **Date:** 2026-09-16
 **Status:** Proposed
-**Context:** The Android client carries WireGuard only inside a wstunnel WebSocket relay (`wgws`). The macOS app refuses to export a plain WireGuard profile to Android ("This profile has no Android-compatible transport"), so a profile such as the user's AWS server, which has no TCP wrapper, cannot be used on the phone. The Android client design (2026-08-02) stated "the app never exposes raw WG on the wire" because raw WireGuard is fingerprinted on the target network. That principle is now relaxed: the app mirrors TunnelBahn's primary function, WireGuard tunneling, and the user chooses per profile whether to wrap it.
+**Context:** The Android client carries WireGuard only inside a wstunnel WebSocket relay (`wgws`). The macOS app refuses to export a plain WireGuard profile to Android ("This profile has no Android-compatible transport"), so a profile such as the user's AWS server, which has no TCP wrapper, cannot be used on the phone. The Android client design (2026-08-02) stated "the app never exposes raw WG on the wire" because raw WireGuard is fingerprinted on the target network. That principle is now relaxed: plain WireGuard is only sometimes blocked on the Iranian network, and when it gets through it is the fastest path, so the app should be able to take advantage of it. The app mirrors TunnelBahn's primary function, WireGuard tunneling, and the user chooses per profile whether to wrap it.
 
 ## Goal
 
@@ -21,7 +21,7 @@ Add a third Android transport, plain UDP WireGuard (`wg`), that connects to the 
 ## Non-goals
 
 - Multiple peers, endpoint roaming, or IPv6-only endpoints beyond what `net.Dial` already handles.
-- Obfuscation of plain WireGuard. If the network blocks it, the user picks `wgws` or SSH.
+- Obfuscation of plain WireGuard. When the network blocks it, the user switches that profile to `wgws` or SSH; automatic fallback between transports is a later feature.
 - Changing the routing, DNS, per-app, or exit-probe layers. They already work over the `Transport` interface.
 
 ## Payload and config format
@@ -103,7 +103,7 @@ The Kotlin-to-core config JSON (`Profile.toCoreConfigJson`) mirrors this: `"tran
 
 ## Testing
 
-**Go (`android/core`).** Note: the module declares Go 1.26.3, the machine has 1.25.3, and the toolchain download is blocked from the agent sandbox; tests run with `GOTOOLCHAIN=local` if the code compiles on 1.25, otherwise the download must be allowed once.
+**Go (`android/core`).** Run `go test ./...` in `android/core`. The machine's Go is 1.27.1 with `GOPROXY=https://goproxy.io,direct` because proxy.golang.org is geo-blocked here.
 
 - `udpBind`: a loopback UDP echo server; `Send` then the receive fn returns the echoed datagram; after `Close` the receive fn returns `net.ErrClosed`; Close-then-Open cycle works.
 - `uapiConfig`: emits the given endpoint and keepalive; wgws output is byte-identical to before.
