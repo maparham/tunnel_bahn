@@ -8,7 +8,8 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 
-enum class Transport { SSH, WGWS }
+/** SSH flow forwarding; WireGuard over a wstunnel WebSocket; plain UDP WireGuard. */
+enum class Transport { SSH, WGWS, WG }
 
 enum class RoutingMode { INCLUDE, EXCLUDE }
 
@@ -45,6 +46,9 @@ data class Profile(
     val wsUrl: String = "",
     val wsForwardHost: String = "",
     val wsForwardPort: Int = 0,
+    // Plain UDP WireGuard (Transport.WG)
+    val wgEndpoint: String = "",          // host:port of the WG peer
+    val wgKeepalive: Int = 25,            // persistent keepalive seconds
     // Routing
     val routingMode: RoutingMode = RoutingMode.EXCLUDE,
     val includeCIDRs: List<String> = emptyList(),
@@ -66,6 +70,13 @@ fun Profile.appScopeSummary(): String = when (appScope) {
         if (packages.isEmpty()) "Full tunnel" else "All except ${packages.size}"
 }
 
+/** The server address to show for this profile, whichever transport it uses. */
+fun Profile.displayEndpoint(): String = when (transport) {
+    Transport.SSH -> endpoint
+    Transport.WG -> wgEndpoint
+    Transport.WGWS -> wsUrl
+}
+
 /**
  * Builds the exact JSON that the Go core's parseConfig expects (see android/core/config.go).
  * Key material is included here because it cannot live in the Android Keystore directly.
@@ -74,7 +85,14 @@ fun Profile.toCoreConfigJson(): String {
     fun arr(items: List<String>) = JsonArray(items.map { JsonPrimitive(it) })
 
     val obj = buildJsonObject {
-        put("transport", if (transport == Transport.SSH) "ssh" else "wgws")
+        put(
+            "transport",
+            when (transport) {
+                Transport.SSH -> "ssh"
+                Transport.WGWS -> "wgws"
+                Transport.WG -> "wg"
+            },
+        )
         put("mode", if (routingMode == RoutingMode.INCLUDE) "include" else "exclude")
         put("mtu", wgMtu)
         put("includeCIDRs", arr(includeCIDRs))
@@ -103,4 +121,6 @@ private fun Profile.wgBlock(): JsonObject = buildJsonObject {
     put("wsURL", wsUrl)
     put("forwardHost", wsForwardHost)
     put("forwardPort", wsForwardPort)
+    put("endpoint", wgEndpoint)
+    put("keepalive", wgKeepalive)
 }

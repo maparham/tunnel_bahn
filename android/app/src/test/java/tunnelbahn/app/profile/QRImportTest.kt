@@ -55,4 +55,38 @@ class QRImportTest {
         val raw = """{"kind":"tunnelbahn.profile","name":"x","transport":"ssh"}"""
         assertTrue(parseImportedProfile(raw, id) is QRImportResult.Error)
     }
+
+    @Test fun plain_wg_payload_maps_endpoint_and_keepalive() {
+        val raw = """
+            {"kind":"tunnelbahn.profile","name":"AWS","transport":"wg",
+             "wg":{"privateKey":"pk","peerPublicKey":"peer","presharedKey":"",
+                   "localAddrs":["10.9.0.2"],"dns":["1.1.1.1"],"mtu":1280,
+                   "endpoint":"3.139.146.5:51820","keepalive":15}}
+        """.trimIndent()
+        val p = (parseImportedProfile(raw, id) as QRImportResult.Ok).profile
+        assertEquals(Transport.WG, p.transport)
+        assertEquals("3.139.146.5:51820", p.wgEndpoint)
+        assertEquals(15, p.wgKeepalive)
+        assertEquals("pk", p.wgPrivateKey)
+        assertEquals("peer", p.wgPeerPublicKey)
+        assertEquals(listOf("10.9.0.2"), p.wgLocalAddrs)
+        assertEquals("", p.wsUrl)
+    }
+
+    @Test fun plain_wg_payload_defaults_keepalive_to_25() {
+        val raw = """
+            {"kind":"tunnelbahn.profile","name":"AWS","transport":"wg",
+             "wg":{"privateKey":"pk","peerPublicKey":"peer","endpoint":"1.2.3.4:51820"}}
+        """.trimIndent()
+        val p = (parseImportedProfile(raw, id) as QRImportResult.Ok).profile
+        assertEquals(25, p.wgKeepalive)
+    }
+
+    @Test fun plain_wg_payload_without_endpoint_is_rejected() {
+        val raw = """
+            {"kind":"tunnelbahn.profile","name":"AWS","transport":"wg",
+             "wg":{"privateKey":"pk","peerPublicKey":"peer","endpoint":""}}
+        """.trimIndent()
+        assertTrue(parseImportedProfile(raw, id) is QRImportResult.Error)
+    }
 }

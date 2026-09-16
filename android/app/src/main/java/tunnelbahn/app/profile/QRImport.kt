@@ -32,6 +32,8 @@ private data class QRWg(
     val wsURL: String = "",
     val forwardHost: String = "",
     val forwardPort: Int = 0,
+    val endpoint: String = "",
+    val keepalive: Int = 25,
 )
 
 private val importJson = Json { ignoreUnknownKeys = true }
@@ -80,6 +82,25 @@ fun parseImportedProfile(raw: String, newId: String): QRImportResult {
                     wsUrl = w.wsURL,
                     wsForwardHost = w.forwardHost,
                     wsForwardPort = w.forwardPort,
+                )
+            )
+        }
+        "wg" -> {
+            val w = payload.wg ?: return QRImportResult.Error("QR is missing WireGuard details.")
+            if (w.endpoint.isBlank()) return QRImportResult.Error("QR is missing the WireGuard endpoint.")
+            QRImportResult.Ok(
+                Profile(
+                    id = newId,
+                    name = payload.name,
+                    transport = Transport.WG,
+                    wgPrivateKey = w.privateKey,
+                    wgPeerPublicKey = w.peerPublicKey,
+                    wgPresharedKey = w.presharedKey,
+                    wgLocalAddrs = w.localAddrs,
+                    wgDns = w.dns,
+                    wgMtu = w.mtu,
+                    wgEndpoint = w.endpoint,
+                    wgKeepalive = w.keepalive,
                 )
             )
         }
