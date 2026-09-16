@@ -27,6 +27,8 @@ Ground truth for the target network (verified 2026-08-02, not from memory):
 Because WG is only safe when wrapped, the app never exposes raw WG on the wire: the WG
 transport always rides inside the wstunnel TLS/WebSocket layer.
 
+> **Update 2026-09-16:** relaxed. Plain WireGuard is only sometimes blocked on the target network and is the fastest path when it gets through, so the app now also offers an unwrapped `wg` transport chosen per profile. See `2026-09-16-android-plain-wireguard-design.md`.
+
 ## Goal / Acceptance
 
 - An Android app that connects to the **existing** TunnelBahn servers (WG+wstunnel on

@@ -657,15 +657,21 @@ struct ProfilesView: View {
             } else {
                 content = AnyView(
                     Text("Profile is too large to encode as a QR code.")
+                        .multilineTextAlignment(.center)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(width: 240)
                         .foregroundStyle(.secondary)
-                        .padding(32)
+                        .padding(16)
                 )
             }
         } catch {
             content = AnyView(
                 Text(error.localizedDescription)
+                    .multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(width: 240)
                     .foregroundStyle(.secondary)
-                    .padding(32)
+                    .padding(16)
             )
         }
         presentQRPanel(title: "Android QR: \(profile.name)", content: content)

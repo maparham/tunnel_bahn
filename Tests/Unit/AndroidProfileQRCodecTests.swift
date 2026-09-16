@@ -26,7 +26,8 @@ final class AndroidProfileQRCodecTests: XCTestCase {
     private func makeWGProfile(
         serverHost: String = "1.2.3.4", serverPort: UInt16 = 443, tls: Bool = true,
         pathPrefix: String = "tun", forwardHost: String = "127.0.0.1", forwardPort: UInt16 = 51840,
-        wrapper hasWrapper: Bool = true
+        wrapper hasWrapper: Bool = true,
+        endpoint: String = "127.0.0.1:51840", keepalive: Int? = nil
     ) -> WireGuardProfile {
         let wrapper = hasWrapper ? WireGuardTCPWrapper(
             serverHost: serverHost, serverPort: serverPort, tls: tls, verifyCert: false,
@@ -35,7 +36,7 @@ final class AndroidProfileQRCodecTests: XCTestCase {
         return WireGuardProfile(
             name: "wg-profile",
             interface: WireGuardInterface(privateKeyRef: "wg-ref", addresses: ["10.9.0.2/32"], dnsServers: ["1.1.1.1"], mtu: 1280),
-            peers: [WireGuardPeer(publicKey: "peerpub", endpoint: "127.0.0.1:51840", allowedIPs: ["0.0.0.0/0"])],
+            peers: [WireGuardPeer(publicKey: "peerpub", endpoint: endpoint, allowedIPs: ["0.0.0.0/0"], persistentKeepalive: keepalive)],
             tcpWrapper: wrapper
         )
     }
@@ -78,8 +79,42 @@ final class AndroidProfileQRCodecTests: XCTestCase {
         XCTAssertEqual(wg["wsURL"] as? String, "ws://1.2.3.4:443/tun/events")
     }
 
-    func testPlainWireGuardWithoutWrapperThrows() {
+    func testPlainWireGuardEncodesAsWGWithEndpointAndKeepalive() throws {
+        let profile = makeWGProfile(wrapper: false, endpoint: "3.139.146.5:51820", keepalive: 15)
+        let json = try AndroidProfileQRCodec.encode(profile, secrets: fakeKeychain)
+        let obj = try JSONSerialization.jsonObject(with: Data(json.utf8)) as! [String: Any]
+        XCTAssertEqual(obj["transport"] as? String, "wg")
+        let wg = obj["wg"] as! [String: Any]
+        XCTAssertEqual(wg["endpoint"] as? String, "3.139.146.5:51820")
+        XCTAssertEqual(wg["keepalive"] as? Int, 15)
+        XCTAssertEqual(wg["privateKey"] as? String, "wgpriv")
+        XCTAssertEqual(wg["peerPublicKey"] as? String, "peerpub")
+        XCTAssertEqual(wg["localAddrs"] as? [String], ["10.9.0.2"])
+        XCTAssertNil(wg["wsURL"])
+        XCTAssertNil(wg["forwardHost"])
+        XCTAssertNil(wg["forwardPort"])
+    }
+
+    func testPlainWireGuardDefaultsKeepaliveTo25() throws {
         let profile = makeWGProfile(wrapper: false)
-        XCTAssertThrowsError(try AndroidProfileQRCodec.encode(profile, secrets: fakeKeychain))
+        let json = try AndroidProfileQRCodec.encode(profile, secrets: fakeKeychain)
+        let obj = try JSONSerialization.jsonObject(with: Data(json.utf8)) as! [String: Any]
+        XCTAssertEqual((obj["wg"] as! [String: Any])["keepalive"] as? Int, 25)
+    }
+
+    func testWrapperEnabledStillEncodesAsWGWS() throws {
+        let json = try AndroidProfileQRCodec.encode(makeWGProfile(wrapper: true), secrets: fakeKeychain)
+        let obj = try JSONSerialization.jsonObject(with: Data(json.utf8)) as! [String: Any]
+        XCTAssertEqual(obj["transport"] as? String, "wgws")
+        XCTAssertNil((obj["wg"] as! [String: Any])["endpoint"])
+    }
+
+    func testPlainWireGuardWithEmptyEndpointThrows() {
+        let profile = makeWGProfile(wrapper: false, endpoint: "  ")
+        XCTAssertThrowsError(try AndroidProfileQRCodec.encode(profile, secrets: fakeKeychain)) { error in
+            guard case AndroidProfileQRError.noPeerEndpoint = error else {
+                return XCTFail("want noPeerEndpoint, got \(error)")
+            }
+        }
     }
 }
