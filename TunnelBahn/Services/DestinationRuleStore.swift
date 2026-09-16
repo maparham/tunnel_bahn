@@ -15,13 +15,23 @@ private struct DestinationRulesByModePersisted: Codable {
 final class DestinationRuleStore: ObservableObject {
     /// The currently edited mode's rules. All published arrays and every mutator refer to
     /// `editedMode`'s set; the other mode's set is parked in `offModeSet`.
-    @Published private(set) var customRules: [DestinationCidrRule] = []
-    @Published private(set) var bulkGroups: [DestinationCidrBulkGroup] = []
-    @Published private(set) var domainRules: [DestinationDomainRule] = []
-    @Published private(set) var editedMode: DestinationFilterMode = .include
+    @Published private(set) var customRules: [DestinationCidrRule] = [] { didSet { rulesVersion &+= 1 } }
+    @Published private(set) var bulkGroups: [DestinationCidrBulkGroup] = [] { didSet { rulesVersion &+= 1 } }
+    @Published private(set) var domainRules: [DestinationDomainRule] = [] { didSet { rulesVersion &+= 1 } }
+    @Published private(set) var editedMode: DestinationFilterMode = .include { didSet { rulesVersion &+= 1 } }
 
     /// The not-currently-edited mode's complete rule set.
-    private var offModeSet = DestinationModeRuleSet()
+    private var offModeSet = DestinationModeRuleSet() { didSet { rulesVersion &+= 1 } }
+
+    /// Bumped on every rule mutation in either mode; keys the derived-value caches below so
+    /// they never compare whole rule arrays on the hot path.
+    private var rulesVersion: UInt64 = 0
+
+    /// Cache for `enabledValidCidrCount`. The menu bar asks for this on every AppState change,
+    /// and parsing thousands of bulk CIDRs each time was measured at ~15% of the idle main thread.
+    private var validCidrCountCache: (version: UInt64, mode: DestinationFilterMode, toggles: DestinationSectionToggles, count: Int)?
+    /// Number of times the count was actually recomputed (tests assert cache hits).
+    private(set) var validCidrCountComputations = 0
 
     private let defaultsKey = "destinationRulesByMode"
     private let defaults: UserDefaults
@@ -328,6 +338,19 @@ final class DestinationRuleStore: ObservableObject {
                     return (title: group.title, ranges: IPCIDRMatcher.prepare(cidrs))
                 }
         }
+    }
+
+    /// Number of enabled, syntactically valid, deduplicated ranges for `mode` under `toggles`.
+    /// Cached against the rule version and inputs; cheap to call from per-change refresh paths.
+    func enabledValidCidrCount(for mode: DestinationFilterMode, toggles: DestinationSectionToggles) -> Int {
+        if let cached = validCidrCountCache,
+           cached.version == rulesVersion, cached.mode == mode, cached.toggles == toggles {
+            return cached.count
+        }
+        validCidrCountComputations += 1
+        let count = IPCIDRMatcher.prepare(enabledFlattenedCidrs(for: mode, toggles: toggles)).count
+        validCidrCountCache = (rulesVersion, mode, toggles, count)
+        return count
     }
 
     /// Enabled entries only — invalid CIDR syntax may be included (extension skips unparsable strings). Order-preserving dedupe.

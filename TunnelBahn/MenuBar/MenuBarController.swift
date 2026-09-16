@@ -27,6 +27,8 @@ final class MenuBarController: NSObject, ObservableObject, NSMenuDelegate {
     private var selectRoutingModeHandler: ((RoutingMode) -> Void)?
     private var menuRefreshTimer: Timer?
     private var isMenuOpen = false
+    /// True while a coalesced `refreshMenuBar` is queued on the main queue (see `bindAppState`).
+    private var menuRefreshPending = false
 
     /// Signature of the last menu built while closed. A closed menu is invisible, so we only pay for
     /// a full `buildMenu()` when something that actually changes what the menu WILL show on next open
@@ -85,10 +87,14 @@ final class MenuBarController: NSObject, ObservableObject, NSMenuDelegate {
         appStateCancellable = appState.objectWillChange
             .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in
-                guard self != nil else { return }
+                guard let self, !self.menuRefreshPending else { return }
                 // objectWillChange fires *before* the mutation; defer one runloop turn so
                 // all @Published values have already been committed when we read them.
-                DispatchQueue.main.async {
+                // AppState fans in every child store, so a single stats tick emits many
+                // times back-to-back: coalesce them into one refresh per runloop turn.
+                self.menuRefreshPending = true
+                DispatchQueue.main.async { [weak self] in
+                    self?.menuRefreshPending = false
                     refreshMenuBar()
                 }
             }

@@ -38,15 +38,16 @@ private struct MenuBarRefreshInputs: Equatable {
         let state = appState.vpnManager.stats.state
         guard state == .connected || state == .reconnecting else { return nil }
         guard appState.settings.enforceDestinationFiltering else { return nil }
-        let cidrs = appState.destinationRuleStore.enabledFlattenedCidrs(
-                for: appState.settings.destinationFilterMode,
-                toggles: appState.settings.activeSectionToggles
-            )
-            .filter { !IPCIDRMatcher.prepare([$0]).isEmpty }
-        if cidrs.isEmpty {
+        // Cached in the store: this runs on every AppState change, and re-parsing every bulk
+        // CIDR here used to stall the main thread (see DestinationRuleStore.enabledValidCidrCount).
+        let count = appState.destinationRuleStore.enabledValidCidrCount(
+            for: appState.settings.destinationFilterMode,
+            toggles: appState.settings.activeSectionToggles
+        )
+        if count == 0 {
             return "Dest filter (no valid ranges)"
         }
-        return "Dest filter: \(cidrs.count) range\(cidrs.count == 1 ? "" : "s")"
+        return "Dest filter: \(count) range\(count == 1 ? "" : "s")"
     }
 }
 
