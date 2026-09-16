@@ -376,6 +376,38 @@ func buildTransport(ctx context.Context, cfg *coreConfig, prot Protector, sink E
 			Relay:            relay,
 		})
 
+	case "wg":
+		Logf("connect: wg dial %s", cfg.WG.Endpoint)
+		locals, err := parseAddrs(cfg.WG.LocalAddrs)
+		if err != nil {
+			return nil, fmt.Errorf("wg localAddrs: %w", err)
+		}
+		dns, err := parseAddrs(cfg.WG.DNS)
+		if err != nil {
+			return nil, fmt.Errorf("wg dns: %w", err)
+		}
+		return transport.NewWG(ctx, transport.WGConfig{
+			PrivateKey:       cfg.WG.PrivateKey,
+			PeerPublicKey:    cfg.WG.PeerPublicKey,
+			PeerPresharedKey: cfg.WG.PeerPresharedKey,
+			LocalAddrs:       locals,
+			DNS:              dns,
+			MTU:              cfg.WG.MTU,
+			Keepalive:        cfg.WG.Keepalive,
+		}, cfg.WG.Endpoint, transport.DialFunc(dial), func(connected bool) {
+			// Same contract as the wgws carrier: the service treats a repeated
+			// "running" after "degraded" as a reconnect.
+			logCarrier("wg", connected)
+			if sink == nil {
+				return
+			}
+			if connected {
+				sink.OnState("running")
+			} else {
+				sink.OnState("degraded")
+			}
+		})
+
 	default:
 		return nil, fmt.Errorf("unknown transport %q", cfg.Transport)
 	}
