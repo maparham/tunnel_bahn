@@ -2,14 +2,9 @@ package transport
 
 import (
 	"context"
-	"encoding/base64"
-	"encoding/hex"
-	"fmt"
 	"net"
 	"net/netip"
-	"strings"
 	"sync"
-	"time"
 
 	"golang.zx2c4.com/wireguard/conn"
 	"golang.zx2c4.com/wireguard/device"
@@ -108,17 +103,6 @@ func (b *relayBind) ParseEndpoint(s string) (conn.Endpoint, error) {
 
 func (b *relayBind) BatchSize() int { return 1 }
 
-// WGConfig configures a WG-over-wstunnel transport.
-type WGConfig struct {
-	PrivateKey       string // standard-base64 32-byte key
-	PeerPublicKey    string // standard-base64 32-byte key
-	PeerPresharedKey string // optional standard-base64 32-byte key
-	LocalAddrs       []netip.Addr
-	DNS              []netip.Addr
-	MTU              int
-	Relay            *wstunnel.Relay
-}
-
 type WGWS struct {
 	dev   *device.Device
 	tnet  *netstack.Net
@@ -126,28 +110,11 @@ type WGWS struct {
 }
 
 func NewWGWS(cfg WGConfig) (*WGWS, error) {
-	tunDev, tnet, err := netstack.CreateNetTUN(cfg.LocalAddrs, cfg.DNS, mtuOrDefault(cfg.MTU))
-	if err != nil {
-		cfg.Relay.Close()
-		return nil, err
-	}
 	inbound := make(chan []byte, 256)
 	bind := newRelayBind(cfg.Relay.Send, inbound)
-	dev := device.NewDevice(tunDev, bind, device.NewLogger(device.LogLevelError, "wg "))
-
-	uapi, err := uapiConfig(cfg)
+	// Endpoint is ignored by relayBind but must be syntactically valid.
+	dev, tnet, err := newWGDevice(cfg, bind, "127.0.0.1:51820")
 	if err != nil {
-		dev.Close()
-		cfg.Relay.Close()
-		return nil, err
-	}
-	if err := dev.IpcSet(uapi); err != nil {
-		dev.Close()
-		cfg.Relay.Close()
-		return nil, err
-	}
-	if err := dev.Up(); err != nil {
-		dev.Close()
 		cfg.Relay.Close()
 		return nil, err
 	}
@@ -178,36 +145,7 @@ func NewWGWS(cfg WGConfig) (*WGWS, error) {
 // (no internet), DialErr surfaces it immediately so we do not idle until the ctx
 // deadline.
 func (w *WGWS) WaitReady(ctx context.Context) error {
-	t := time.NewTicker(150 * time.Millisecond)
-	defer t.Stop()
-	for {
-		if w.handshakeComplete() {
-			return nil
-		}
-		if err := w.relay.DialErr(); err != nil {
-			return err
-		}
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-t.C:
-		}
-	}
-}
-
-// handshakeComplete reports whether the WG peer has a completed handshake, read from
-// the device's uapi "last_handshake_time_sec" line (0 until the first handshake).
-func (w *WGWS) handshakeComplete() bool {
-	uapi, err := w.dev.IpcGet()
-	if err != nil {
-		return false
-	}
-	for _, line := range strings.Split(uapi, "\n") {
-		if v, ok := strings.CutPrefix(line, "last_handshake_time_sec="); ok {
-			return strings.TrimSpace(v) != "" && strings.TrimSpace(v) != "0"
-		}
-	}
-	return false
+	return waitHandshake(ctx, w.dev, w.relay.DialErr)
 }
 
 func (w *WGWS) DialTCP(ctx context.Context, dst netip.AddrPort) (net.Conn, error) {
@@ -229,51 +167,4 @@ func (w *WGWS) DialUDP(ctx context.Context, dst netip.AddrPort) (net.PacketConn,
 func (w *WGWS) Close() error {
 	w.dev.Close()
 	return w.relay.Close()
-}
-
-func mtuOrDefault(m int) int {
-	if m <= 0 {
-		return 1280
-	}
-	return m
-}
-
-// uapiConfig builds the wireguard-go IpcSet string. WG keys arrive standard-base64
-// (the format the macOS profile stores) and must be converted to hex for uapi.
-func uapiConfig(cfg WGConfig) (string, error) {
-	priv, err := keyHex(cfg.PrivateKey)
-	if err != nil {
-		return "", fmt.Errorf("private key: %w", err)
-	}
-	pub, err := keyHex(cfg.PeerPublicKey)
-	if err != nil {
-		return "", fmt.Errorf("peer public key: %w", err)
-	}
-	var b strings.Builder
-	fmt.Fprintf(&b, "private_key=%s\n", priv)
-	fmt.Fprintf(&b, "public_key=%s\n", pub)
-	if cfg.PeerPresharedKey != "" {
-		psk, err := keyHex(cfg.PeerPresharedKey)
-		if err != nil {
-			return "", fmt.Errorf("preshared key: %w", err)
-		}
-		fmt.Fprintf(&b, "preshared_key=%s\n", psk)
-	}
-	// Endpoint is ignored by relayBind but must be syntactically valid.
-	fmt.Fprintf(&b, "endpoint=127.0.0.1:51820\n")
-	fmt.Fprintf(&b, "persistent_keepalive_interval=25\n")
-	fmt.Fprintf(&b, "allowed_ip=0.0.0.0/0\n")
-	fmt.Fprintf(&b, "allowed_ip=::/0\n")
-	return b.String(), nil
-}
-
-func keyHex(b64 string) (string, error) {
-	raw, err := base64.StdEncoding.DecodeString(b64)
-	if err != nil {
-		return "", err
-	}
-	if len(raw) != 32 {
-		return "", fmt.Errorf("want 32-byte key, got %d", len(raw))
-	}
-	return hex.EncodeToString(raw), nil
 }
