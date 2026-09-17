@@ -14,6 +14,7 @@ final class AppState: ObservableObject {
     var domainResolutionCoordinator: DomainResolutionCoordinator
     var logCaptureStore: LogCaptureStore
     var speedTestService: SpeedTestService
+    var countryListRefresher: CountryCidrListRefresher
     private var cancellables: Set<AnyCancellable> = []
     private var lastKnownProfileID: UUID?
     /// The profile ID whose snapshot is currently installed in the live stores.
@@ -51,6 +52,9 @@ final class AppState: ObservableObject {
         self.domainResolutionCoordinator = DomainResolutionCoordinator(ruleStore: destinationRuleStore)
         self.logCaptureStore = LogCaptureStore()
         self.speedTestService = SpeedTestService(vpnManager: vpnManager, profileStore: profileStore)
+        self.countryListRefresher = CountryCidrListRefresher(
+            ruleStore: destinationRuleStore, profileRoutingStore: profileRoutingStore
+        )
         bindChildStores()
         domainResolutionCoordinator.start()
 
@@ -58,6 +62,13 @@ final class AppState: ObservableObject {
         lastKnownProfileID = profileStore.selectedProfileID
         loadedProfileID = profileStore.selectedProfileID
         applySnapshot(for: profileStore.selectedProfileID)
+
+        // Country lists go stale as RIR allocations change; re-download them once per launch.
+        // Delayed so it never competes with launch work, and each failure is one quick error.
+        Task { [weak self] in
+            try? await Task.sleep(for: .seconds(5))
+            await self?.countryListRefresher.refreshAll()
+        }
     }
 
     private func bindChildStores() {
@@ -82,6 +93,11 @@ final class AppState: ObservableObject {
             .store(in: &cancellables)
 
         vpnManager.objectWillChange
+            .sink { [weak self] _ in self?.objectWillChange.send() }
+            .store(in: &cancellables)
+
+        // Only changes during a country refresh (rare), so forwarding is cheap.
+        countryListRefresher.objectWillChange
             .sink { [weak self] _ in self?.objectWillChange.send() }
             .store(in: &cancellables)
 

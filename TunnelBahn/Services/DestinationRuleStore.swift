@@ -80,7 +80,10 @@ final class DestinationRuleStore: ObservableObject {
     }
 
     /// Adds a new bulk list; duplicates any CIDR already present anywhere are skipped.
-    func importCidrLines(from plainText: String, bulkTitle: String) -> DestinationCidrImportResult {
+    /// `countryCode` marks the list as refreshable via `CountryCidrListRefresher`.
+    func importCidrLines(
+        from plainText: String, bulkTitle: String, countryCode: String? = nil
+    ) -> DestinationCidrImportResult {
         let title = bulkTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             ? "Imported list"
             : bulkTitle.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -108,7 +111,10 @@ final class DestinationRuleStore: ObservableObject {
         }
 
         if !newCidrs.isEmpty {
-            bulkGroups.append(DestinationCidrBulkGroup(title: title, cidrs: newCidrs))
+            bulkGroups.append(DestinationCidrBulkGroup(
+                title: title, cidrs: newCidrs,
+                countryCode: countryCode, refreshedAt: countryCode == nil ? nil : Date()
+            ))
             save()
         }
 
@@ -127,6 +133,67 @@ final class DestinationRuleStore: ObservableObject {
     func removeRule(id: UUID) {
         customRules.removeAll { $0.id == id }
         save()
+    }
+
+    // MARK: - Country lists
+
+    /// Country codes of every country-sourced bulk list in either mode.
+    var countryListCodes: Set<String> {
+        var codes = Set<String>()
+        for mode in [DestinationFilterMode.include, .exclude] {
+            for g in ruleSet(for: mode).bulkGroups {
+                if let code = g.countryCode { codes.insert(code) }
+            }
+        }
+        return codes
+    }
+
+    /// Replaces the prefixes of every bulk list tagged `countryCode`, in both modes, keeping
+    /// each list's id, title, enabled state and position. Returns how many lists changed.
+    @discardableResult
+    func refreshCountryLists(countryCode: String, plainText: String, now: Date = Date()) -> Int {
+        var updated = 0
+        for mode in [DestinationFilterMode.include, .exclude] {
+            let set = ruleSet(for: mode)
+            guard let next = Self.refreshingCountryLists(in: set, countryCode: countryCode, plainText: plainText, now: now) else {
+                continue
+            }
+            updated += 1
+            replaceRules(for: mode, customRules: next.customRules, bulkGroups: next.bulkGroups, domainRules: next.domainRules)
+        }
+        return updated
+    }
+
+    /// Pure form of `refreshCountryLists` for one rule set (also applied to stored profile
+    /// snapshots). nil when the set has no list for `countryCode`. New prefixes are validated
+    /// and deduplicated against the set's custom rules and its *other* bulk lists.
+    static func refreshingCountryLists(
+        in set: DestinationModeRuleSet, countryCode: String, plainText: String, now: Date
+    ) -> DestinationModeRuleSet? {
+        let indices = set.bulkGroups.indices.filter { set.bulkGroups[$0].countryCode == countryCode }
+        guard !indices.isEmpty else { return nil }
+
+        var taken = Set<String>()
+        for r in set.customRules { taken.insert(r.cidr.trimmingCharacters(in: .whitespacesAndNewlines)) }
+        for (i, g) in set.bulkGroups.enumerated() where !indices.contains(i) {
+            for c in g.cidrs { taken.insert(c) }
+        }
+
+        var fresh: [String] = []
+        for trimmed in DestinationCidrTextParser.candidateStrings(from: plainText) {
+            guard !taken.contains(trimmed), !IPCIDRMatcher.prepare([trimmed]).isEmpty else { continue }
+            fresh.append(trimmed)
+            taken.insert(trimmed)
+        }
+
+        var next = set
+        // Several lists for one country in a mode is unusual; the first keeps the prefixes and
+        // the rest become empty, which is what the duplicate check would have produced anyway.
+        for (n, i) in indices.enumerated() {
+            next.bulkGroups[i].cidrs = n == 0 ? fresh : []
+            next.bulkGroups[i].refreshedAt = now
+        }
+        return next
     }
 
     func removeBulkGroup(id: UUID) {

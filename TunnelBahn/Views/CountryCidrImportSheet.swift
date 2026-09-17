@@ -3,8 +3,8 @@ import SwiftUI
 /// Pick a country; its aggregated IPv4 prefixes are downloaded and handed back as plain text
 /// for the regular bulk-list import path.
 struct CountryCidrImportSheet: View {
-    /// Called on the main actor with the list text and the bulk list title to use.
-    let onImport: (_ text: String, _ title: String) -> Void
+    /// Called on the main actor with the downloaded list text and the chosen country.
+    let onImport: (_ text: String, _ country: CountryCidrListEntry) -> Void
 
     @Environment(\.dismiss) private var dismiss
     @State private var filter = ""
@@ -33,7 +33,7 @@ struct CountryCidrImportSheet: View {
                 Spacer()
                 Button("Cancel") { dismiss() }
                     .keyboardShortcut(.cancelAction)
-                Button("Import") { startImport() }
+                Button("Import") { startImport(selectedEntry) }
                     .keyboardShortcut(.defaultAction)
                     .disabled(selectedEntry == nil || isDownloading)
             }
@@ -68,6 +68,11 @@ struct CountryCidrImportSheet: View {
                         .foregroundStyle(.secondary)
                 }
                 .tag(entry.code)
+                .contentShape(Rectangle())
+                .onTapGesture(count: 2) {
+                    selection = entry.code
+                    startImport(entry)
+                }
             }
             .disabled(isDownloading)
 
@@ -97,15 +102,15 @@ struct CountryCidrImportSheet: View {
         .frame(minWidth: 420, idealWidth: 460, minHeight: 440, idealHeight: 520)
     }
 
-    private func startImport() {
-        guard let entry = selectedEntry, !isDownloading else { return }
+    private func startImport(_ entry: CountryCidrListEntry?) {
+        guard let entry, !isDownloading else { return }
         isDownloading = true
         errorMessage = nil
         Task {
             do {
                 let text = try await CountryCidrListSource.fetchListText(forCountryCode: entry.code)
                 isDownloading = false
-                onImport(text, entry.bulkListTitle)
+                onImport(text, entry)
                 dismiss()
             } catch {
                 isDownloading = false
@@ -115,9 +120,6 @@ struct CountryCidrImportSheet: View {
     }
 
     private static func describe(_ error: Error) -> String {
-        if let urlError = error as? URLError {
-            return "Could not reach GitHub (\(urlError.localizedDescription)). If GitHub is blocked where you are, connect the tunnel and try again."
-        }
-        return error.localizedDescription
+        CountryCidrListRefresher.describe(error)
     }
 }

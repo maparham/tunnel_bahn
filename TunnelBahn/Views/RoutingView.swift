@@ -169,8 +169,8 @@ struct RoutingView: View {
             BulkGroupPrefixesView(title: payload.title, cidrs: payload.cidrs)
         }
         .sheet(isPresented: $showCountryImport) {
-            CountryCidrImportSheet { text, title in
-                applyCidrImport(text, bulkTitle: title)
+            CountryCidrImportSheet { text, country in
+                applyCountryImport(text, country: country)
             }
         }
     }
@@ -490,6 +490,20 @@ struct RoutingView: View {
         applyCidrImport(text, bulkTitle: "Pasted list")
     }
 
+    /// A country already present in this mode is refreshed in place rather than duplicated.
+    private func applyCountryImport(_ plainText: String, country: CountryCidrListEntry) {
+        let store = appState.destinationRuleStore
+        if let existing = store.bulkGroups.first(where: { $0.countryCode == country.code }) {
+            appState.countryListRefresher.apply(countryCode: country.code, plainText: plainText)
+            let count = store.bulkGroups.first(where: { $0.id == existing.id })?.cidrs.count ?? 0
+            lastImportSummary = "Refreshed \"\(existing.title)\" · \(count) prefixes"
+            return
+        }
+        let result = store.importCidrLines(from: plainText, bulkTitle: country.bulkListTitle, countryCode: country.code)
+        lastImportSummary =
+            "Added \(result.added) · skipped \(result.skippedInvalid) invalid · skipped \(result.skippedDuplicate) duplicate"
+    }
+
     private func applyCidrImport(_ plainText: String, bulkTitle: String) {
         let result = appState.destinationRuleStore.importCidrLines(from: plainText, bulkTitle: bulkTitle)
         lastImportSummary =
@@ -705,6 +719,22 @@ private struct DestinationCidrBulkGroupRow: View {
         )
     }
 
+    private var refreshError: String? {
+        guard let code = storedGroup()?.countryCode else { return nil }
+        return appState.countryListRefresher.lastError[code]
+    }
+
+    private var prefixCaption: String {
+        let count = storedGroup()?.cidrs.count ?? 0
+        var caption = "\(count) prefixes"
+        if refreshError != nil {
+            caption += " · refresh failed"
+        } else if let date = storedGroup()?.refreshedAt {
+            caption += " · updated " + date.formatted(date: .abbreviated, time: .omitted)
+        }
+        return caption
+    }
+
     private var bulkTitleWidthProbe: String {
         let s = editingTitle ? titleDraft : storedTitle
         return s.isEmpty ? "\u{00a0}" : s
@@ -765,9 +795,10 @@ private struct DestinationCidrBulkGroupRow: View {
                     }
                 }
 
-                Text("\((storedGroup()?.cidrs.count ?? 0)) prefixes")
+                Text(prefixCaption)
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(refreshError == nil ? Color.secondary : Color.red)
+                    .help(refreshError ?? "")
             }
             .opacity(controlsDisabled ? 0.4 : 1)
             .onAppear {
@@ -780,6 +811,23 @@ private struct DestinationCidrBulkGroupRow: View {
             }
 
             Spacer(minLength: 0)
+
+            if let code = storedGroup()?.countryCode {
+                if appState.countryListRefresher.refreshing.contains(code) {
+                    ProgressView()
+                        .controlSize(.small)
+                        .frame(width: 20)
+                } else {
+                    Button {
+                        Task { await appState.countryListRefresher.refresh(countryCode: code) }
+                    } label: {
+                        Image(systemName: "arrow.clockwise")
+                    }
+                    .buttonStyle(.borderless)
+                    .instantTooltip("Download the current list for \(code)")
+                    .disabled(controlsDisabled)
+                }
+            }
 
             Button { onBrowse() } label: {
                 Image(systemName: "eye")

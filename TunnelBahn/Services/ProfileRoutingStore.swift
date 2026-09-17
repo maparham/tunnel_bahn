@@ -18,6 +18,31 @@ final class ProfileRoutingStore: ObservableObject {
         persist()
     }
 
+    /// Applies `transform` to every stored snapshot; `transform` returns true when it changed
+    /// the snapshot. Persists once if anything changed.
+    func updateAll(_ transform: (inout ProfileRoutingSnapshot) -> Bool) {
+        var changed = false
+        for (id, snapshot) in store {
+            var next = snapshot
+            if transform(&next) {
+                store[id] = next
+                changed = true
+            }
+        }
+        if changed { persist() }
+    }
+
+    /// Country codes of country-sourced bulk lists across all stored snapshots.
+    var countryListCodes: Set<String> {
+        var codes = Set<String>()
+        for snapshot in store.values {
+            for g in snapshot.include.bulkGroups + snapshot.exclude.bulkGroups {
+                if let code = g.countryCode { codes.insert(code) }
+            }
+        }
+        return codes
+    }
+
     func delete(for profileID: UUID) {
         store.removeValue(forKey: profileID)
         persist()
