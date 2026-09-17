@@ -730,7 +730,7 @@ private struct DestinationCidrBulkGroupRow: View {
         if refreshError != nil {
             caption += " · refresh failed"
         } else if let date = storedGroup()?.refreshedAt {
-            caption += " · updated " + date.formatted(date: .abbreviated, time: .omitted)
+            caption += " · updated " + date.formatted(date: .abbreviated, time: .shortened)
         }
         return caption
     }
