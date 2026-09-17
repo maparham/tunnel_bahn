@@ -13,6 +13,7 @@ struct RoutingView: View {
     @State private var importError: String?
     @State private var lastImportSummary: String?
     @State private var bulkPrefixBrowse: BulkPrefixBrowsePayload?
+    @State private var showCountryImport = false
 
     /// A mode radio the user selected while its rule set is empty: lists are shown and editable,
     /// but enforcement stays off until the first effective destination exists. nil when the
@@ -167,6 +168,11 @@ struct RoutingView: View {
         .sheet(item: $bulkPrefixBrowse) { payload in
             BulkGroupPrefixesView(title: payload.title, cidrs: payload.cidrs)
         }
+        .sheet(isPresented: $showCountryImport) {
+            CountryCidrImportSheet { text, title in
+                applyCidrImport(text, bulkTitle: title)
+            }
+        }
     }
 
     private func selectTunnelAll() {
@@ -298,6 +304,10 @@ struct RoutingView: View {
                         importCidrFromPasteboard()
                     }
                     .disabled(destinationRoutingEditingLocked || !bulkListsEnabled || destinationSectionsInactive)
+                    Button("Country…") {
+                        showCountryImport = true
+                    }
+                    .disabled(destinationRoutingEditingLocked || !bulkListsEnabled || destinationSectionsInactive)
                     Toggle("", isOn: bulkListsEnabledBinding)
                         .toggleStyle(.switch)
                         .labelsHidden()
@@ -306,7 +316,7 @@ struct RoutingView: View {
 
                 VStack(alignment: .leading, spacing: 8) {
                     if appState.destinationRuleStore.bulkGroups.isEmpty {
-                        Text("No bulk lists. Import a country/zone file or paste many lines at once.")
+                        Text("No bulk lists. Pick a country, import a zone file, or paste many lines at once.")
                             .foregroundStyle(.secondary)
                             .opacity(bulkListsEnabled ? 1 : 0.4)
                     } else {
