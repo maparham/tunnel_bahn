@@ -28,6 +28,8 @@ struct LogsView: View {
             Divider()
             logScrollView
         }
+        .onAppear { store.isViewerVisible = true }
+        .onDisappear { store.isViewerVisible = false }
     }
 
     // MARK: - Column header

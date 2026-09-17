@@ -9,7 +9,7 @@ enum VPNConnectionState: String, Codable {
     case error
 }
 
-struct ConnectionStats: Codable {
+struct ConnectionStats: Codable, Equatable {
     var state: VPNConnectionState
     var connectedAt: Date?
     var lastInboundAt: Date?

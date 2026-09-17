@@ -120,17 +120,12 @@ final class AppState: ObservableObject {
             }
             .store(in: &cancellables)
 
-        resourceMonitor.objectWillChange
-            .sink { [weak self] _ in self?.objectWillChange.send() }
-            .store(in: &cancellables)
-
-        logCaptureStore.objectWillChange
-            .sink { [weak self] _ in self?.objectWillChange.send() }
-            .store(in: &cancellables)
-
-        speedTestService.objectWillChange
-            .sink { [weak self] _ in self?.objectWillChange.send() }
-            .store(in: &cancellables)
+        // Deliberately NOT forwarded: resourceMonitor, logCaptureStore, speedTestService.
+        // Forwarding a child's objectWillChange here re-renders every view observing AppState
+        // (the whole window, even while hidden). Those three publish every 1–2 s, which kept the
+        // main thread in SwiftUI layout at 15–60% CPU while the tunnel sat idle. Nothing reads
+        // resourceMonitor through AppState (its values reach the UI via vpnManager.stats), and
+        // LogsView / SpeedTestView observe their stores directly with @ObservedObject.
 
         // The store's published arrays must always show the selected mode's rule set.
         settings.$destinationFilterMode

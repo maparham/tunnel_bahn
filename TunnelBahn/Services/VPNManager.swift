@@ -74,8 +74,11 @@ final class VPNManager: ObservableObject {
             resourceMonitor.$cpuUsage
                 .combineLatest(resourceMonitor.$memoryUsage)
                 .sink { [weak self] _, _ in
-                    self?.syncResourceStatsFromMonitor()
-                    self?.syncExtensionResourceStats()
+                    guard let self else { return }
+                    var next = self.stats
+                    self.syncResourceStatsFromMonitor(into: &next)
+                    self.syncExtensionResourceStats(into: &next)
+                    self.commitStats(next)
                 }
                 .store(in: &resourceMonitorCancellables)
         }
@@ -1402,7 +1405,9 @@ final class VPNManager: ObservableObject {
         stats.competingProxySigningIDs = []
         stopStatsRefresh()
         stopPeriodicProbe()
-        syncExtensionResourceStats()
+        var next = stats
+        syncExtensionResourceStats(into: &next)
+        commitStats(next)
         shouldAutoReconnect = false
         connectCancelled = false
         traceLog("disconnect completed")
@@ -1725,8 +1730,10 @@ final class VPNManager: ObservableObject {
             stats.perAppAggregateTxBytesPerSecond = 0
             stats.perAppStatsCollectionActive = false
         }
-        syncResourceStatsFromMonitor()
-        syncExtensionResourceStats()
+        var next = stats
+        syncResourceStatsFromMonitor(into: &next)
+        syncExtensionResourceStats(into: &next)
+        commitStats(next)
         let syncKey = "\(status.rawValue)|\(stats.state.rawValue)"
         if lastLoggedSyncStatusKey != syncKey {
             lastLoggedSyncStatusKey = syncKey
@@ -1736,35 +1743,61 @@ final class VPNManager: ObservableObject {
 
     /// Zeroes extension CPU/memory on disconnect. The live values can't come from a shared file
     /// (the root extensions run in a container this user host can't read), so they're pulled
-    /// over IPC by `refreshExtensionResourceStatsViaIPC()`; while connected this leaves the
+    /// over IPC by `fetchExtensionResourceUsageViaIPC()`; while connected this leaves the
     /// last-fetched values in place so they don't flicker to zero.
-    private func syncExtensionResourceStats() {
-        guard stats.state == .connected || stats.state == .reconnecting else {
-            stats.packetTunnelCPUUsage = 0
-            stats.packetTunnelMemoryUsage = 0
-            stats.transparentProxyCPUUsage = 0
-            stats.transparentProxyMemoryUsage = 0
-            stats.extensionStatsUpdatedAt = nil
+    private func syncExtensionResourceStats(into next: inout ConnectionStats) {
+        guard next.state == .connected || next.state == .reconnecting else {
+            next.packetTunnelCPUUsage = 0
+            next.packetTunnelMemoryUsage = 0
+            next.transparentProxyCPUUsage = 0
+            next.transparentProxyMemoryUsage = 0
+            next.extensionStatsUpdatedAt = nil
             return
+        }
+    }
+
+    /// Publish a rebuilt stats value once. `stats` is `@Published`, so every field write on it
+    /// would emit `objectWillChange` and re-render every view observing `AppState`; a refresh
+    /// tick touches a dozen fields, so callers build the new value locally and commit it here.
+    /// Skipped entirely when nothing changed, so an idle tunnel produces no render at all.
+    private func commitStats(_ next: ConnectionStats) {
+        if next != stats {
+            stats = next
         }
     }
 
     /// Pulls each extension's own CPU/memory over `sendProviderMessage` (packet tunnel via its
     /// session, proxy via `PerAppStatsProxyManager`) and merges them. A nil reply from either
     /// leaves that extension's previous values untouched.
-    private func refreshExtensionResourceStatsViaIPC() async {
-        guard stats.state == .connected || stats.state == .reconnecting else { return }
+    private struct ExtensionResourceUsage {
+        var packetTunnel: (cpu: Double, memory: UInt64)?
+        var transparentProxy: (cpu: Double, memory: UInt64)?
+    }
+
+    /// Fetches both extensions' CPU/memory over IPC. Returns nil when not connected. The caller
+    /// applies the result to its local stats copy so the fetch doesn't publish on its own.
+    private func fetchExtensionResourceUsageViaIPC() async -> ExtensionResourceUsage? {
+        guard stats.state == .connected || stats.state == .reconnecting else { return nil }
+        var usage = ExtensionResourceUsage()
         if let session = manager.connection as? NETunnelProviderSession,
            let json = await sendProviderMessage(session, command: "resourceStats"),
-           let usage = Self.parseResourceUsage(json) {
-            stats.packetTunnelCPUUsage = usage.cpu
-            stats.packetTunnelMemoryUsage = usage.memory
+           let parsed = Self.parseResourceUsage(json) {
+            usage.packetTunnel = parsed
         }
-        if let usage = await perAppStatsProxy.fetchResourceUsage() {
-            stats.transparentProxyCPUUsage = usage.cpu
-            stats.transparentProxyMemoryUsage = usage.memory
+        usage.transparentProxy = await perAppStatsProxy.fetchResourceUsage()
+        return usage
+    }
+
+    private func applyExtensionResourceUsage(_ usage: ExtensionResourceUsage, into next: inout ConnectionStats) {
+        if let packetTunnel = usage.packetTunnel {
+            next.packetTunnelCPUUsage = packetTunnel.cpu
+            next.packetTunnelMemoryUsage = packetTunnel.memory
         }
-        stats.extensionStatsUpdatedAt = .now
+        if let proxy = usage.transparentProxy {
+            next.transparentProxyCPUUsage = proxy.cpu
+            next.transparentProxyMemoryUsage = proxy.memory
+        }
+        next.extensionStatsUpdatedAt = .now
     }
 
     private static func parseResourceUsage(_ json: String) -> (cpu: Double, memory: UInt64)? {
@@ -1776,14 +1809,14 @@ final class VPNManager: ObservableObject {
         return (cpu, memory)
     }
 
-    private func syncResourceStatsFromMonitor() {
+    private func syncResourceStatsFromMonitor(into next: inout ConnectionStats) {
         guard let resourceMonitor else {
-            stats.appCPUUsage = 0
-            stats.appMemoryUsage = 0
+            next.appCPUUsage = 0
+            next.appMemoryUsage = 0
             return
         }
-        stats.appCPUUsage = resourceMonitor.cpuUsage
-        stats.appMemoryUsage = resourceMonitor.memoryUsage
+        next.appCPUUsage = resourceMonitor.cpuUsage
+        next.appMemoryUsage = resourceMonitor.memoryUsage
     }
 
     private func loadPersistedRuntimeProfile() -> WireGuardProfile? {
@@ -1850,32 +1883,42 @@ final class VPNManager: ObservableObject {
 
     private func refreshWireGuardStats() async {
         guard stats.state == .connected || stats.state == .reconnecting else { return }
-        // Read the competing-proxy file unconditionally — it lives in the App Group filesystem and
-        // is independent of the WireGuard IPC channel below. An IPC timeout must not leave the
-        // warning stale.
-        refreshCompetingProxyWarningFromExtensionFile()
+        // Every field write on the @Published `stats` emits objectWillChange and re-renders every
+        // view observing AppState, so this tick gathers its values across the awaits below and
+        // then applies them to a fresh copy of `stats` in one `commitStats` at the end. Applying
+        // to a fresh copy (not one taken before the awaits) keeps concurrent changes made while
+        // we were suspended — e.g. syncStatus flipping `state` on a disconnect — intact.
 
         // Shared timestamp for the WG-aggregate and per-app rate calculations below.
         let now = Date()
+
+        // Read the competing-proxy file unconditionally — it lives in the App Group filesystem and
+        // is independent of the WireGuard IPC channel below. An IPC timeout must not leave the
+        // warning stale.
+        let competingProxySigningIDs = Self.readCompetingProxySigningIDsFromExtensionFile()
 
         // WireGuard aggregate transfer totals come from the BoringTun adapter's UAPI, which only
         // exists on the WireGuard path. In SSH mode there is no adapter, so skip this IPC and its
         // aggregate accounting entirely and fall through to the transport-agnostic per-app fetch.
         // In WireGuard mode a nil reply is a transient IPC timeout: preserve the original
         // early-return so per-app stats aren't blanked to empty on a hiccup.
+        var transfer: (totals: (rxBytes: UInt64, txBytes: UInt64, lastInboundAt: Date?), rxRate: Double?, txRate: Double?)?
         if !connectedTransportIsSSH {
-            guard let runtimeConfiguration = await loadRuntimeConfiguration() else { return }
+            guard let runtimeConfiguration = await loadRuntimeConfiguration() else {
+                var next = stats
+                next.competingProxySigningIDs = competingProxySigningIDs
+                commitStats(next)
+                return
+            }
             let totals = Self.parseTransferTotals(from: runtimeConfiguration)
-
+            var rxRate: Double?
+            var txRate: Double?
             if let lastTransferSnapshot {
                 let elapsed = max(now.timeIntervalSince(lastTransferSnapshot.date), 0.001)
-                stats.rxBytesPerSecond = Double(totals.rxBytes.saturatingSubtract(lastTransferSnapshot.rxBytes)) / elapsed
-                stats.txBytesPerSecond = Double(totals.txBytes.saturatingSubtract(lastTransferSnapshot.txBytes)) / elapsed
+                rxRate = Double(totals.rxBytes.saturatingSubtract(lastTransferSnapshot.rxBytes)) / elapsed
+                txRate = Double(totals.txBytes.saturatingSubtract(lastTransferSnapshot.txBytes)) / elapsed
             }
-
-            stats.bytesIn = totals.rxBytes
-            stats.bytesOut = totals.txBytes
-            stats.lastInboundAt = totals.lastInboundAt
+            transfer = (totals, rxRate, txRate)
             lastTransferSnapshot = TransferSnapshot(date: now, rxBytes: totals.rxBytes, txBytes: totals.txBytes)
         }
 
@@ -1884,36 +1927,55 @@ final class VPNManager: ObservableObject {
         // to different directories and the sandbox blocks the root extension from writing into the
         // user's container — so a shared file can't carry stats across the boundary. A nil reply
         // (timeout / proxy not up) is tolerated by falling back to `.empty`.
+        var perApp: (snapshot: PerAppTransferStats, rxRate: Double?, txRate: Double?)?
         if stats.perAppStatsCollectionActive {
             let snapshot = await perAppStatsProxy.fetchStats() ?? .empty
-            stats.perAppStats = snapshot.apps
-            stats.perDestinationStats = snapshot.perDestination
-            stats.perAppStatsUpdatedAt = snapshot.lastUpdate
 
             let aggregateRx = snapshot.apps.values.reduce(UInt64(0)) { partial, entry in partial &+ entry.rxBytes }
             let aggregateTx = snapshot.apps.values.reduce(UInt64(0)) { partial, entry in partial &+ entry.txBytes }
 
+            var rxRate: Double?
+            var txRate: Double?
             if let lastPerAppAggregateSnapshot {
                 let elapsed = max(now.timeIntervalSince(lastPerAppAggregateSnapshot.date), 0.001)
-                stats.perAppAggregateRxBytesPerSecond =
-                    Double(aggregateRx.saturatingSubtract(lastPerAppAggregateSnapshot.rxBytes)) / elapsed
-                stats.perAppAggregateTxBytesPerSecond =
-                    Double(aggregateTx.saturatingSubtract(lastPerAppAggregateSnapshot.txBytes)) / elapsed
+                rxRate = Double(aggregateRx.saturatingSubtract(lastPerAppAggregateSnapshot.rxBytes)) / elapsed
+                txRate = Double(aggregateTx.saturatingSubtract(lastPerAppAggregateSnapshot.txBytes)) / elapsed
             }
+            perApp = (snapshot, rxRate, txRate)
             lastPerAppAggregateSnapshot = TransferSnapshot(date: now, rxBytes: aggregateRx, txBytes: aggregateTx)
         } else {
-            stats.perAppAggregateRxBytesPerSecond = 0
-            stats.perAppAggregateTxBytesPerSecond = 0
             lastPerAppAggregateSnapshot = nil
-            if !stats.perAppStats.isEmpty {
-                stats.perAppStats = [:]
-            }
-            if !stats.perDestinationStats.isEmpty {
-                stats.perDestinationStats = []
-            }
         }
-        syncResourceStatsFromMonitor()
-        await refreshExtensionResourceStatsViaIPC()
+
+        let extensionUsage = await fetchExtensionResourceUsageViaIPC()
+
+        // Apply everything to a fresh copy and publish once.
+        var next = stats
+        next.competingProxySigningIDs = competingProxySigningIDs
+        if let transfer {
+            if let rxRate = transfer.rxRate { next.rxBytesPerSecond = rxRate }
+            if let txRate = transfer.txRate { next.txBytesPerSecond = txRate }
+            next.bytesIn = transfer.totals.rxBytes
+            next.bytesOut = transfer.totals.txBytes
+            next.lastInboundAt = transfer.totals.lastInboundAt
+        }
+        if let perApp {
+            next.perAppStats = perApp.snapshot.apps
+            next.perDestinationStats = perApp.snapshot.perDestination
+            next.perAppStatsUpdatedAt = perApp.snapshot.lastUpdate
+            if let rxRate = perApp.rxRate { next.perAppAggregateRxBytesPerSecond = rxRate }
+            if let txRate = perApp.txRate { next.perAppAggregateTxBytesPerSecond = txRate }
+        } else {
+            next.perAppAggregateRxBytesPerSecond = 0
+            next.perAppAggregateTxBytesPerSecond = 0
+            next.perAppStats = [:]
+            next.perDestinationStats = []
+        }
+        syncResourceStatsFromMonitor(into: &next)
+        if let extensionUsage {
+            applyExtensionResourceUsage(extensionUsage, into: &next)
+        }
+        commitStats(next)
     }
 
     /// Reads the proxy extension's observed-foreign-proxy file and updates
@@ -1923,25 +1985,20 @@ final class VPNManager: ObservableObject {
     /// In route-all-identified-flows mode every identifiable flow is routed, so that path stays
     /// cold and the file stays empty. Competing-proxy hints are only aimed at explicit per-app
     /// routing, where another extension shadowing breaks user expectations.
-    private func refreshCompetingProxyWarningFromExtensionFile() {
-        guard let url = SharedPaths.observedForeignProxySigningIDsFileURL() else {
-            if !stats.competingProxySigningIDs.isEmpty { stats.competingProxySigningIDs = [] }
-            return
-        }
-        guard let data = try? Data(contentsOf: url),
+    /// Signing IDs of competing transparent proxies observed by our extension, read from the
+    /// App Group file. Empty when the file is missing or unreadable.
+    private static func readCompetingProxySigningIDsFromExtensionFile() -> [String] {
+        guard let url = SharedPaths.observedForeignProxySigningIDsFileURL(),
+              let data = try? Data(contentsOf: url),
               let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let ids = obj["signingIdentifiers"] as? [String]
         else {
-            if !stats.competingProxySigningIDs.isEmpty { stats.competingProxySigningIDs = [] }
-            return
+            return []
         }
-        let cleaned = ids
+        return ids
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty }
             .sorted()
-        if cleaned != stats.competingProxySigningIDs {
-            stats.competingProxySigningIDs = cleaned
-        }
     }
 
     private func loadRuntimeConfiguration() async -> String? {

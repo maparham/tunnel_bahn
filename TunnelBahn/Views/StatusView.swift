@@ -112,6 +112,8 @@ struct StatusView: View {
             Spacer()
         }
         .padding()
+        .onAppear { appState.resourceMonitor.isViewerVisible = true }
+        .onDisappear { appState.resourceMonitor.isViewerVisible = false }
         .onChange(of: perAppTrafficSectionVisible) { _, active in
             if !active {
                 showAllPerAppStats = false

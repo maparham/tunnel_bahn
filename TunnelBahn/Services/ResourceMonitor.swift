@@ -11,9 +11,21 @@ final class ResourceMonitor: ObservableObject {
     @Published private(set) var cpuUsage: Double = 0
     @Published private(set) var memoryUsage: UInt64 = 0
 
+    /// Set by the Monitoring tab while it is on screen. The published values flow into
+    /// `vpnManager.stats` and from there re-render the whole window, so while nobody is
+    /// looking we keep sampling (the moving average stays warm) but stop publishing.
+    var isViewerVisible = false {
+        didSet {
+            guard isViewerVisible, !oldValue else { return }
+            publish(sampler.sample(), force: true)
+        }
+    }
+
     private let sampler = ProcessResourceSampler()
     private var refreshTask: Task<Void, Never>?
     private static let sampleInterval: Duration = .seconds(2)
+    private static let cpuPublishThresholdPercent: Double = 0.5
+    private static let memoryPublishThresholdBytes: Int = 1 << 20
 
     init() {
         sample()
@@ -36,8 +48,20 @@ final class ResourceMonitor: ObservableObject {
     }
 
     private func sample() {
-        let result = sampler.sample()
-        cpuUsage = result.cpuPercent
-        memoryUsage = result.memoryBytes
+        publish(sampler.sample(), force: false)
+    }
+
+    /// Each @Published write emits objectWillChange, which ends up re-rendering the window
+    /// (via vpnManager.stats -> AppState). The reading itself drifts by a fraction of a
+    /// percent every tick — partly from the render it triggers — so publish only while the
+    /// Monitoring tab is showing, and only moves large enough to change what it displays.
+    private func publish(_ result: ProcessResourceSampler.Sample, force: Bool) {
+        guard isViewerVisible || force else { return }
+        if force || abs(cpuUsage - result.cpuPercent) >= Self.cpuPublishThresholdPercent {
+            cpuUsage = result.cpuPercent
+        }
+        if force || memoryUsage.distance(to: result.memoryBytes).magnitude >= Self.memoryPublishThresholdBytes {
+            memoryUsage = result.memoryBytes
+        }
     }
 }

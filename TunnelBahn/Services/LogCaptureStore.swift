@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import OSLog
 
@@ -73,6 +74,24 @@ final class LogCaptureStore: ObservableObject {
     private var nextFetchDate: Date
     private var pollingTask: Task<Void, Never>?
 
+    /// Set by `LogsView` while it is on screen. Each fetch opens a fresh `OSLogStore` (the
+    /// store is a snapshot, so it can't be reused), and opening one makes logd flush its
+    /// in-flight buffers to disk before the index is scanned — measured at 10–15% CPU when
+    /// polled every second. Nothing is lost by polling slowly: the store is historical and the
+    /// cursor (`nextFetchDate`) picks up where the last fetch stopped. So we poll fast only
+    /// while someone is actually watching, and slowly otherwise.
+    var isViewerVisible = false {
+        didSet {
+            guard isViewerVisible != oldValue else { return }
+            // Restart so a viewer that just appeared gets a fetch now rather than after the
+            // remainder of a slow sleep.
+            startPolling()
+        }
+    }
+
+    private static let visibleInterval: Duration = .seconds(1)
+    private static let hiddenInterval: Duration = .seconds(30)
+
     nonisolated static let subsystemPrefix = "com.tunnelbahn.mac"
     private static let maxEntries = 10_000
     /// Native `os.Logger` used for the store's own diagnostics so problems are visible in
@@ -102,11 +121,18 @@ final class LogCaptureStore: ObservableObject {
         pollingTask = Task { [weak self] in
             await self?.fetchNewEntries(isFirstFetch: true)
             while !Task.isCancelled {
-                try? await Task.sleep(for: .seconds(1))
+                try? await Task.sleep(for: self?.pollInterval ?? Self.hiddenInterval)
                 guard !Task.isCancelled else { break }
                 await self?.fetchNewEntries(isFirstFetch: false)
             }
         }
+    }
+
+    /// Fast only while the Logs tab is showing in a visible window. A hidden window keeps its
+    /// view hierarchy (closing it only orders it out), so `isViewerVisible` alone isn't enough.
+    private var pollInterval: Duration {
+        let windowVisible = NSApp.windows.contains { $0.isVisible && !($0 is NSPanel) }
+        return isViewerVisible && windowVisible ? Self.visibleInterval : Self.hiddenInterval
     }
 
     private func fetchNewEntries(isFirstFetch: Bool) async {
