@@ -1887,7 +1887,8 @@ final class VPNManager: ObservableObject {
         // view observing AppState, so this tick gathers its values across the awaits below and
         // then applies them to a fresh copy of `stats` in one `commitStats` at the end. Applying
         // to a fresh copy (not one taken before the awaits) keeps concurrent changes made while
-        // we were suspended — e.g. syncStatus flipping `state` on a disconnect — intact.
+        // we were suspended intact — and the state re-check before each commit makes sure a
+        // disconnect that landed mid-tick isn't overwritten with this tick's stale traffic data.
 
         // Shared timestamp for the WG-aggregate and per-app rate calculations below.
         let now = Date()
@@ -1905,6 +1906,7 @@ final class VPNManager: ObservableObject {
         var transfer: (totals: (rxBytes: UInt64, txBytes: UInt64, lastInboundAt: Date?), rxRate: Double?, txRate: Double?)?
         if !connectedTransportIsSSH {
             guard let runtimeConfiguration = await loadRuntimeConfiguration() else {
+                guard stats.state == .connected || stats.state == .reconnecting else { return }
                 var next = stats
                 next.competingProxySigningIDs = competingProxySigningIDs
                 commitStats(next)
@@ -1949,7 +1951,9 @@ final class VPNManager: ObservableObject {
 
         let extensionUsage = await fetchExtensionResourceUsageViaIPC()
 
-        // Apply everything to a fresh copy and publish once.
+        // Apply everything to a fresh copy and publish once — unless the tunnel went away while
+        // we were suspended above, in which case disconnect() already cleared these fields.
+        guard stats.state == .connected || stats.state == .reconnecting else { return }
         var next = stats
         next.competingProxySigningIDs = competingProxySigningIDs
         if let transfer {

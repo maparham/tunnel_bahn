@@ -180,6 +180,7 @@
 		A86E88A2EAE8BE3B64B79F5D /* ResourceMonitor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8662E8905AA143B0792E3460 /* ResourceMonitor.swift */; };
 		A964895BD7E93305026880A6 /* ExitIPProbeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 75A330BD26294E2B95EC4CB6 /* ExitIPProbeTests.swift */; };
 		AC81EA4D727F0B516C272BE6 /* ExitIPProbe.swift in Sources */ = {isa = PBXBuildFile; fileRef = FDE6360EAC0CDF9AC94FB3A0 /* ExitIPProbe.swift */; };
+		AC9ECFC03DAF987CA95872C6 /* MainWindowVisibility.swift in Sources */ = {isa = PBXBuildFile; fileRef = A59630790AC0FAC96E374321 /* MainWindowVisibility.swift */; };
 		AD04AD58E4051D15E0B23E00 /* TCPWrapperConfigCodec.swift in Sources */ = {isa = PBXBuildFile; fileRef = 83C0A2650F93F783E2DEFF8A /* TCPWrapperConfigCodec.swift */; };
 		AD0969FAC4FADDE8E0FA0319 /* SpeedTestMath.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8971347C742627A9072E5C27 /* SpeedTestMath.swift */; };
 		AE002EF8D50B5715C57F9BDD /* PerAppSigningCatalog.swift in Sources */ = {isa = PBXBuildFile; fileRef = 58E05756E27A7F82EAE7E623 /* PerAppSigningCatalog.swift */; };
@@ -414,6 +415,7 @@
 		9F17F6C4055FC55613166EF9 /* SpeedTestEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpeedTestEngine.swift; sourceTree = "<group>"; };
 		A1BD680CCC456AA0DBEE0047 /* TransparentProxyRelayClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TransparentProxyRelayClient.swift; sourceTree = "<group>"; };
 		A56B1DE7C326C9F499E31D20 /* AppState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppState.swift; sourceTree = "<group>"; };
+		A59630790AC0FAC96E374321 /* MainWindowVisibility.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MainWindowVisibility.swift; sourceTree = "<group>"; };
 		A66397F4BE5CA6E8D1BC1148 /* AndroidProfileQRCodec.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AndroidProfileQRCodec.swift; sourceTree = "<group>"; };
 		A7D0A75810DEC87026D95A3F /* SpeedTestGateTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpeedTestGateTests.swift; sourceTree = "<group>"; };
 		ACD291CEFA112A73BADA3135 /* DestinationSectionToggles.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DestinationSectionToggles.swift; sourceTree = "<group>"; };
@@ -608,6 +610,7 @@
 				B7EB0419ECF06147A8E40DD9 /* DomainResolver.swift */,
 				6D9A4FB22EE531616E707012 /* LaunchAtLoginService.swift */,
 				E2AF665AD0F0B259F8221E0E /* LogCaptureStore.swift */,
+				A59630790AC0FAC96E374321 /* MainWindowVisibility.swift */,
 				5C79F57236D533D1E1A9AD5D /* NEAppRuleBuilder.swift */,
 				F7E43092154982D7DF581773 /* PerAppStatsProxyManager.swift */,
 				B4ECCB8AADB792D2100AF34B /* ProfileRoutingStore.swift */,
@@ -1261,6 +1264,7 @@
 				A685DC94E4525F366418659B /* LaunchAtLoginService.swift in Sources */,
 				BA2690213D3AC72FACC2A46A /* LogCaptureStore.swift in Sources */,
 				3533FC25D81A6824FAC2F1B5 /* LogsView.swift in Sources */,
+				AC9ECFC03DAF987CA95872C6 /* MainWindowVisibility.swift in Sources */,
 				B7B011C8DBC55ABB5B06F53D /* MenuBarController.swift in Sources */,
 				AF818DB11B0B8DC2DE23EE6C /* NEAppRuleBuilder.swift in Sources */,
 				AEC2773FCCE9A9B8592DFE0B /* PerAppIdentityMap.swift in Sources */,

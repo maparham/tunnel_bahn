@@ -82,9 +82,10 @@ final class LogCaptureStore: ObservableObject {
     /// while someone is actually watching, and slowly otherwise.
     var isViewerVisible = false {
         didSet {
-            guard isViewerVisible != oldValue else { return }
-            // Restart so a viewer that just appeared gets a fetch now rather than after the
-            // remainder of a slow sleep.
+            // Restart only on hide -> show, so a viewer that just appeared gets a fetch now rather
+            // than after the remainder of a slow sleep. Hiding just lets the loop pick up the slow
+            // interval on its next iteration; restarting there would cost an immediate fetch.
+            guard isViewerVisible, !oldValue else { return }
             startPolling()
         }
     }
@@ -131,8 +132,7 @@ final class LogCaptureStore: ObservableObject {
     /// Fast only while the Logs tab is showing in a visible window. A hidden window keeps its
     /// view hierarchy (closing it only orders it out), so `isViewerVisible` alone isn't enough.
     private var pollInterval: Duration {
-        let windowVisible = NSApp.windows.contains { $0.isVisible && !($0 is NSPanel) }
-        return isViewerVisible && windowVisible ? Self.visibleInterval : Self.hiddenInterval
+        isViewerVisible && MainWindowVisibility.isVisible ? Self.visibleInterval : Self.hiddenInterval
     }
 
     private func fetchNewEntries(isFirstFetch: Bool) async {
@@ -154,6 +154,10 @@ final class LogCaptureStore: ObservableObject {
                 return ([], error.localizedDescription)
             }
         }.value
+
+        // A restart (see `isViewerVisible`) cancels this task mid-fetch; the replacement task
+        // fetches the same window, so appending here too would duplicate entries.
+        guard !Task.isCancelled else { return }
 
         if let errorDescription {
             Self.diag.error("[LogCaptureStore] fetch error: \(errorDescription, privacy: .public)")

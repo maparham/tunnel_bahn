@@ -16,12 +16,16 @@ final class ResourceMonitor: ObservableObject {
     /// looking we keep sampling (the moving average stays warm) but stop publishing.
     var isViewerVisible = false {
         didSet {
-            guard isViewerVisible, !oldValue else { return }
-            publish(sampler.sample(), force: true)
+            guard isViewerVisible, !oldValue, let lastSample else { return }
+            // Publish the last periodic reading rather than taking a fresh one: the sampler's
+            // CPU figure is a time delta since its previous call, and an off-cadence call a few
+            // ms after a tick would divide the cost of opening the tab by a tiny interval.
+            publish(lastSample, force: true)
         }
     }
 
     private let sampler = ProcessResourceSampler()
+    private var lastSample: ProcessResourceSampler.Sample?
     private var refreshTask: Task<Void, Never>?
     private static let sampleInterval: Duration = .seconds(2)
     private static let cpuPublishThresholdPercent: Double = 0.5
@@ -48,7 +52,9 @@ final class ResourceMonitor: ObservableObject {
     }
 
     private func sample() {
-        publish(sampler.sample(), force: false)
+        let result = sampler.sample()
+        lastSample = result
+        publish(result, force: false)
     }
 
     /// Each @Published write emits objectWillChange, which ends up re-rendering the window
@@ -56,7 +62,7 @@ final class ResourceMonitor: ObservableObject {
     /// percent every tick — partly from the render it triggers — so publish only while the
     /// Monitoring tab is showing, and only moves large enough to change what it displays.
     private func publish(_ result: ProcessResourceSampler.Sample, force: Bool) {
-        guard isViewerVisible || force else { return }
+        guard force || (isViewerVisible && MainWindowVisibility.isVisible) else { return }
         if force || abs(cpuUsage - result.cpuPercent) >= Self.cpuPublishThresholdPercent {
             cpuUsage = result.cpuPercent
         }

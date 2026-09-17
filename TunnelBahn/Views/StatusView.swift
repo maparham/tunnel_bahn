@@ -83,7 +83,10 @@ struct StatusView: View {
                     } else {
                         infoRow("Duration", "n/a")
                     }
-                    infoRow("Last Receive", formatRelativeDate(appState.vpnManager.stats.lastInboundAt))
+                    // Relative text needs its own clock: stats no longer publish when unchanged.
+                    TimelineView(.periodic(from: .now, by: 1)) { _ in
+                        infoRow("Last Receive", formatRelativeDate(appState.vpnManager.stats.lastInboundAt))
+                    }
                     infoRow("Tunnel In", "\(formatRate(appState.vpnManager.stats.rxBytesPerSecond)) (Total \(formatBytes(appState.vpnManager.stats.bytesIn)))")
                     infoRow("Tunnel Out", "\(formatRate(appState.vpnManager.stats.txBytesPerSecond)) (Total \(formatBytes(appState.vpnManager.stats.bytesOut)))")
                     if appState.vpnManager.stats.perAppSplitTunnelActive {
