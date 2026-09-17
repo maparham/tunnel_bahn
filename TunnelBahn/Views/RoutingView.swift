@@ -93,14 +93,14 @@ struct RoutingView: View {
     /// True when at least one destination entry exists, is enabled, and its section is turned on.
     private var hasAnyDestinations: Bool {
         (customRangesEnabled && appState.destinationRuleStore.customRules.contains(where: \.isEnabled))
-            || (bulkListsEnabled && appState.destinationRuleStore.bulkGroups.contains(where: \.isEnabled))
+            || (bulkListsEnabled && appState.destinationRuleStore.bulkGroups.contains { $0.isEnabled && !$0.cidrs.isEmpty })
             || (domainNamesEnabled && appState.destinationRuleStore.domainRules.contains(where: \.isEnabled))
     }
 
     /// True when enabled rules exist in any section regardless of section toggles.
     private var hasAnyRulesIgnoringSectionToggles: Bool {
         appState.destinationRuleStore.customRules.contains(where: \.isEnabled)
-            || appState.destinationRuleStore.bulkGroups.contains(where: \.isEnabled)
+            || appState.destinationRuleStore.bulkGroups.contains { $0.isEnabled && !$0.cidrs.isEmpty }
             || appState.destinationRuleStore.domainRules.contains(where: \.isEnabled)
     }
 
@@ -169,8 +169,8 @@ struct RoutingView: View {
             BulkGroupPrefixesView(title: payload.title, cidrs: payload.cidrs)
         }
         .sheet(isPresented: $showCountryImport) {
-            CountryCidrImportSheet { text, country in
-                applyCountryImport(text, country: country)
+            CountryCidrImportSheet { cidrs, country in
+                applyCountryImport(cidrs, country: country)
             }
         }
     }
@@ -503,17 +503,22 @@ struct RoutingView: View {
     }
 
     /// A country already present in this mode is refreshed in place rather than duplicated.
-    private func applyCountryImport(_ plainText: String, country: CountryCidrListEntry) {
+    private func applyCountryImport(_ cidrs: [String], country: CountryCidrListEntry) {
         let store = appState.destinationRuleStore
         if let existing = store.bulkGroups.first(where: { $0.countryCode == country.code }) {
-            appState.countryListRefresher.apply(countryCode: country.code, plainText: plainText)
+            // Refreshing rewrites this country's list in both modes and in every stored profile,
+            // so the summary names the list the user is looking at, not the only one touched.
+            appState.countryListRefresher.apply(countryCode: country.code, cidrs: cidrs)
             let count = store.bulkGroups.first(where: { $0.id == existing.id })?.cidrs.count ?? 0
             lastImportSummary = "Refreshed \"\(existing.title)\" · \(count) prefixes"
             return
         }
-        let result = store.importCidrLines(from: plainText, bulkTitle: country.bulkListTitle, countryCode: country.code)
-        lastImportSummary =
-            "Added \(result.added) · skipped \(result.skippedInvalid) invalid · skipped \(result.skippedDuplicate) duplicate"
+        // Prefixes arrive already validated, so anything skipped here is a duplicate of a rule
+        // the user already has.
+        let result = store.importCidrLines(
+            from: cidrs.joined(separator: "\n"), bulkTitle: country.bulkListTitle, countryCode: country.code
+        )
+        lastImportSummary = "Added \(result.added) · skipped \(result.skippedDuplicate) duplicate"
     }
 
     private func applyCidrImport(_ plainText: String, bulkTitle: String) {

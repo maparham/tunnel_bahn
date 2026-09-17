@@ -37,7 +37,12 @@ final class ProfileRoutingStore: ObservableObject {
         var codes = Set<String>()
         for snapshot in store.values {
             for g in snapshot.include.bulkGroups + snapshot.exclude.bulkGroups {
-                if let code = g.countryCode { codes.insert(code) }
+                // A restored backup carries whatever `countryCode` the file contained, so this
+                // is the boundary where an attacker-supplied string would otherwise become a
+                // URL path. Anything that is not a country code never reaches the network.
+                if let code = g.countryCode, CountryCidrListSource.isValidCountryCode(code) {
+                    codes.insert(code)
+                }
             }
         }
         return codes

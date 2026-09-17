@@ -30,6 +30,9 @@ final class AppState: ObservableObject {
     /// `pushDestinationRangesToProxyIfConnected()`.
     private var lastSyncedConnectedDestinationRanges: [String]?
 
+    /// The once-per-launch country list refresh, held so it can be cancelled.
+    private var startupRefreshTask: Task<Void, Never>?
+
     private static let log = AppLog(subsystem: "com.tunnelbahn.mac", category: "DestRouting")
 
     init() {
@@ -65,9 +68,16 @@ final class AppState: ObservableObject {
 
         // Country lists go stale as RIR allocations change; re-download them once per launch.
         // Delayed so it never competes with launch work, and each failure is one quick error.
-        Task { [weak self] in
+        startupRefreshTask = Task { [weak self] in
             try? await Task.sleep(for: .seconds(5))
-            await self?.countryListRefresher.refreshAll()
+            guard let self, !Task.isCancelled else { return }
+            // Never rewrite destination rules while a tunnel is up. Both downstream paths accept
+            // changes for the profile that is loaded AND connected — the routing-file sync and
+            // the live push into the running proxy — so an unattended refresh would swap routing
+            // rules underneath an active session. The UI disables the manual refresh button for
+            // the same reason; this is that rule applied to the automatic pass.
+            guard !self.isTunnelActive else { return }
+            await self.countryListRefresher.refreshAll()
         }
     }
 
@@ -264,7 +274,11 @@ final class AppState: ObservableObject {
         let activeSet = destinationRuleStore.ruleSet(for: settings.destinationFilterMode)
         let hasEffectiveDestinations =
             (activeToggles.customRanges && activeSet.customRules.contains(where: \.isEnabled))
-            || (activeToggles.bulkLists && activeSet.bulkGroups.contains(where: \.isEnabled))
+            // Must test for prefixes, not merely for an enabled list. A country list can now
+            // shrink (a refresh replaces its contents), and an enabled-but-empty list would
+            // otherwise satisfy this check and persist enforcement against an empty set —
+            // exactly what the comment below forbids.
+            || (activeToggles.bulkLists && activeSet.bulkGroups.contains { $0.isEnabled && !$0.cidrs.isEmpty })
             || (activeToggles.domainNames && activeSet.domainRules.contains(where: \.isEnabled))
         // Never persist enforceDestinationFiltering=true with an empty effective CIDR set —
         // that would silently activate filtering against an empty list on the next connect.

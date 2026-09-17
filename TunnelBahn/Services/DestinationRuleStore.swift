@@ -142,20 +142,27 @@ final class DestinationRuleStore: ObservableObject {
         var codes = Set<String>()
         for mode in [DestinationFilterMode.include, .exclude] {
             for g in ruleSet(for: mode).bulkGroups {
-                if let code = g.countryCode { codes.insert(code) }
+                if let code = g.countryCode, CountryCidrListSource.isValidCountryCode(code) {
+                    codes.insert(code)
+                }
             }
         }
         return codes
     }
 
     /// Replaces the prefixes of every bulk list tagged `countryCode`, in both modes, keeping
-    /// each list's id, title, enabled state and position. Returns how many lists changed.
+    /// each list's id, title, enabled state and position. Returns how many modes changed.
+    ///
+    /// `cidrs` must already be validated (see `CountryCidrListSource.fetchPrefixes`). An empty
+    /// array is refused rather than applied: a refresh must never be able to empty a list, or a
+    /// block page answering with HTTP 200 would silently delete the user's routing rules.
     @discardableResult
-    func refreshCountryLists(countryCode: String, plainText: String, now: Date = Date()) -> Int {
+    func refreshCountryLists(countryCode: String, cidrs: [String], now: Date = Date()) -> Int {
+        guard !cidrs.isEmpty else { return 0 }
         var updated = 0
         for mode in [DestinationFilterMode.include, .exclude] {
             let set = ruleSet(for: mode)
-            guard let next = Self.refreshingCountryLists(in: set, countryCode: countryCode, plainText: plainText, now: now) else {
+            guard let next = Self.refreshingCountryLists(in: set, countryCode: countryCode, cidrs: cidrs, now: now) else {
                 continue
             }
             updated += 1
@@ -165,32 +172,22 @@ final class DestinationRuleStore: ObservableObject {
     }
 
     /// Pure form of `refreshCountryLists` for one rule set (also applied to stored profile
-    /// snapshots). nil when the set has no list for `countryCode`. New prefixes are validated
-    /// and deduplicated against the set's custom rules and its *other* bulk lists.
+    /// snapshots). nil when nothing changes: no list for `countryCode`, or no prefixes to apply.
+    ///
+    /// Deliberately does NOT suppress prefixes that appear in other lists. Storing the country's
+    /// file as downloaded keeps each list independent of refresh order, and the enforced set is
+    /// deduplicated where it is built (`enabledFlattenedCidrs`), so cross-list suppression here
+    /// bought nothing and could drop a range that had moved between two countries.
     static func refreshingCountryLists(
-        in set: DestinationModeRuleSet, countryCode: String, plainText: String, now: Date
+        in set: DestinationModeRuleSet, countryCode: String, cidrs: [String], now: Date
     ) -> DestinationModeRuleSet? {
+        guard !cidrs.isEmpty else { return nil }
         let indices = set.bulkGroups.indices.filter { set.bulkGroups[$0].countryCode == countryCode }
         guard !indices.isEmpty else { return nil }
 
-        var taken = Set<String>()
-        for r in set.customRules { taken.insert(r.cidr.trimmingCharacters(in: .whitespacesAndNewlines)) }
-        for (i, g) in set.bulkGroups.enumerated() where !indices.contains(i) {
-            for c in g.cidrs { taken.insert(c) }
-        }
-
-        var fresh: [String] = []
-        for trimmed in DestinationCidrTextParser.candidateStrings(from: plainText) {
-            guard !taken.contains(trimmed), !IPCIDRMatcher.prepare([trimmed]).isEmpty else { continue }
-            fresh.append(trimmed)
-            taken.insert(trimmed)
-        }
-
         var next = set
-        // Several lists for one country in a mode is unusual; the first keeps the prefixes and
-        // the rest become empty, which is what the duplicate check would have produced anyway.
-        for (n, i) in indices.enumerated() {
-            next.bulkGroups[i].cidrs = n == 0 ? fresh : []
+        for i in indices {
+            next.bulkGroups[i].cidrs = cidrs
             next.bulkGroups[i].refreshedAt = now
         }
         return next

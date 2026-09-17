@@ -18,21 +18,28 @@ final class CountryCidrListRefresher: ObservableObject {
         self.profileRoutingStore = profileRoutingStore
     }
 
-    /// Every country that has a list somewhere.
+    /// Every country that has a list somewhere. Both stores already drop codes that are not
+    /// country codes, so nothing here can be turned into an arbitrary URL path.
     var knownCountryCodes: Set<String> {
         ruleStore.countryListCodes.union(profileRoutingStore.countryListCodes)
     }
 
     /// Downloads and applies one country. Returns false (and records `lastError`) on failure.
+    /// A failed download leaves the stored list exactly as it was.
     @discardableResult
     func refresh(countryCode: String) async -> Bool {
         guard !refreshing.contains(countryCode) else { return false }
         refreshing.insert(countryCode)
         defer { refreshing.remove(countryCode) }
         do {
-            let text = try await CountryCidrListSource.fetchListText(forCountryCode: countryCode)
-            apply(countryCode: countryCode, plainText: text)
+            let cidrs = try await CountryCidrListSource.fetchPrefixes(forCountryCode: countryCode)
+            guard !Task.isCancelled else { return false }
+            apply(countryCode: countryCode, cidrs: cidrs)
             return true
+        } catch is CancellationError {
+            return false
+        } catch let error as URLError where error.code == .cancelled {
+            return false
         } catch {
             lastError[countryCode] = Self.describe(error)
             Self.log.warning("refresh \(countryCode) failed: \(error.localizedDescription)")
@@ -44,26 +51,29 @@ final class CountryCidrListRefresher: ObservableObject {
     /// rather than opening dozens of hanging connections.
     func refreshAll() async {
         for code in knownCountryCodes.sorted() {
+            guard !Task.isCancelled else { return }
             await refresh(countryCode: code)
         }
     }
 
-    /// Replaces the prefixes of every list tagged `countryCode` with the ones in `plainText`.
-    func apply(countryCode: String, plainText: String) {
+    /// Replaces the prefixes of every list tagged `countryCode`. `cidrs` must be non-empty and
+    /// already validated; an empty array is refused so a refresh can never delete a list.
+    func apply(countryCode: String, cidrs: [String]) {
+        guard !cidrs.isEmpty else { return }
         let now = Date()
-        let live = ruleStore.refreshCountryLists(countryCode: countryCode, plainText: plainText, now: now)
+        let live = ruleStore.refreshCountryLists(countryCode: countryCode, cidrs: cidrs, now: now)
         profileRoutingStore.updateAll { snapshot in
             var changed = false
             if let next = DestinationRuleStore.refreshingCountryLists(
-                in: snapshot.include, countryCode: countryCode, plainText: plainText, now: now
+                in: snapshot.include, countryCode: countryCode, cidrs: cidrs, now: now
             ) { snapshot.include = next; changed = true }
             if let next = DestinationRuleStore.refreshingCountryLists(
-                in: snapshot.exclude, countryCode: countryCode, plainText: plainText, now: now
+                in: snapshot.exclude, countryCode: countryCode, cidrs: cidrs, now: now
             ) { snapshot.exclude = next; changed = true }
             return changed
         }
         lastError[countryCode] = nil
-        Self.log.info("refreshed \(countryCode): \(live) live mode set(s) updated")
+        Self.log.info("refreshed \(countryCode): \(cidrs.count) prefixes, \(live) live mode set(s) updated")
     }
 
     static func describe(_ error: Error) -> String {
