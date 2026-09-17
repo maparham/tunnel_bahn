@@ -142,12 +142,12 @@ struct RoutingView: View {
         }
         .onAppear {
             if !hasAnyDestinations {
-                appState.settings.enforceDestinationFiltering = false
+                preserveSelectedModeWhileEmpty()
             }
         }
         .onChange(of: hasAnyDestinations) { _, hasAny in
             if !hasAny {
-                appState.settings.enforceDestinationFiltering = false
+                preserveSelectedModeWhileEmpty()
             } else if previewedEmptyMode == displayedMode {
                 appState.settings.enforceDestinationFiltering = true
                 previewedEmptyMode = nil
@@ -181,6 +181,18 @@ struct RoutingView: View {
         appState.settings.activeSectionToggles = DestinationSectionToggles(
             bulkLists: false, customRanges: false, domainNames: false
         )  // preserves the existing "deselecting filtering turns sections off" behavior, per mode
+    }
+
+    /// Filtering must never stay enforced against an empty destination set, but which mode the
+    /// user picked is still their choice. Removing (or disabling) the last entry therefore parks
+    /// the selected mode in `previewedEmptyMode` — the same "selected but not yet effective"
+    /// state `selectMode` produces for an empty mode — so the radio stays where the user put it
+    /// instead of snapping back to "Tunnel all destinations".
+    private func preserveSelectedModeWhileEmpty() {
+        if appState.settings.enforceDestinationFiltering {
+            previewedEmptyMode = displayedMode
+        }
+        appState.settings.enforceDestinationFiltering = false
     }
 
     private func selectMode(_ mode: DestinationFilterMode) {
