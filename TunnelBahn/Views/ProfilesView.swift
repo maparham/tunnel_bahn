@@ -632,9 +632,9 @@ struct ProfilesView: View {
         presentQRPanel(title: "QR Code: \(profile.name)", content: content)
     }
 
-    /// Renders a scannable QR that carries the profile's SSH or WG-over-wstunnel details plus
-    /// key material for the Android client to import. Plain WireGuard profiles have no Android
-    /// transport and show the codec's error instead of a QR.
+    /// Renders a scannable QR that carries the profile's SSH, WG-over-wstunnel, or plain WG
+    /// details plus key material for the Android client to import. Profiles with no exportable
+    /// peer endpoint show the codec's error instead of a QR.
     private func showAndroidQRPanel(for profile: WireGuardProfile) {
         let content: AnyView
         do {

@@ -79,7 +79,7 @@ The Kotlin-to-core config JSON (`Profile.toCoreConfigJson`) mirrors this: `"tran
 ### macOS app (`TunnelBahn`)
 
 - `AndroidProfileQRPayload.WG` gains `endpoint: String` and `keepalive: Int`; the wstunnel fields become optional so `wg` omits them from the JSON (the `Encodable` conformance already skips `nil`).
-- `AndroidProfileQRCodec.encode` ordering: SSH; else wrapper enabled and a peer exists, `wgws`; else a peer exists with a non-empty endpoint, `wg` with `peer.endpoint` and `peer.persistentKeepalive ?? 25`; else throw. The `noAndroidTransport` error is renamed `noPeer` with the text "This profile has no peer endpoint to export."
+- `AndroidProfileQRCodec.encode` ordering: SSH; else wrapper enabled and a peer exists, `wgws`; else a peer exists with a non-empty endpoint, `wg` with `peer.endpoint` and `peer.persistentKeepalive ?? 25`; else throw. The `noAndroidTransport` error is renamed `noPeerEndpoint` with the text "This profile has no peer endpoint to export."
 - `ProfilesView.showAndroidQRPanel`: the error text gets `.fixedSize(horizontal: false, vertical: true)` and a fixed width so it wraps instead of truncating. The "Export to Android (QR)" menu item stays always enabled, since every well-formed profile can now export.
 - The 2026-08-02 Android client design's "never exposes raw WG on the wire" paragraph gets a dated note pointing at this spec.
 
@@ -114,6 +114,6 @@ The Kotlin-to-core config JSON (`Profile.toCoreConfigJson`) mirrors this: `"tran
 
 **Kotlin (`android/app` unit tests).** `QRImportTest` gains `wg` success and missing-endpoint cases. `ProfileStoreTest` or a new test asserts `toCoreConfigJson` emits `"transport":"wg"` with the endpoint.
 
-**Swift (`Tests/Unit/AndroidProfileQRCodecTests.swift`).** Plain WireGuard profile encodes as `wg` with the peer endpoint and keepalive and no wstunnel keys; wrapper-enabled still encodes as `wgws`; no peers throws `noPeer`.
+**Swift (`Tests/Unit/AndroidProfileQRCodecTests.swift`).** Plain WireGuard profile encodes as `wg` with the peer endpoint and keepalive and no wstunnel keys; wrapper-enabled still encodes as `wgws`; no peers throws `noPeerEndpoint`.
 
 **Manual.** Scan the AWS QR on the phone, connect, pass the exit-IP check; kill the server's WireGuard for four minutes and confirm the UI shows Reconnecting, then Connected after restart.
